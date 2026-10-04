@@ -46,6 +46,16 @@ struct DialogueTests {
         #expect(Dialogue.plain("**Важно**: `код`") == "Важно: код")
     }
 
+    /// Decision 2026-10-04: emoji belong to Chilk's own canned lines, never to Codex replies.
+    @Test func codexRepliesLoseEmojiButKeepOrdinarySymbols() {
+        #expect(Dialogue.plain("Хорошего вечера 🌙") == "Хорошего вечера")
+        #expect(Dialogue.plain("Пока! 👋🏽 Береги себя ❤️") == "Пока! Береги себя")
+        #expect(Dialogue.plain("Готово 👨‍👩‍👧 , таймер 1️⃣") == "Готово, таймер")
+        #expect(Dialogue.plain("🇷🇺 Флаг") == "Флаг")
+        #expect(Dialogue.plain("Счёт 2:1, +5°C, № 3, 10 → 12, © УЕФА, #1 и *") == "Счёт 2:1, +5°C, № 3, 10 → 12, © УЕФА, #1 и *")
+        #expect(Dialogue.plain("Первая строка 🙂\nвторая") == "Первая строка\nвторая")
+    }
+
     @Test func theReplyStreamsOutOfUnfinishedJSON() {
         #expect(Dialogue.partialReply(#"{"re"#) == "")
         #expect(Dialogue.partialReply(#"{"reply":"Прив"#) == "Прив")

@@ -101,7 +101,25 @@ public enum Dialogue {
             s = regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "$1 ($4)")
         }
         for mark in ["**", "__", "`"] { s = s.replacingOccurrences(of: mark, with: "") }
-        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return withoutEmoji(s).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Emoji are Chilk's own canned-line flavour, not something the model sprinkles into replies (2026-10-04).
+    /// Whole grapheme clusters go (ZWJ families, skin tones, flags, keycaps); text symbols such as © № ° → stay.
+    static func withoutEmoji(_ text: String) -> String {
+        let kept = text.filter { character in
+            let scalars = character.unicodeScalars
+            let presentation = scalars.contains { $0.properties.isEmojiPresentation }
+            let styled = scalars.contains { $0.value == 0xFE0F || $0.value == 0x20E3 }
+                && scalars.contains { $0.properties.isEmoji }
+            return !(presentation || styled)
+        }
+        guard kept.count != text.count else { return text }
+        // Tidy the gap an emoji leaves: no doubled spaces, no space before punctuation; newlines stay.
+        var tidy = kept.replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        tidy = tidy.replacingOccurrences(of: #"[ \t]+([,.!?…:;])"#, with: "$1", options: .regularExpression)
+        tidy = tidy.replacingOccurrences(of: #"[ \t]+\n"#, with: "\n", options: .regularExpression)
+        return tidy
     }
 
     /// The final message: `{"reply": …, "mode": …}`. A model that ignored the schema still gets through:

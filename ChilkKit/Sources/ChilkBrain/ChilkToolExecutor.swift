@@ -47,9 +47,9 @@ public final class ChilkToolExecutor {
     public func collectDue(at now: Date = Date()) throws -> [LocalTimers.Entry] { try store.collectDue(at: now) }
     public func acknowledge(id: String) throws -> Bool { try store.acknowledge(id: id) }
 
+    /// Facts only. A prose «delivery» note here got paraphrased into odd replies («покажет, когда приложение сможет»).
     private static func describe(_ entry: LocalTimers.Entry) -> JSON {
         ["id": .string(entry.id), "title": .string(entry.title),
-         "at": .string(ISO8601DateFormatter().string(from: entry.deadline)), "due": .bool(entry.due),
-         "delivery": "Local Chilk notice; app must be running. Busy conversation defers the bubble; overdue notices return on next launch."]
+         "at": .string(ISO8601DateFormatter().string(from: entry.deadline)), "due": .bool(entry.due)]
     }
 }
