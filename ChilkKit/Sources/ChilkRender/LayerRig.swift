@@ -16,6 +16,8 @@ public final class LayerRig {
 
     private final class PartLayer: CALayer {
         var part: Part?
+        var slot = 0
+        var lastTransform: CGAffineTransform?
         var localRect = CGRect.zero
     }
 
@@ -57,8 +59,14 @@ public final class LayerRig {
                 layer.bounds = CGRect(origin: .zero, size: entry.rect.size)
                 layer.localRect = entry.rect
                 layer.part = p.part
+                layer.lastTransform = nil
             }
-            layer.setAffineTransform(Self.layerTransform(p.transform, local: layer.localRect, sceneHeight: metrics.height))
+            // Settled parts (a bubble that stays, the body at rest) are not touched: fewer CA property commits.
+            let t = Self.layerTransform(p.transform, local: layer.localRect, sceneHeight: metrics.height)
+            if layer.lastTransform != t {
+                layer.setAffineTransform(t)
+                layer.lastTransform = t
+            }
             let opacity = Float(p.alpha)
             if layer.opacity != opacity { layer.opacity = opacity }
             if layer.isHidden { layer.isHidden = false }
@@ -89,7 +97,10 @@ public final class LayerRig {
         l.isOpaque = false
         l.allowsEdgeAntialiasing = false
         l.zPosition = CGFloat(slot)
-        root.addSublayer(l)
+        l.slot = slot
+        // Sublayer order = slot order too: `render(in:)` (tests, snapshots) ignores zPosition.
+        let index = (root.sublayers ?? []).firstIndex { ($0 as? PartLayer).map { $0.slot > slot } ?? false }
+        if let index { root.insertSublayer(l, at: UInt32(index)) } else { root.addSublayer(l) }
         layers[slot] = l
         return l
     }

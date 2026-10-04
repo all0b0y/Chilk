@@ -9,7 +9,7 @@ import Synchronization
 /// fatigue, the smile) are quantised to percent steps; the dizzy mouth wave is a 24-frame flipbook.
 public enum Part: Hashable, Sendable {
     case contactShadow
-    case body(lw: Double)
+    case body(lw: Double, shine: Bool = true)
     case stem(f: Int, lw: Double)                 // f = fatigue, percent
     case leaf(index: Int, f: Int, lw: Double)
     case blush
@@ -28,13 +28,18 @@ public enum Part: Hashable, Sendable {
     case bubbleStroke(width: Double, height: Double)
     case bubbleTail
     case word(String)
+    case backpack(lw: Double)
+    case strap(lw: Double)
+    case hat(lw: Double)
+    case mug(lw: Double)
+    case button(title: String, hovered: Bool)
 
     public static let waveFrames = 24
 
     /// Parts that exist only for one speech bubble (bounded cache eviction).
     public var isTransient: Bool {
         switch self {
-        case .bubbleBox, .bubbleStroke, .word: true
+        case .bubbleBox, .bubbleStroke, .word, .button: true
         default: false
         }
     }
@@ -53,17 +58,22 @@ public struct Placement: Equatable, @unchecked Sendable {
 /// Slot numbers = drawing order.
 public enum Slot {
     public static let contactShadow = 0
-    public static let body = 1
-    public static let stem = 2
-    public static let leaf = 3          // +0, +1
-    public static let blush = 5         // +0, +1
-    public static let eye = 7           // +0, +1
-    public static let mouth = 9
-    public static let z = 10            // +0…+2
-    public static let bubbleBox = 13
-    public static let bubbleTail = 14
-    public static let bubbleStroke = 15
-    public static let word = 16         // +index
+    public static let backpack = 1      // behind him
+    public static let body = 2
+    public static let strap = 3
+    public static let hat = 4           // the sprout grows through it
+    public static let stem = 5
+    public static let leaf = 6          // +0, +1
+    public static let blush = 8         // +0, +1
+    public static let eye = 10          // +0, +1
+    public static let mouth = 12
+    public static let mug = 13
+    public static let z = 14            // +0…+2
+    public static let bubbleBox = 17
+    public static let bubbleTail = 18
+    public static let bubbleStroke = 19
+    public static let button = 20       // +index
+    public static let word = 30         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -78,7 +88,7 @@ extension Part {
         switch self {
         case .contactShadow:
             return box(-m.radiusX * 0.92, -7, m.radiusX * 1.84, 14, margin: 2)
-        case .body(let lw):
+        case .body(let lw, _):
             let edge = max(7, 3.6 * lw / 2 + 1.5)
             return box(-m.radiusX * 1.07, -m.radiusY, m.radiusX * 2.14 + 5, m.radiusY * 2 + 6, margin: edge)
         case .stem(let fp, let lw):
@@ -122,6 +132,17 @@ extension Part {
         case .word(let s):
             let (w, ascent, descent) = TextKit.metrics(s, font: TextKit.bubbleFont)
             return box(0, -ascent, w, ascent + descent, margin: 1.5)
+        case .backpack(let lw):
+            return box(Props.bag.minX, Props.bag.minY, Props.bag.width, Props.bag.height, margin: max(5.5, 3.2 * lw / 2 + 1.5))
+        case .strap(let lw):
+            let r = Props.strapPath(m).boundingBoxOfPath
+            return box(r.minX, r.minY, r.width, r.height, margin: (Props.strapWidth + 3.2 * lw) / 2 + 1.5)
+        case .hat(let lw):
+            return box(-33, -21, 66, 33, margin: max(5.5, 3 * lw / 2 + 1.5))
+        case .mug:
+            return box(-16.5, -10, 25, 20, margin: 5.5)
+        case .button(let title, _):
+            return box(0, 0, Props.buttonWidth(title), Props.buttonHeight, margin: 1.5)
         }
     }
 
@@ -141,7 +162,7 @@ extension Part {
             ctx.setFillColor(RGBA(0, 0, 0, 0.16).cgColor)
             ctx.fillEllipse(in: CGRect(x: -m.radiusX * 0.92, y: -7, width: m.radiusX * 1.84, height: 14))
 
-        case .body(let lw):
+        case .body(let lw, let shine):
             let shapes = ShapeCache.shared.body(m, lineScale: lw)
             ctx.saveGState()
             ctx.translateBy(x: 5, y: 6)
@@ -158,7 +179,9 @@ extension Part {
             ctx.addPath(shapes.outline)
             ctx.setFillColor(outline)
             ctx.fillPath()
-            ChilkRenderer.fillEllipse(ctx, center: CGPoint(x: -m.radiusX * 0.42, y: -m.radiusY * 0.5), rx: 9, ry: 5, rotation: -0.6, color: RGBA(1, 1, 1, 0.75))
+            if shine {                                      // the volume highlight hides under a hat
+                ChilkRenderer.fillEllipse(ctx, center: CGPoint(x: -m.radiusX * 0.42, y: -m.radiusY * 0.5), rx: 9, ry: 5, rotation: -0.6, color: RGBA(1, 1, 1, 0.75))
+            }
 
         case .stem(let fp, let lw):
             let f = Double(fp) / 100, len = 22 + f * 2
@@ -285,7 +308,141 @@ extension Part {
 
         case .word(let s):
             TextKit.draw(s, font: TextKit.bubbleFont, color: RGBA.hex(0x1D1D1F).cgColor, in: ctx)
+
+        case .backpack(let lw):                             // on his back: behind the body
+            let bag = CGPath(roundedRect: Props.bag, cornerWidth: 9, cornerHeight: 9, transform: nil)
+            Props.sticker(ctx, bag, fill: Props.bagBlue, outline: outline, lw: 3.2 * lw)
+            let pocket = CGRect(x: Props.bag.minX + 5, y: Props.bag.midY + 2, width: Props.bag.width - 10, height: Props.bag.height / 2 - 8)
+            ctx.addPath(CGPath(roundedRect: pocket, cornerWidth: 5, cornerHeight: 5, transform: nil))
+            ctx.setFillColor(Props.bagLight)
+            ctx.fillPath()
+            ctx.addPath(CGPath(roundedRect: pocket, cornerWidth: 5, cornerHeight: 5, transform: nil))
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(2 * lw)
+            ctx.strokePath()
+
+        case .strap(let lw):                                // the backpack strap over his shoulder
+            let path = Props.strapPath(m)
+            ctx.addPath(path)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(Props.strapWidth + 3.2 * lw)
+            ctx.strokePath()
+            ctx.addPath(path)
+            ctx.setStrokeColor(Props.strapBlue)
+            ctx.setLineWidth(Props.strapWidth)
+            ctx.strokePath()
+
+        case .hat(let lw):                                  // knitted beanie; the sprout pokes through
+            let dome = CGMutablePath()
+            dome.move(to: CGPoint(x: -29, y: 4))
+            dome.addCurve(to: CGPoint(x: 0, y: -21), control1: CGPoint(x: -29, y: -12), control2: CGPoint(x: -17, y: -21))
+            dome.addCurve(to: CGPoint(x: 29, y: 4), control1: CGPoint(x: 17, y: -21), control2: CGPoint(x: 29, y: -12))
+            dome.closeSubpath()
+            let band = CGPath(roundedRect: CGRect(x: -33, y: 0, width: 66, height: 12), cornerWidth: 6, cornerHeight: 6, transform: nil)
+            let whole = CGMutablePath()
+            whole.addPath(dome)
+            whole.addPath(band)
+            ctx.addPath(whole)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()                                // sticker die-cut border
+            Props.sticker(ctx, dome, fill: Props.hatYellow, outline: outline, lw: 3 * lw, border: false)
+            Props.sticker(ctx, band, fill: Props.hatBand, outline: outline, lw: 3 * lw, border: false)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(1.4 * lw)
+            for x in stride(from: -24.0, through: 24, by: 8) {
+                ctx.move(to: CGPoint(x: x, y: 3.5))
+                ctx.addLine(to: CGPoint(x: x, y: 8.5))
+            }
+            ctx.strokePath()
+
+        case .mug(let lw):                                  // a mint mug, handle towards the viewer's left
+            let body = CGPath(roundedRect: CGRect(x: -8, y: -9, width: 16, height: 18), cornerWidth: 3.5, cornerHeight: 3.5, transform: nil)
+            let handle = CGMutablePath()
+            handle.addArc(center: CGPoint(x: -8, y: 0), radius: 5, startAngle: .pi / 2, endAngle: .pi * 1.5, clockwise: false)
+            ctx.addPath(handle)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(10)
+            ctx.strokePath()
+            ctx.addPath(body)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()
+            ctx.addPath(handle)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(3.6)
+            ctx.strokePath()
+            Props.sticker(ctx, body, fill: Props.mugMint, outline: outline, lw: 2.6 * lw, border: false)
+            ctx.setFillColor(RGBA(1, 1, 1, 0.85).cgColor)
+            ctx.fill(CGRect(x: -6, y: -2, width: 12, height: 3.5))
+
+        case .button(let title, let hovered):
+            let rect = CGRect(x: 0, y: 0, width: Props.buttonWidth(title), height: Props.buttonHeight)
+            let pill = CGPath(roundedRect: rect.insetBy(dx: 0.75, dy: 0.75), cornerWidth: 11, cornerHeight: 11, transform: nil)
+            ctx.addPath(pill)
+            ctx.setFillColor(hovered ? outline : Props.buttonFill)
+            ctx.fillPath()
+            ctx.addPath(pill)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(1.5)
+            ctx.strokePath()
+            ctx.saveGState()
+            ctx.translateBy(x: Props.buttonPadding, y: 16.5)
+            TextKit.draw(title, font: TextKit.buttonFont, color: hovered ? RGBA.white.cgColor : RGBA.hex(0x1D1D1F).cgColor, in: ctx)
+            ctx.restoreGState()
         }
+    }
+}
+
+/// Geometry and colours of the props and bubble buttons (figure space: body centre = origin, y-down).
+enum Props {
+    static let bag = CGRect(x: 36, y: -26, width: 31, height: 44)   // peeks out from behind his back
+    static let strapWidth = 5.0
+    static let buttonHeight = 24.0
+    static let buttonPadding = 10.0
+    static let bagBlue = RGBA.hex(0x6FA8DC).cgColor
+    static let bagLight = RGBA.hex(0x9CC6EC).cgColor
+    static let strapBlue = RGBA.hex(0x4C83BF).cgColor
+    static let hatYellow = RGBA.hex(0xF4B942).cgColor
+    static let hatBand = RGBA.hex(0xE3953A).cgColor
+    static let mugMint = RGBA.hex(0x8FD6C4).cgColor
+    static let buttonFill = RGBA.hex(0xF3EEE6).cgColor
+
+    static func strapPath(_ m: Metrics) -> CGPath {
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: m.radiusX * 0.52, y: -m.radiusY * 0.76))
+        p.addQuadCurve(to: CGPoint(x: m.radiusX * 0.88, y: m.radiusY * 0.18), control: CGPoint(x: m.radiusX * 0.76, y: -m.radiusY * 0.38))
+        return p
+    }
+
+    /// Measured once per title: hit testing asks for it every frame while a bubble shows.
+    static func buttonWidth(_ title: String) -> Double {
+        if let w = widths.withLock({ $0[title] }) { return w }
+        let w = (TextKit.width(title, font: TextKit.buttonFont) + buttonPadding * 2).rounded(.up)
+        widths.withLock { c in
+            if c.count > 200 { c.removeAll() }
+            c[title] = w
+        }
+        return w
+    }
+
+    private static let widths = Mutex<[String: Double]>([:])
+
+    /// Fill + outline, optionally with the white die-cut border of the sticker look.
+    static func sticker(_ ctx: CGContext, _ path: CGPath, fill: CGColor, outline: CGColor, lw: Double, border: Bool = true) {
+        if border {
+            ctx.addPath(path)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()
+        }
+        ctx.addPath(path)
+        ctx.setFillColor(fill)
+        ctx.fillPath()
+        ctx.addPath(path)
+        ctx.setStrokeColor(outline)
+        ctx.setLineWidth(lw)
+        ctx.strokePath()
     }
 }
 
@@ -294,6 +451,7 @@ extension Part {
 enum TextKit {
     nonisolated(unsafe) static let bubbleFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 14, nil)!
     nonisolated(unsafe) static let zFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 15, nil)!
+    nonisolated(unsafe) static let buttonFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 12, nil)!
 
     static func line(_ s: String, font: CTFont, color: CGColor) -> CTLine {
         CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [
@@ -323,18 +481,21 @@ enum TextKit {
     }
 }
 
-/// Word-wrapped speech bubble, measured once per text.
+/// Word-wrapped speech bubble with optional buttons, measured once per text.
 struct BubbleLayout: Sendable {
     struct Word: Sendable { let text: String; let x: Double; let row: Int }
+    struct Button: Sendable { let title: String; let x: Double; let y: Double; let width: Double }
     let words: [Word]
+    let buttons: [Button]
     let width: Double
     let height: Double
 
     static let rowHeight = 19.0
+    static let buttonRow = Props.buttonHeight + 6
     private static let cache = Mutex<[String: BubbleLayout]>([:])
 
-    static func of(_ text: String, maxTextWidth: Double) -> BubbleLayout {
-        let key = "\(maxTextWidth)|\(text)"
+    static func of(_ text: String, buttons titles: [String] = [], maxTextWidth: Double) -> BubbleLayout {
+        let key = "\(maxTextWidth)|\(text)|\(titles.joined(separator: "\u{1}"))"
         if let hit = cache.withLock({ $0[key] }) { return hit }
         let font = TextKit.bubbleFont
         var rows: [[String]] = [[]]
@@ -355,7 +516,23 @@ struct BubbleLayout: Sendable {
             }
         }
         let textWidth = rows.map { TextKit.width($0.joined(separator: " "), font: font) }.max() ?? 0
-        let layout = BubbleLayout(words: words, width: textWidth + 28, height: 38 + Double(rows.count - 1) * rowHeight)
+        var height = 38 + Double(rows.count - 1) * rowHeight
+
+        // Buttons: pills under the text, wrapped like words.
+        var buttons: [Button] = []
+        var rowWidth = 0.0, widest = 0.0, buttonRows = 0
+        let top = 34 + Double(rows.count - 1) * rowHeight
+        for title in titles {
+            let w = Props.buttonWidth(title)
+            if rowWidth > 0 && rowWidth + 6 + w > maxTextWidth { buttonRows += 1; rowWidth = 0 }
+            let x = rowWidth == 0 ? 0 : rowWidth + 6
+            buttons.append(Button(title: title, x: x, y: top + Double(buttonRows) * buttonRow, width: w))
+            rowWidth = x + w
+            widest = max(widest, rowWidth)
+        }
+        if !titles.isEmpty { height = top + Double(buttonRows + 1) * buttonRow + 4 }
+
+        let layout = BubbleLayout(words: words, buttons: buttons, width: max(textWidth, widest) + 28, height: height)
         cache.withLock { c in
             if c.count > 64 { c.removeAll() }
             c[key] = layout

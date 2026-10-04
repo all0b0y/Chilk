@@ -8,6 +8,9 @@ final class PresenceMonitor {
     private let sim: CharacterSim
     private var tracker = PresenceTracker()
     private var timer: Timer?
+    /// Balance can replace the greeting («Как прогулка?») and tidy up props when the user is back.
+    var greetingOverride: (() -> String?)?
+    var onWake: (() -> Void)?
 
     init(sim: CharacterSim) {
         self.sim = sim
@@ -38,6 +41,11 @@ final class PresenceMonitor {
     /// Also used by the Dock "Проверка" menu.
     func wake(after absence: TimeInterval, hour: Int) {
         sim.wakeUp()
+        onWake?()
+        if let line = greetingOverride?() {
+            sim.say(line, duration: 4)
+            return
+        }
         switch Greeting.after(absence: absence, hour: hour) {
         case .goodMorning: sim.say(Lines.goodMorning.randomElement()!, duration: 4)
         case .welcomeBack: sim.say(Lines.welcomeBack.randomElement()!, duration: 3.5)

@@ -1,4 +1,5 @@
 import AppKit
+import ChilkCore
 
 @main
 @MainActor
@@ -6,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static var instance: AppDelegate?   // NSApplication.delegate is weak
     private var edge: EdgeController?
     private var presence: PresenceMonitor?
+    private var balance: BalanceController?
 
     static func main() {
         let app = NSApplication.shared
@@ -21,7 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let edge = EdgeController()
         edge.show()
         self.edge = edge
-        presence = PresenceMonitor(sim: edge.sim)
+        let presence = PresenceMonitor(sim: edge.sim)
+        self.presence = presence
+        balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
         // The Dock icon is the static AppIcon (user decision: a live tile was costly and laggy).
     }
 
@@ -29,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         edge?.callChilk()
         return false
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        balance?.save()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -42,15 +50,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(side)
         menu.addItem(.separator())
 
-        // Manual acceptance helpers for slice 1 (removed once real needs drive him).
+        // Breaks on demand (В18).
+        let pause = NSMenuItem(title: String(localized: "Перерыв"), action: nil, keyEquivalent: "")
+        let pauseMenu = NSMenu()
+        pauseMenu.addItem(item(String(localized: "Подышать 1 минуту"), #selector(breathe1)))
+        pauseMenu.addItem(item(String(localized: "Подышать 3 минуты"), #selector(breathe3)))
+        pauseMenu.addItem(item(String(localized: "Гимнастика для глаз"), #selector(eyeGym)))
+        pauseMenu.addItem(item(String(localized: "Я попил воды"), #selector(drank)))
+        pause.submenu = pauseMenu
+        menu.addItem(pause)
+        menu.addItem(.separator())
+
+        // Manual acceptance helpers.
         let check = NSMenuItem(title: String(localized: "Проверка"), action: nil, keyEquivalent: "")
         let sub = NSMenu()
-        for (title, value) in [(String(localized: "Усталость: бодрый"), 0.0), (String(localized: "Усталость: подустал"), 0.55), (String(localized: "Усталость: пересидел"), 1.0)] {
-            let i = item(title, #selector(setFatigue(_:)))
-            i.representedObject = value
-            i.state = abs((edge?.sim.fatigue ?? 0) - value) < 0.01 ? .on : .off
+        let needs: [(String, Need)] = [(String(localized: "Сейчас: вода"), .water), (String(localized: "Сейчас: размяться"), .stretch),
+                                       (String(localized: "Сейчас: глаза"), .eyes), (String(localized: "Сейчас: прогулка"), .walk),
+                                       (String(localized: "Сейчас: конец дня"), .endOfDay)]
+        for (title, need) in needs {
+            let i = item(title, #selector(makeDue(_:)))
+            i.representedObject = need.rawValue
             sub.addItem(i)
         }
+        sub.addItem(item(String(localized: "Показать давление потребностей"), #selector(showPressure)))
+        let fast = item(String(localized: "Ускорить время ×60"), #selector(toggleFast))
+        fast.state = (balance?.timeScale ?? 1) > 1 ? .on : .off
+        sub.addItem(fast)
+        sub.addItem(item(String(localized: "Сбросить потребности"), #selector(resetNeeds)))
         sub.addItem(.separator())
         sub.addItem(item(String(localized: "Уснуть"), #selector(sleepNow)))
         sub.addItem(item(String(localized: "Проснуться: «с возвращением»"), #selector(wakeWelcome)))
@@ -63,7 +89,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func callChilk() { edge?.callChilk() }
     @objc private func moveLeft() { edge?.move(to: .left) }
     @objc private func moveRight() { edge?.move(to: .right) }
-    @objc private func setFatigue(_ sender: NSMenuItem) { edge?.sim.fatigue = sender.representedObject as? Double ?? 0 }
+    @objc private func breathe1() { balance?.startBreathing(minutes: 1) }
+    @objc private func breathe3() { balance?.startBreathing(minutes: 3) }
+    @objc private func eyeGym() { balance?.startEyeGym() }
+    @objc private func drank() { balance?.drankWater() }
+    @objc private func makeDue(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let n = Need(rawValue: raw) { balance?.makeDue(n) }
+    }
+    @objc private func showPressure() { balance?.showPressure() }
+    @objc private func toggleFast() { if let b = balance { b.timeScale = b.timeScale > 1 ? 1 : 60 } }
+    @objc private func resetNeeds() { balance?.resetNeeds() }
     @objc private func sleepNow() { edge?.sim.fallAsleep() }
     @objc private func wakeWelcome() { presence?.wake(after: 30 * 60, hour: 15) }
     @objc private func wakeMorning() { presence?.wake(after: 8 * 3600, hour: 8) }

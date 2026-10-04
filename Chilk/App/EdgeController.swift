@@ -1,5 +1,6 @@
 import AppKit
 import ChilkCore
+import ChilkRender
 import QuartzCore
 
 /// Owns the edge panel and drives the character at the display refresh rate:
@@ -22,6 +23,18 @@ final class EdgeController: NSObject {
     private var drag: Drag?
     private var carryVelocity = 0.0
     private var lastBusy: Bool?
+    /// Bubble buttons and clicks on the body go to the balance controller.
+    var onButton: ((Int) -> Void)?
+    var onPoke: (() -> Void)?
+    private var pressedButton: Int?
+    private struct Flight {
+        var start: CFTimeInterval
+        var duration: Double
+        var from: CGPoint
+        var mirrored: Bool
+        var completion: () -> Void
+    }
+    private var flight: Flight?
 
     private let env = ProcessInfo.processInfo.environment
     /// Measurement switch: behave as if the cursor were far away (no hover / gaze tracking).
@@ -87,7 +100,9 @@ final class EdgeController: NSObject {
         let dt = min(1.0 / 30, max(0, now - (lastTimestamp ?? now)))
         lastTimestamp = now
 
-        if drag == nil {
+        if let f = flight {
+            flyStep(f, now: now)
+        } else if drag == nil {
             let target = targetOrigin()
             originX.target = target.x
             originY.target = target.y
@@ -106,13 +121,18 @@ final class EdgeController: NSObject {
 
         sim.step(dt: dt, pointer: ignorePointer ? nil : local, carryVelocity: mirrored ? -carryVelocity : carryVelocity)
 
-        let interactive = drag != nil || sim.contains(local)
+        // Bubble buttons: hover highlight and hit testing (rects are panel coordinates, already mirrored).
+        let raw = CGPoint(x: mouse.x - frame.minX, y: frame.maxY - mouse.y)
+        let hit = ChilkRenderer.buttonRects(pose: sim.pose, metrics: metrics, mirrored: mirrored)
+            .first { $0.rect.insetBy(dx: -2, dy: -2).contains(raw) }?.index
+        if sim.hoveredButton != hit { sim.hoveredButton = hit }
+        let interactive = drag != nil || pressedButton != nil || hit != nil || sim.contains(local)
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
         view.show(pose: sim.pose, mirrored: mirrored)
 
         // 60 fps only while something moves fast.
-        let busy = sim.isBusy || drag != nil || abs(originX.velocity) > 2 || abs(originY.velocity) > 2
+        let busy = sim.isBusy || drag != nil || flight != nil || abs(originX.velocity) > 2 || abs(originY.velocity) > 2
         if busy != lastBusy {
             let idle = Float(idleFPS)
             link?.preferredFrameRateRange = busy
@@ -178,12 +198,16 @@ final class EdgeController: NSObject {
     // MARK: Mouse (only reaches us over the body)
 
     private func mouseDown() {
+        if let i = sim.hoveredButton {
+            pressedButton = i
+            return
+        }
         let m = NSEvent.mouseLocation
         drag = Drag(start: m, grabOffset: CGPoint(x: m.x - panel.frame.minX, y: m.y - panel.frame.minY), lastX: panel.frame.minX)
     }
 
     private func mouseDragged() {
-        guard var d = drag else { return }
+        guard pressedButton == nil, var d = drag else { return }
         let m = NSEvent.mouseLocation
         if !d.moved && hypot(m.x - d.start.x, m.y - d.start.y) > 4 {
             // Picked up: centre him in the panel and move the panel the other way, so nothing jumps on screen
@@ -208,6 +232,11 @@ final class EdgeController: NSObject {
     }
 
     private func mouseUp() {
+        if let i = pressedButton {
+            pressedButton = nil
+            if sim.hoveredButton == i { onButton?(i) }
+            return
+        }
         guard let d = drag else { return }
         drag = nil
         if d.moved {
@@ -218,7 +247,44 @@ final class EdgeController: NSObject {
             originX.velocity = carryVelocity * 0.5   // a little fling towards the edge
         } else {
             sim.poke()
+            onPoke?()
         }
+    }
+
+    // MARK: Eye gymnastics flight
+
+    /// A figure-eight over the screen, then back to exactly where he was.
+    func fly(duration: Double, completion: @escaping () -> Void) {
+        guard drag == nil, flight == nil else { return completion() }
+        let mirrored = isMirrored
+        _ = reframe(to: metrics.carryX, mirrored: mirrored)        // centred: the panel edges never cut him
+        flight = Flight(start: CACurrentMediaTime(), duration: duration, from: panel.frame.origin, mirrored: mirrored, completion: completion)
+    }
+
+    private func flyStep(_ f: Flight, now: CFTimeInterval) {
+        let k = (now - f.start) / f.duration
+        guard k < 1 else {
+            flight = nil
+            panel.setFrameOrigin(f.from)
+            _ = reframe(to: metrics.dockX, mirrored: f.mirrored)
+            originX.velocity = 0
+            originY.value = panel.frame.origin.y
+            originY.velocity = 0
+            carryVelocity = 0
+            f.completion()
+            return
+        }
+        let vf = visibleFrame
+        let a = k * 4 * .pi                                        // two loops
+        let eight = CGPoint(x: vf.midX - metrics.width / 2 + vf.width * 0.3 * sin(a),
+                            y: vf.midY - metrics.height / 2 + vf.height * 0.22 * sin(2 * a) / 2)
+        func smooth(_ x: Double) -> Double { let t = min(1, max(0, x)); return t * t * (3 - 2 * t) }
+        let w = min(smooth(k / 0.15), smooth((1 - k) / 0.15))      // ease out of the edge and back into it
+        let origin = CGPoint(x: (f.from.x + (eight.x - f.from.x) * w).rounded(), y: (f.from.y + (eight.y - f.from.y) * w).rounded())
+        carryVelocity = Double(origin.x - panel.frame.origin.x) * 60
+        panel.setFrameOrigin(origin)
+        originX.value = origin.x
+        originY.value = origin.y
     }
 
     /// Moves him inside the panel and the panel the opposite way; returns the panel shift.

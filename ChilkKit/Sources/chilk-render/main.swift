@@ -80,6 +80,12 @@ func previews(into dir: URL) throws {
         ("10-stretch", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 3)); var best = s.pose
             for _ in 0..<(60 * 120) { s.step(dt: 1.0 / 60, pointer: lookIn); if s.currentAntic == .stretch, s.pose.scaleY > best.scaleY { best = s.pose } }
             return best }(), false),
+        ("11-stage1-buttons", sim({ $0.standOut = .peek; $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]); $0.hoveredButton = 0 }, seconds: 2), false),
+        ("12-drink", sim({ $0.perform(.drink) }, seconds: 1.3), false),
+        ("13-walk-out", sim({ $0.standOut = .out; $0.wear(.hat); $0.perform(.pack) }, seconds: 3), false),
+        ("14-breathe-in", sim({ $0.standOut = .out; $0.perform(.breathe(seconds: 30)) }, seconds: 3.95), false),
+        ("15-stage2-left", sim({ $0.standOut = .out; $0.fatigue = 0.8; $0.say("Я всё ещё тут. Разомнись, а? Спина скажет спасибо", buttons: ["Иду", "Я занят"]) }, seconds: 2.5), true),
+        ("16-lookaway", sim({ $0.perform(.lookAway) }, seconds: 1.2), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

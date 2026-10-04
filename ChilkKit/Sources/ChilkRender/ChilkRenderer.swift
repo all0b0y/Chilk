@@ -37,7 +37,23 @@ public enum ChilkRenderer {
                                  lineScale lw: Double, base: CGAffineTransform) {
         let ox = p.lookX * m.radiusX * 0.14
         let oy = p.lookY * m.radiusY * 0.12
-        out.append(Placement(slot: Slot.body, part: .body(lw: lw), transform: base, alpha: 1))
+        out.append(Placement(slot: Slot.body, part: .body(lw: lw, shine: !p.props.contains(.hat)), transform: base, alpha: 1))
+
+        // Props: backpack on his back with a strap over the shoulder, a beanie, a mug in his "hand".
+        if p.props.contains(.backpack) {
+            out.append(Placement(slot: Slot.backpack, part: .backpack(lw: lw), transform: base, alpha: 1))
+            out.append(Placement(slot: Slot.strap, part: .strap(lw: lw), transform: base, alpha: 1))
+        }
+        if p.props.contains(.hat) {
+            out.append(Placement(slot: Slot.hat, part: .hat(lw: lw), transform: base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.86), alpha: 1))
+        }
+        if p.props.contains(.mug) {
+            let k = p.mugLift
+            let side = CGPoint(x: -m.radiusX * 1.02, y: m.radiusY * 0.32)
+            let mouth = CGPoint(x: ox * 0.8 - 13, y: m.radiusY * 0.12)
+            let at = CGPoint(x: side.x + (mouth.x - side.x) * k, y: side.y + (mouth.y - side.y) * k)
+            out.append(Placement(slot: Slot.mug, part: .mug(lw: lw), transform: base.translatedBy(x: at.x, y: at.y).rotated(by: k * 0.75).scaledBy(x: 1.35, y: 1.35), alpha: 1))
+        }
 
         // Sprout: stem on the head, two leaves at its tip (follow-through comes from leafAngle).
         let fp = Int((p.fatigue * 100).rounded())
@@ -129,7 +145,7 @@ public enum ChilkRenderer {
         let scale = min(easeOutBack(appear), 1.08) * vanish
         guard scale > 0 else { return }
 
-        let layout = BubbleLayout.of(text, maxTextWidth: m.width - 20 - 28)
+        let layout = BubbleLayout.of(text, buttons: p.buttons, maxTextWidth: m.width - 20 - 28)
         let bw = layout.width, bh = layout.height
         let top = m.ground + p.hop - m.radiusY * 2
         var bx = min(max(p.x - bw - 14, 10), m.width - bw - 10)
@@ -150,6 +166,26 @@ public enum ChilkRenderer {
             let t = pop.translatedBy(x: bx + 14 + word.x, y: by + 24 + Double(word.row) * BubbleLayout.rowHeight + (1 - wa) * 6)
             out.append(Placement(slot: Slot.word + index, part: .word(word.text), transform: t, alpha: wa * a))
         }
+        // Buttons arrive right after the words.
+        for (i, b) in layout.buttons.enumerated() {
+            let ba = clamp((p.bubbleAge - 0.5 - Double(layout.words.count) * 0.08 - Double(i) * 0.06) / 0.2)
+            guard ba * a > 0.002 else { continue }
+            let t = pop.translatedBy(x: bx + 14 + b.x, y: by + b.y + (1 - ba) * 4)
+            out.append(Placement(slot: Slot.button + i, part: .button(title: b.title, hovered: p.hoveredButton == i), transform: t, alpha: ba * a))
+        }
+    }
+
+    /// Where the bubble's buttons are this frame (scene coordinates, already mirrored) — for hit testing.
+    /// Only buttons that have (almost) finished appearing are clickable.
+    public static func buttonRects(pose: CharacterPose, metrics m: Metrics, mirrored: Bool) -> [(index: Int, rect: CGRect)] {
+        guard let text = pose.bubble, !text.isEmpty, !pose.buttons.isEmpty else { return [] }
+        var plan: [Placement] = []
+        bubblePlacements(into: &plan, pose: pose, metrics: m, mirrored: mirrored, text: text)
+        return plan.compactMap { pl in
+            guard pl.alpha > 0.5, case .button(let title, _) = pl.part else { return nil }
+            let rect = CGRect(x: 0, y: 0, width: Props.buttonWidth(title), height: Props.buttonHeight).applying(pl.transform)
+            return (pl.slot - Slot.button, rect)
+        }
     }
 
     // MARK: Vector rendering
@@ -160,7 +196,7 @@ public enum ChilkRenderer {
     }
 
     public static func draw(_ placements: [Placement], in ctx: CGContext, metrics m: Metrics, palette: Palette) {
-        for p in placements where p.alpha > 0 {
+        for p in placements.sorted(by: { $0.slot < $1.slot }) where p.alpha > 0 {
             ctx.saveGState()
             ctx.concatenate(p.transform)
             if p.alpha < 1 { ctx.setAlpha(p.alpha) }

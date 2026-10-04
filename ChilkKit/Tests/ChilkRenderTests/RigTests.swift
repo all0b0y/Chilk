@@ -87,6 +87,18 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.fatigue = 1; run(3)
     sim.fallAsleep(); run(5)
     sim.wakeUp(); run(1)
+    // Slice 2: ladder bubble with buttons (one hovered), props and directed acts, on both edges.
+    sim.standOut = .peek
+    sim.say("Попей водички 💧 Кружка уже ждёт", buttons: ["Попил", "Через 10 мин", "Я занят"]); run(1.5)
+    sim.hoveredButton = 1; run(0.5)
+    sim.clearBubble(); sim.perform(.drink); run(3.2)
+    sim.standOut = .out; sim.wear(.hat); sim.perform(.pack); run(2.5)
+    sim.perform(.breathe(seconds: 6)); run(6)
+    sim.perform(.stretches); run(3.4)
+    sim.perform(.lookAway); run(4)
+    mirrored = true
+    sim.say("Пора закругляться 🌙", buttons: ["Заканчиваю", "Я занят"]); run(1.5)
+    sim.clearBubble(); sim.takeOff(.hat); sim.takeOff(.backpack); sim.standOut = .docked
     sim.fatigue = 0.37
     mirrored = false
     run(20)
