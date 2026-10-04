@@ -12,6 +12,9 @@ extension Lines {
     static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕")
     static let brainFailed = String(localized: "Codex сейчас не отвечает 😕 Попробуй чуть позже")
 
+    /// A due local timer (slice 3c.2): Chilk's own line, so the alarm clock is allowed.
+    static func timerDue(_ title: String) -> String { String(localized: "⏰ Время: \(title)") }
+
     /// [контекст] for Codex: only time and sitting time (В24), nothing about apps or windows.
     static func context(sittingMinutes: Int, now: Date = Date()) -> String {
         VoiceContext.text(sittingMinutes: sittingMinutes, now: now)

@@ -83,7 +83,7 @@ final class BalanceController {
         ticks += 1
         apply(events)
         sim.fatigue = engine.leafFatigue
-        if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil,
+        if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(),
            Date().timeIntervalSince(lastPantomime) > 25 {
             pantomime(e.need)
         }
@@ -328,8 +328,10 @@ final class BalanceController {
         lastSave = Date()
     }
 
+    /// An explicit timer outranks balance prompts (they come back after it); it only waits for an exercise
+    /// in progress and an unlocked screen. Conversations are checked by `Actions` itself.
     var canPresentScheduledNotice: Bool {
-        !isBusy() && activity == nil && !sim.isTalking && lastSignals?.locked != true
+        activity == nil && lastSignals?.locked != true
     }
 
     // MARK: Manual testing (Dock «Проверка»)

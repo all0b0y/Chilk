@@ -10,10 +10,18 @@ import IOKit.pwr_mgt
 final class SignalMonitor {
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private let fakeIdle = ProcessInfo.processInfo.environment["CHILK_FAKE_IDLE"].flatMap(Double.init)
+    /// CHILK_FAKE_AWAY_UNTIL=60 (demo/acceptance only): the user is away for the first 60 s after launch, then
+    /// back at the keyboard (idle = CHILK_FAKE_IDLE or 0.5 s). Lets the timer-bubble rule run without a person.
+    private let fakeAwayUntil = ProcessInfo.processInfo.environment["CHILK_FAKE_AWAY_UNTIL"].flatMap(Double.init)
+    private let launched = ProcessInfo.processInfo.systemUptime
 
     func snapshot() -> Signals {
         // CHILK_FAKE_IDLE=3 pretends the user is typing (demo / acceptance runs without a person at the Mac).
-        let idle = fakeIdle ?? CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        var idle = fakeIdle ?? CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        if let fakeAwayUntil {
+            let t = ProcessInfo.processInfo.systemUptime - launched
+            idle = t < fakeAwayUntil ? 1_000 + t : (fakeIdle ?? 0.5)
+        }
         let session = CGSessionCopyCurrentDictionary() as? [String: Any]
         let locked = (session?["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue ?? false
         let front = NSWorkspace.shared.frontmostApplication

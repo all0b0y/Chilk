@@ -58,10 +58,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.isBusy = { [weak conversation, weak actions] in
             (conversation?.isActive ?? false) || (actions?.ownsStage ?? false)
         }
+        actions.conversationActive = { [weak conversation] in conversation?.isActive ?? false }
         brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
-        // A click on him while he listens = «I'm done talking»; otherwise it is the balance poke.
-        edge.onPoke = { [weak conversation, weak balance] in
-            if conversation?.clicked() != true { balance?.poked() }
+        // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; otherwise the balance poke.
+        edge.onPoke = { [weak conversation, weak actions, weak balance] in
+            if conversation?.clicked() == true { return }
+            if actions?.clicked() == true { return }
+            balance?.poked()
         }
         let key = Hotkey.defaultKey
         hotkey = Hotkey(keyCode: key.code, modifiers: key.modifiers, id: 1) { [weak conversation] in conversation?.trigger() }

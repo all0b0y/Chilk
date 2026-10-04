@@ -18,9 +18,13 @@ final class Actions {
     private weak var balance: BalanceController?
     private let sim: CharacterSim
     private var timer: Timer?
-    private var ownsUntil = Date.distantPast
+    private var display = NoticeDisplay()
+    /// A timer whose «seen» could not be saved is not shown again in this run (no show/hide loop).
+    private var unsaved: Set<String> = []
     private var reportedFailure = false
-    var ownsStage: Bool { Date() < ownsUntil }
+    /// Set by the app: a conversation owns the stage (a due bubble waits, or comes back after it).
+    var conversationActive: () -> Bool = { false }
+    var ownsStage: Bool { display.showing != nil }
 
     init(balance: BalanceController, sim: CharacterSim) {
         self.balance = balance
@@ -54,6 +58,13 @@ final class Actions {
         return result
     }
 
+    /// A click on Chilk while a due bubble is up closes it (`false` = not about a timer).
+    func clicked() -> Bool {
+        guard case .dismiss(let id) = display.clicked() else { return false }
+        finish(id, how: "click")
+        return true
+    }
+
     private func tick() {
         guard let executor else { return }
         do {
@@ -62,18 +73,50 @@ final class Actions {
                 NSApp.requestUserAttention(.informationalRequest)
                 for entry in due { balance?.log("timer due \(entry.id)") }
             }
-            guard !ownsStage, balance?.canPresentScheduledNotice == true, let notice = executor.ready.first else { return }
-            // A short local bubble, no cloud call at the deadline, no interference with a conversation.
-            sim.call(line: notice.message)
-            ownsUntil = Date().addingTimeInterval(6)
-            _ = try executor.acknowledge(id: notice.id)
-            balance?.log("timer presented \(notice.id)")
-        } catch {
-            if !reportedFailure {
-                reportedFailure = true
-                balance?.log("tools timer persistence failed")
-            }
+        } catch { reportFailure() }
+
+        if display.showing != nil, conversationActive() {
+            display.interrupted()                         // he talks now; the bubble returns afterwards, unseen
+            balance?.log("timer interrupted by conversation")
+            return
         }
+        let signals = balance?.lastSignals
+        let next = executor.ready.first { !unsaved.contains($0.id) }
+        let canPresent = !conversationActive() && balance?.canPresentScheduledNotice == true
+        switch display.step(now: ProcessInfo.processInfo.systemUptime, idle: signals?.idle ?? 0,
+                            locked: signals?.locked ?? false, canPresent: canPresent, next: next?.id) {
+        case .none: break
+        case .show:
+            guard let next else { return }
+            sim.call(line: Self.line(for: next))
+            sim.say(Self.line(for: next), duration: .infinity)     // stays until the user is back (SPEC)
+            sim.standOut = .peek
+            balance?.log("timer presented \(next.id)")
+        case .dismiss(let id):
+            finish(id, how: "input")
+        }
+    }
+
+    private func finish(_ id: String, how: String) {
+        sim.clearBubble()
+        sim.standOut = .docked
+        do { _ = try executor?.acknowledge(id: id) } catch {
+            unsaved.insert(id)
+            reportFailure()
+        }
+        balance?.log("timer seen \(id) (\(how))")
+        balance?.resume()                                  // its own prompt, if any, comes back
+    }
+
+    private func reportFailure() {
+        guard !reportedFailure else { return }
+        reportedFailure = true
+        balance?.log("tools timer persistence failed")
+    }
+
+    /// A timer shows its title as Chilk's own line; a scheduled message is model-written, so it is cleaned.
+    private static func line(for entry: LocalTimers.Entry) -> String {
+        entry.message == entry.title ? Lines.timerDue(entry.title) : Dialogue.plain(entry.message)
     }
 
     func shutdown() { timer?.invalidate(); timer = nil }
