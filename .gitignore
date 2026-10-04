@@ -1,0 +1,9 @@
+.dev/
+.DS_Store
+xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+.build/
+.swiftpm/
+Chilk.xcodeproj/
