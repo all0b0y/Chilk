@@ -530,13 +530,16 @@ public final class CharacterSim {
     /// Stay: while the cursor is anywhere between his left side and the screen edge (he moved away from
     /// under it, that must not count as leaving). Leave: only after a short grace period (no flicker).
     private func updateHover(pointer: CGPoint?, center: CGPoint) {
-        guard !isCarried, let p = pointer, p.x >= 0, p.y >= 0, Double(p.y) <= metrics.height, Double(p.x) <= metrics.width + 2 else {
+        // The nominal scene is not a screen edge. A roaming / returning body can extend past it
+        // and still be visible and interactive; physical screen coordinates already bound the cursor.
+        guard !isCarried, let p = pointer else {
             if isCarried { isHovering = false; hoverLostAt = nil } else { loseHover() }
             return
         }
         let px = Double(p.x), py = Double(p.y)
         let enter = contains(p)
         let stay = isHovering && px >= Double(center.x) - metrics.radiusX * 1.25
+            && px <= max(metrics.width + 2, Double(center.x) + metrics.radiusX * 1.25)
             && abs(py - Double(center.y)) <= metrics.radiusY * 1.5
         if enter || stay {
             hoverLostAt = nil

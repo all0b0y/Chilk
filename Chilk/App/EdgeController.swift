@@ -17,6 +17,10 @@ final class EdgeController: NSObject {
     }
     private var originX = Spring(0, stiffness: 110, damping: 17)
     private var originY = Spring(0, stiffness: 110, damping: 17)
+    /// Logical scene placement is independent of the expanded paint window.
+    private var sceneOrigin = CGPoint.zero
+    private var viewport = SceneViewport(metrics: .standard, placements: [])
+    private var sceneFrame: CGRect { CGRect(origin: sceneOrigin, size: metrics.sceneSize) }
     private var link: CADisplayLink?
     private var driverTimer: Timer?
     private var lastTimestamp: CFTimeInterval?
@@ -66,7 +70,8 @@ final class EdgeController: NSObject {
         let origin = targetOrigin()
         originX = Spring(origin.x, stiffness: 110, damping: 17)
         originY = Spring(origin.y, stiffness: 110, damping: 17)
-        panel.setFrameOrigin(origin)
+        sceneOrigin = origin
+        present()
     }
 
     func show() {
@@ -109,27 +114,25 @@ final class EdgeController: NSObject {
             originX.step(dt / 2); originY.step(dt / 2)
             originX.step(dt / 2); originY.step(dt / 2)
             let origin = CGPoint(x: originX.value.rounded(), y: originY.value.rounded())
-            if origin != panel.frame.origin { panel.setFrameOrigin(origin) }
+            sceneOrigin = origin
             carryVelocity = originX.velocity
         }
 
         let mirrored = isMirrored
-        let mouse = NSEvent.mouseLocation
-        let frame = panel.frame
-        var local = CGPoint(x: mouse.x - frame.minX, y: frame.maxY - mouse.y)
-        if mirrored { local.x = metrics.sceneSize.width - local.x }
+        let raw = viewport.scenePoint(screenPoint: NSEvent.mouseLocation, sceneOrigin: sceneOrigin)
+        var local = raw
+        if mirrored { local.x = metrics.width - local.x }
 
         sim.step(dt: dt, pointer: ignorePointer ? nil : local, carryVelocity: mirrored ? -carryVelocity : carryVelocity)
 
-        // Bubble buttons: hover highlight and hit testing (rects are panel coordinates, already mirrored).
-        let raw = CGPoint(x: mouse.x - frame.minX, y: frame.maxY - mouse.y)
+        // Button plans and body hit testing stay in canonical scene coordinates as the canvas expands.
         let hit = ChilkRenderer.buttonRects(pose: sim.pose, metrics: metrics, mirrored: mirrored)
             .first { $0.rect.insetBy(dx: -2, dy: -2).contains(raw) }?.index
         if sim.hoveredButton != hit { sim.hoveredButton = hit }
         let interactive = drag != nil || pressedButton != nil || hit != nil || sim.contains(local)
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
-        view.show(pose: sim.pose, mirrored: mirrored)
+        present()
 
         // 60 fps only while something moves fast.
         let busy = sim.isBusy || drag != nil || flight != nil || abs(originX.velocity) > 2 || abs(originY.velocity) > 2
@@ -157,9 +160,9 @@ final class EdgeController: NSObject {
     /// so turning around never moves him).
     private var isMirrored: Bool {
         if drag?.moved == true {
-            return panel.frame.midX < visibleFrame.midX
+            return sceneFrame.midX < visibleFrame.midX
         }
-        return placement.edge == .left
+        return flight?.mirrored ?? (placement.edge == .left)
     }
 
     // MARK: Debug stats (CHILK_DEBUG=/abs/path.log): frames/s, CPU per frame, why 60 fps
@@ -203,7 +206,8 @@ final class EdgeController: NSObject {
             return
         }
         let m = NSEvent.mouseLocation
-        drag = Drag(start: m, grabOffset: CGPoint(x: m.x - panel.frame.minX, y: m.y - panel.frame.minY), lastX: panel.frame.minX)
+        guard flight == nil else { return }
+        drag = Drag(start: m, grabOffset: CGPoint(x: m.x - sceneOrigin.x, y: m.y - sceneOrigin.y), lastX: sceneOrigin.x)
     }
 
     private func mouseDragged() {
@@ -224,11 +228,12 @@ final class EdgeController: NSObject {
             origin.y = min(max(origin.y, screen.minY), screen.maxY - metrics.sceneSize.height)
             carryVelocity = Double(origin.x - d.lastX) * 60
             d.lastX = origin.x
-            panel.setFrameOrigin(origin)
+            sceneOrigin = origin
             originX.value = origin.x; originX.velocity = 0
             originY.value = origin.y; originY.velocity = 0
         }
         drag = d
+        present()
     }
 
     private func mouseUp() {
@@ -242,7 +247,7 @@ final class EdgeController: NSObject {
         if d.moved {
             sim.isCarried = false
             // He is centred, so the panel centre is his position: the nearer edge wins.
-            placement = .dropped(panelOrigin: panel.frame.origin, panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
+            placement = .dropped(panelOrigin: sceneOrigin, panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
             _ = reframe(to: metrics.dockX, mirrored: placement.edge == .left)
             originX.velocity = carryVelocity * 0.5   // a little fling towards the edge
         } else {
@@ -257,18 +262,18 @@ final class EdgeController: NSObject {
     func fly(duration: Double, completion: @escaping () -> Void) {
         guard drag == nil, flight == nil else { return completion() }
         let mirrored = isMirrored
-        _ = reframe(to: metrics.carryX, mirrored: mirrored)        // centred: the panel edges never cut him
-        flight = Flight(start: CACurrentMediaTime(), duration: duration, from: panel.frame.origin, mirrored: mirrored, completion: completion)
+        // No one-off re-centering: the shared viewport already encloses every animated part.
+        flight = Flight(start: CACurrentMediaTime(), duration: duration, from: sceneOrigin, mirrored: mirrored, completion: completion)
     }
 
     private func flyStep(_ f: Flight, now: CFTimeInterval) {
         let k = (now - f.start) / f.duration
         guard k < 1 else {
             flight = nil
-            panel.setFrameOrigin(f.from)
-            _ = reframe(to: metrics.dockX, mirrored: f.mirrored)
+            sceneOrigin = f.from
+            originX.value = f.from.x
             originX.velocity = 0
-            originY.value = panel.frame.origin.y
+            originY.value = f.from.y
             originY.velocity = 0
             carryVelocity = 0
             f.completion()
@@ -276,31 +281,43 @@ final class EdgeController: NSObject {
         }
         let vf = visibleFrame
         let a = k * 4 * .pi                                        // two loops
-        let eight = CGPoint(x: vf.midX - metrics.width / 2 + vf.width * 0.3 * sin(a),
-                            y: vf.midY - metrics.height / 2 + vf.height * 0.22 * sin(2 * a) / 2)
+        let anchorX = f.mirrored ? metrics.width - sim.positionX : sim.positionX
+        let anchorY = metrics.height - Double(sim.bodyCenter.y)
+        let eight = CGPoint(x: vf.midX - anchorX + vf.width * 0.3 * sin(a),
+                            y: vf.midY - anchorY + vf.height * 0.22 * sin(2 * a) / 2)
         func smooth(_ x: Double) -> Double { let t = min(1, max(0, x)); return t * t * (3 - 2 * t) }
         let w = min(smooth(k / 0.15), smooth((1 - k) / 0.15))      // ease out of the edge and back into it
         let origin = CGPoint(x: (f.from.x + (eight.x - f.from.x) * w).rounded(), y: (f.from.y + (eight.y - f.from.y) * w).rounded())
-        carryVelocity = Double(origin.x - panel.frame.origin.x) * 60
-        panel.setFrameOrigin(origin)
+        carryVelocity = Double(origin.x - sceneOrigin.x) * 60
+        sceneOrigin = origin
         originX.value = origin.x
         originY.value = origin.y
     }
 
-    /// Moves him inside the panel and the panel the opposite way; returns the panel shift.
-    /// The new pose is pushed right away so the panel move and the figure move land in the same frame.
+    /// Re-anchor the carry pose without a jump in screen coordinates. This is NOT a clipping fix:
+    /// all poses (including the return to the edge) use the same paint viewport.
     private func reframe(to x: Double, mirrored: Bool) -> Double {
         let shift = metrics.panelShiftKeepingPlace(fromX: sim.positionX, toX: x, mirrored: mirrored)
         sim.reframe(x: x)
-        var origin = panel.frame.origin
+        var origin = sceneOrigin
         origin.x += shift
+        sceneOrigin = origin
+        originX.value = origin.x
+        present()
+        return shift
+    }
+
+    /// One paint rule for every state: render all parts, never crop at an invisible scene edge.
+    /// The enlarged window and both renderers share the exact same plan and coordinate mapping.
+    private func present() {
+        let plan = ChilkRenderer.placements(pose: sim.pose, metrics: metrics, mirrored: isMirrored)
+        viewport = SceneViewport(metrics: metrics, placements: plan)
+        let frame = viewport.panelFrame(sceneOrigin: sceneOrigin)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        panel.setFrameOrigin(origin)
-        view.show(pose: sim.pose, mirrored: mirrored)
+        if panel.frame != frame { panel.setFrame(frame, display: false) }
+        view.show(plan: plan, viewport: viewport)
         CATransaction.commit()
-        originX.value = origin.x
-        return shift
     }
 
     // MARK: Geometry

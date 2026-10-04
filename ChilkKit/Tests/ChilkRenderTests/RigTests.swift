@@ -146,8 +146,6 @@ struct RigTests {
 
     @Test func rigLooksLikeTheVectorRenderer() {
         let rig = LayerRig(metrics: m, palette: palette, rasterScale: 3)
-        let vector = Bitmap(size: m.sceneSize, scale: 2, yDown: true)
-        let layers = Bitmap(size: m.sceneSize, scale: 2, yDown: false)
         var frame = 0, compared = 0
         var worst = (mean: 0.0, big: 0.0, frame: 0), worstText = (mean: 0.0, big: 0.0, frame: 0)
         playScenario { pose, mirrored in
@@ -155,7 +153,12 @@ struct RigTests {
             let plan = ChilkRenderer.placements(pose: pose, metrics: m, mirrored: mirrored)
             rig.apply(plan)
             guard frame % 25 == 0 else { return }
-            vector.clear(); layers.clear()
+            // Compare the FULL paint viewport, not two equally cropped 300×300 canvases.
+            let viewport = SceneViewport(metrics: m, placements: plan)
+            let vector = Bitmap(size: viewport.rect.size, scale: 2, yDown: true)
+            let layers = Bitmap(size: viewport.rect.size, scale: 2, yDown: false)
+            vector.ctx.translateBy(x: viewport.drawingOffset.x, y: viewport.drawingOffset.y)
+            layers.ctx.translateBy(x: viewport.layerOffset.x, y: viewport.layerOffset.y)
             ChilkRenderer.draw(plan, in: vector.ctx, metrics: m, palette: palette)
             rig.root.render(in: layers.ctx)
             let d = vector.difference(from: layers)

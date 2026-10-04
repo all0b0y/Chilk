@@ -11,6 +11,7 @@ final class CharacterView: NSView {
     private let palette = Palette.peach
     private let rig: LayerRig?
     private let vectorLayer: VectorSceneLayer?
+    private let host = CALayer()
     var isVector: Bool { vectorLayer != nil }
 
     var onMouseDown: ((NSEvent) -> Void)?
@@ -29,8 +30,10 @@ final class CharacterView: NSView {
             vectorLayer = nil
         }
         super.init(frame: frame)
-        let host: CALayer = rig?.root ?? vectorLayer!
         host.frame = CGRect(origin: .zero, size: frame.size)
+        host.masksToBounds = false
+        host.actions = ["bounds": NSNull(), "position": NSNull()]
+        host.addSublayer(rig?.root ?? vectorLayer!)
         layer = host                              // set before wantsLayer → layer-hosting
         wantsLayer = true
     }
@@ -41,12 +44,19 @@ final class CharacterView: NSView {
     private static func rasterScale(for screenScale: CGFloat) -> CGFloat { screenScale * 1.5 }
 
     @MainActor
-    func show(pose: CharacterPose, mirrored: Bool) {
+    func show(plan: [Placement], viewport: SceneViewport) {
+        let size = viewport.rect.size
+        if frame.size != size { frame.size = size }
+        let canvas = CGRect(origin: .zero, size: size)
+        if host.frame != canvas { host.frame = canvas }
         if let rig {
-            rig.apply(ChilkRenderer.placements(pose: pose, metrics: metrics, mirrored: mirrored))
+            let scene = CGRect(origin: viewport.layerOffset, size: metrics.sceneSize)
+            if rig.root.frame != scene { rig.root.frame = scene }
+            rig.apply(plan)
         } else if let v = vectorLayer {
-            v.pose = pose
-            v.mirrored = mirrored
+            v.frame = canvas
+            v.plan = plan
+            v.drawingOffset = viewport.drawingOffset
             v.setNeedsDisplay()
         }
     }
@@ -69,8 +79,8 @@ final class CharacterView: NSView {
 
 /// Old CPU path, kept for A/B measurements: the whole scene redrawn with CoreGraphics each frame.
 final class VectorSceneLayer: CALayer {
-    var pose = CharacterPose()
-    var mirrored = false
+    var plan: [Placement] = []
+    var drawingOffset = CGPoint.zero
 
     override init() {
         super.init()
@@ -89,7 +99,8 @@ final class VectorSceneLayer: CALayer {
             ctx.scaleBy(x: 1, y: -1)
         }
         ctx.clear(ctx.boundingBoxOfClipPath)
-        ChilkRenderer.drawScene(in: ctx, pose: pose, metrics: .standard, palette: .peach, mirrored: mirrored)
+        ctx.translateBy(x: drawingOffset.x, y: drawingOffset.y)
+        ChilkRenderer.draw(plan, in: ctx, metrics: .standard, palette: .peach)
         ctx.restoreGState()
     }
 }

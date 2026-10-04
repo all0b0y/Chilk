@@ -53,6 +53,22 @@ struct CharacterSimTests {
         #expect(sim.pose.x + m.radiusX * 1.07 + 6 + 5 <= m.width)
     }
 
+    @Test func hoverWorksOnTheFullBodyBeyondTheNominalCanvas() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 42))
+        let pointer = CGPoint(x: m.width + 10, y: sim.bodyCenter.y)
+        #expect(sim.contains(pointer))
+        sim.step(dt: 1.0 / 60, pointer: pointer)
+        #expect(sim.isHovering, "A visible body outside the nominal scene must still respond to hover")
+    }
+
+    @Test func hoverEndsWhenCursorMovesFarPastTheFigure() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 42))
+        run(sim, seconds: 1, pointer: sim.bodyCenter)
+        #expect(sim.isHovering)
+        run(sim, seconds: 0.6, pointer: CGPoint(x: m.width + 500, y: sim.bodyCenter.y))
+        #expect(!sim.isHovering)
+    }
+
     @Test func hoverDoesNotFlickerWhileHeMovesOutFromUnderTheCursor() {
         let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 30))
         let sliver = CGPoint(x: m.width - 6, y: Double(sim.bodyCenter.y))
