@@ -39,7 +39,7 @@ targets:
         LSMinimumSystemVersion: "26.0"
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "© 2026 all0b0y"
-        NSMicrophoneUsageDescription: "Чилк слушает, только когда ты зовёшь его по имени или горячей клавишей."
+        NSMicrophoneUsageDescription: "С включёнными ушами Чилк слушает локально, чтобы услышать своё имя. Уши можно выключить в меню Dock; горячая клавиша включает микрофон только на время разговора."
         NSSpeechRecognitionUsageDescription: "Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу."
     settings:
       base:

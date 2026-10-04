@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var balance: BalanceController?
     private var brain: Brain?
     private var conversation: Conversation?
+    private var ears: Ears?
     private var hotkey: Hotkey?
 
     static func main() {
@@ -31,11 +32,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
         self.balance = balance
         let brain = Brain()
-        let conversation = Conversation(sim: edge.sim, brain: brain)
+        let ears = Ears()
+        self.ears = ears
+        let conversation = Conversation(sim: edge.sim, brain: brain, ears: ears)
         self.brain = brain
         self.conversation = conversation
         conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
-        conversation.onEnd = { [weak balance] in balance?.resume() }
+        conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
+        ears.onWake = { [weak conversation] in conversation?.wake() }
+        ears.onDisabled = { [weak conversation] in conversation?.muteEars() }
+        ears.onError = { [weak conversation] in conversation?.muteEars() }
+        ears.notice = { [weak edge, weak conversation] line in
+            if conversation?.isActive != true { edge?.sim.call(line: line) }
+        }
+        ears.log = { [weak balance] in balance?.log($0) }
+        ears.start()
         conversation.log = { [weak balance] in balance?.log($0) }
         balance.isBusy = { [weak conversation] in conversation?.isActive ?? false }
         brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
@@ -62,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
         brain?.shutdown()
+        ears?.shutdown()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -75,6 +87,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(status)
             if brain.state == .signedOut { menu.addItem(item(String(localized: "Войти в Codex через ChatGPT…"), #selector(loginCodex))) }
             if case .failed = brain.state { menu.addItem(item(String(localized: "Переподключить Codex"), #selector(reconnectCodex))) }
+        }
+        if let ears {
+            let status = NSMenuItem(title: ears.status, action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            menu.addItem(status)
+            menu.addItem(item(ears.enabled ? String(localized: "Выключить уши") : String(localized: "Включить уши"), #selector(toggleEars)))
         }
         let side = edge?.edge == .left
             ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
@@ -119,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func callChilk() { conversation?.trigger() }
+    @objc private func toggleEars() { ears?.toggle() }
     @objc private func loginCodex() { brain?.login() }
     @objc private func reconnectCodex() { if let brain { Task { await brain.connect() } } }
     @objc private func moveLeft() { edge?.move(to: .left) }

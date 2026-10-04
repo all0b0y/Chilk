@@ -161,19 +161,19 @@ public final class Microphone: @unchecked Sendable {
         }
     }
 
-    /// - Parameter onBuffer: audio + its RMS level (0…1).
-    public func start(_ onBuffer: @escaping @Sendable (AVAudioPCMBuffer, Float) -> Void) throws {
+    /// - Parameter onBuffer: audio + its RMS level (0…1) + the hardware time of its first frame.
+    public func start(_ onBuffer: @escaping @Sendable (AVAudioPCMBuffer, Float, AVAudioTime) -> Void) throws {
         guard !running else { return }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in
             var level: Float = 0
             if let data = buffer.floatChannelData?[0], buffer.frameLength > 0 {
                 var sum: Float = 0
                 for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
                 level = min(1, (sum / Float(buffer.frameLength)).squareRoot() * 8)
             }
-            onBuffer(buffer, level)
+            onBuffer(buffer, level, time)
         }
         engine.prepare()
         try engine.start()

@@ -35,6 +35,22 @@ struct EndOfSpeechTests {
         #expect(chatty.verdict(at: 25) == .tooLong)
     }
 
+    @Test func callingOnlyHisNameIsNotARequest() {
+        for text in ["Чилк", "Чел", "Чу", "Эй, Чилк!", "И эй, Чилк"] {
+            #expect(EndOfSpeech.stripAddress(text, allowNameOnly: true).isEmpty)
+        }
+        #expect(EndOfSpeech.stripAddress("И эй, Чел, найди файл", allowNameOnly: true) == "Найди файл")
+        #expect(EndOfSpeech.stripAddress("Человек на луне", allowNameOnly: true) == "Человек на луне")
+    }
+
+    @Test func independentlyConfirmedWakeStripsApplesChikMishearing() {
+        #expect(EndOfSpeech.stripAddress("Чик пошути про понедельник", allowNameOnly: true) == "Пошути про понедельник")
+        #expect(EndOfSpeech.stripAddress("Чик", allowNameOnly: true).isEmpty)
+        #expect(EndOfSpeech.stripAddress("Чикаго — большой город", allowNameOnly: true) == "Чикаго — большой город")
+        #expect(EndOfSpeech.stripAddress("Чик пошути") == "Чик пошути")
+        #expect(!WakePhrase.matches("Чик пошути"))
+    }
+
     @Test func theAddressIsNotPartOfTheRequest() {
         #expect(EndOfSpeech.stripAddress("Чилк, пошути в пять") == "Пошути в пять")
         #expect(EndOfSpeech.stripAddress("эй чилк найди файл") == "Найди файл")

@@ -12,6 +12,9 @@ let package = Package(
         .executable(name: "chilk-render", targets: ["chilk-render"]),
         .executable(name: "chilk-voice", targets: ["chilk-voice"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/argmaxinc/WhisperKit.git", exact: "1.1.0"),
+    ],
     targets: [
         // Pure, deterministic logic: springs, character simulation, balance director, edge placement. No AppKit.
         .target(name: "ChilkCore"),
@@ -19,8 +22,12 @@ let package = Package(
         .target(name: "ChilkRender", dependencies: ["ChilkCore"]),
         // Codex app-server client (JSON-RPC over stdio) and Чилк's isolated Codex profile. Foundation only.
         .target(name: "ChilkBrain"),
-        // Live Russian dictation (SpeechAnalyzer + DictationTranscriber) and microphone capture.
-        .target(name: "ChilkEars", dependencies: ["ChilkCore"]),
+        // WebRTC voice-activity detector, statically linked (vendored libfvad, BSD-3-Clause).
+        .target(name: "CFvad", exclude: ["LICENSE", "PATENTS", "AUTHORS", "README.md"],
+                publicHeadersPath: "include", cSettings: [.headerSearchPath(".")]),
+        // One audio input shared by local wake recognition and live Apple dictation.
+        .target(name: "ChilkEars", dependencies: ["ChilkCore", "CFvad", .product(name: "WhisperKit", package: "WhisperKit")]),
+        .testTarget(name: "ChilkEarsTests", dependencies: ["ChilkEars", "ChilkCore"]),
         // Renders AppIcon PNGs and preview frames headlessly (no window server needed).
         .executableTarget(name: "chilk-render", dependencies: ["ChilkRender"]),
         // Voice/brain checks without the app: real Codex turns, dictation of audio files.

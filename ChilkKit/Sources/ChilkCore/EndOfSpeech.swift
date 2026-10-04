@@ -45,19 +45,21 @@ public struct EndOfSpeech: Sendable, Equatable {
     /// mishears the name (spike 003: «Чел», «Чил»), so those count too — but only as a whole first word.
     public static let addressWords: Set<String> = ["чилк", "чилка", "чил", "чилл", "чел", "чек"]
 
-    public static func stripAddress(_ text: String) -> String {
+    public static func stripAddress(_ text: String, allowNameOnly: Bool = false) -> String {
         var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         func dropWord(_ allowed: Set<String>) -> Bool {
             let word = s.prefix { $0.isLetter }.lowercased()
             let rest = s.dropFirst(word.count)
-            guard allowed.contains(word), rest.first.map({ !$0.isLetter }) ?? false else { return false }
+            guard allowed.contains(word), rest.first.map({ !$0.isLetter }) ?? allowNameOnly else { return false }
             let remainder = String(rest.drop { ",.!?: —-".contains($0) || $0 == " " })
-            guard !remainder.isEmpty else { return false }
+            guard !remainder.isEmpty || allowNameOnly else { return false }
             s = remainder
             return true
         }
+        if allowNameOnly, s.lowercased().hasPrefix("и эй") { _ = dropWord(["и"]) }
         let hadHey = dropWord(["эй", "хей"])
-        if !dropWord(addressWords), hadHey { s = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let names = allowNameOnly ? addressWords.union(["чу", "училка", "чилки", "чилку", "чик"]) : addressWords
+        if !dropWord(names), hadHey { s = text.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let first = s.first else { return s }
         return first.uppercased() + s.dropFirst()
     }

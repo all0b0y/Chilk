@@ -20,7 +20,10 @@ final class Conversation {
 
     private let sim: CharacterSim
     private let brain: Brain
-    private let mic = Microphone()
+    private let ears: Ears
+    private var listeningGeneration = 0
+    private var stripWakeAddress = false
+    private var suppressFollowUps = false
     private var dictation: Dictation?
     private var detector = EndOfSpeech(start: 0)
     private var window: TimeInterval?
@@ -29,8 +32,8 @@ final class Conversation {
     private var answerTask: Task<Void, Never>?
     private var endTimer: Timer?
     private var closing = false
-    private let heard = Latest()
-    private let answer = Latest()
+    private var heard = Latest()
+    private var answer = Latest()
     private var lastHeardVersion = 0, lastAnswerVersion = 0
     private var dots = 0
     private var turns = 0
@@ -50,15 +53,33 @@ final class Conversation {
         func reset() { lock.withLock { value = ("", false, 0); level = 0 } }
     }
 
-    init(sim: CharacterSim, brain: Brain) {
+    init(sim: CharacterSim, brain: Brain, ears: Ears) {
         self.sim = sim
         self.brain = brain
+        self.ears = ears
+        ears.onLevel = { [weak self] level in self?.heard.setLevel(level) }
     }
 
     // MARK: Controls
 
     func trigger() {
+        if phase == .idle { suppressFollowUps = false }
         perform(Dialogue.hotkey(phase))
+    }
+
+    func wake() {
+        guard phase == .idle, !closing else { return }
+        suppressFollowUps = false
+        if let problem = brain.problem { return leave(saying: problem, after: 4) }
+        turns = 0
+        sim.call(line: Lines.listening)
+        listen(window: nil, replayWake: true)
+    }
+
+    /// A deliberate mute stops listening NOW, and prevents an answer from reopening the microphone.
+    func muteEars() {
+        suppressFollowUps = true
+        if phase == .listening || phase == .waiting { perform(.leaveQuietly) }
     }
 
     /// A click on Чилк. `false` = not about the conversation (the balance gets it).
@@ -103,10 +124,15 @@ final class Conversation {
 
     /// - Parameter window: `nil` = the first question (7 s of silence → «Не расслышал»);
     ///   otherwise a follow-up: silence for `window` seconds → he leaves quietly.
-    private func listen(window: TimeInterval?) {
+    private func listen(window: TimeInterval?, replayWake: Bool = false) {
+        listeningGeneration += 1
+        let generation = listeningGeneration
+        stripWakeAddress = replayWake
+        do { try ears.prepareListening(replayWake: replayWake) }
+        catch { return leave(saying: Lines.didntHear, after: 3) }
         phase = window == nil ? .listening : .waiting
         self.window = window
-        heard.reset()
+        heard = Latest()
         lastHeardVersion = 0
         sim.standOut = .out
         sim.listening = true
@@ -120,25 +146,24 @@ final class Conversation {
         let dictation = Dictation()
         self.dictation = dictation
         let heard = self.heard
-        let file = earsFiles?.isEmpty == false ? earsFiles!.removeFirst() : nil
+        let file = !replayWake && earsFiles?.isEmpty == false ? earsFiles!.removeFirst() : nil
         let silentDemo = earsFiles != nil && file == nil                         // demo ran out of recordings
         earsTask = Task {
-            guard await Microphone.requestAccess() else { return leave(saying: Lines.noMicrophone, after: 4) }
             do {
+                if replayWake || earsFiles == nil { try await ears.captureForDictation() }
                 try await dictation.start { text, isFinal in heard.set(text, final: isFinal) }
-                guard phase == .listening || phase == .waiting else { return await dictation.cancel() }
+                guard generation == listeningGeneration, !Task.isCancelled,
+                      phase == .listening || phase == .waiting else { return await dictation.cancel() }
+                try ears.attach(dictation)
                 detector = EndOfSpeech(start: now)          // the clock starts when the microphone is really on
                 if let window { detector.nothingHeardAfter = window; detector.maxDuration = window + 25 }
                 if let file {
                     try await dictation.play(file: file, realtime: true)
-                } else if !silentDemo {
-                    try mic.start { buffer, level in
-                        dictation.feed(buffer)
-                        heard.setLevel(level)
-                    }
-                }
+                } else if silentDemo { log("follow-up demo silence") }
             } catch {
-                leave(saying: Lines.earsFailed, after: 3)
+                guard generation == listeningGeneration, !Task.isCancelled else { return }
+                if case EarsError.microphoneDenied = error { leave(saying: Lines.noMicrophone, after: 4) }
+                else { leave(saying: Lines.earsFailed, after: 3) }
             }
         }
         if poll == nil {
@@ -154,11 +179,12 @@ final class Conversation {
             let h = heard.get()
             if h.version != lastHeardVersion {
                 lastHeardVersion = h.version
-                detector.heard(h.text, isFinal: h.final, at: now)
-                if !h.text.isEmpty {
+                let text = stripWakeAddress ? EndOfSpeech.stripAddress(h.text, allowNameOnly: true) : h.text
+                detector.heard(text, isFinal: h.final, at: now)
+                if !text.isEmpty {
                     if phase == .waiting { phase = .listening }                  // the follow-up has begun
                     sim.earsDroop = 0
-                    sim.updateBubble(h.text)
+                    sim.updateBubble(text)
                 }
             }
             sim.hearing = Double(heard.currentLevel)
@@ -201,14 +227,18 @@ final class Conversation {
         sim.earsDroop = 0
         sim.perform(.think(seconds: 120))
         sim.updateBubble("·")
-        answer.reset()
+        answer = Latest()
         lastAnswerVersion = 0
         let answer = self.answer
         let dictation = self.dictation
-        mic.stop()
+        let heard = self.heard
+        let stripWake = stripWakeAddress
+        ears.stopListening()
+        earsTask?.cancel()
         answerTask = Task {
             await dictation?.finish()
-            let question = EndOfSpeech.stripAddress(heard.get().text)
+            guard !Task.isCancelled else { return }
+            let question = EndOfSpeech.stripAddress(heard.get().text, allowNameOnly: stripWake)
             log("heard «\(question)»")
             guard !question.isEmpty else {
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)
@@ -224,7 +254,7 @@ final class Conversation {
                 phase = .answering
                 sim.stopAct()
                 sim.updateBubble(text)
-                if let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
+                if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
                     leave(saying: nil, after: Dialogue.readingTime(text.count))
@@ -238,7 +268,8 @@ final class Conversation {
     }
 
     private func stopEars() {
-        mic.stop()
+        listeningGeneration += 1
+        ears.stopListening()
         earsTask?.cancel()
         let d = dictation
         Task { await d?.cancel() }

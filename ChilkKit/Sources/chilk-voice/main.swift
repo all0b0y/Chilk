@@ -1,3 +1,4 @@
+import AVFoundation
 import ChilkBrain
 import ChilkCore
 import ChilkEars
@@ -61,6 +62,61 @@ case "ask":
     }
     print("declined server requests:", await client.declined)
     await client.stop()
+
+case "wake":
+    guard args.count >= 3 else { print("usage: chilk-voice wake model-folder audio-folder [--json-out report.json]"); exit(2) }
+    let modelFolder = URL(fileURLWithPath: args[1])
+    let folder = URL(fileURLWithPath: args[2])
+    let model = WakeModel()
+    let base = modelFolder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let loaded = now()
+    try await model.prepare(folder: modelFolder, base: base)
+    print(String(format: "wake model loaded in %.2f s", now() - loaded))
+    let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+        .filter { ["wav", "aiff", "m4a"].contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    var rows: [[String: Any]] = []
+    let dumpClips = args.contains("--dump-clips")
+    for file in files {
+        let input = VoiceInput(recognize: { samples in
+            if dumpClips, let buffer = AudioSamples.buffer(samples) {
+                let out = file.deletingLastPathComponent().appending(path: "clips/\(file.lastPathComponent)")
+                try FileManager.default.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let writer = try AVAudioFile(forWriting: out, settings: buffer.format.settings)
+                try writer.write(from: buffer)
+            }
+            return try await model.recognize(samples)
+        })
+        let expected = file.lastPathComponent.hasPrefix("A_") || file.lastPathComponent.hasPrefix("B_")
+        var hit = false, wakes = 0, checks = 0, texts: [String] = [], elapsed = 0.0
+        input.onCheck = { text, found, seconds in
+            checks += 1; texts.append(text); elapsed += seconds
+            if found { hit = true; wakes += 1 }
+            if checks % 100 == 0 { print("progress: \(file.lastPathComponent) \(checks) checks, \(wakes) wakes") }
+        }
+        input.onError = { error in print("wake error:", error) }
+        input.arm { input.suspend() }
+        // Leading/trailing silence is input audio, not a transcript shortcut. The real WebRTC gate runs.
+        let samples = Array(repeating: Float(0), count: 9_600) + (try AudioSamples.load(file: file)) + Array(repeating: Float(0), count: 12_800)
+        for offset in stride(from: 0, to: samples.count, by: 320) {
+            input.feed(Array(samples[offset..<min(offset + 320, samples.count)]))
+            // Finish each recognition before continuing an offline file (real-time behaviour is exercised in the app demo).
+            while input.isChecking { try await Task.sleep(for: .milliseconds(10)) }
+            if input.mode == .suspended, !expected { input.arm { input.suspend() } }
+        }
+        let row: [String: Any] = ["file": file.lastPathComponent, "expected": expected, "hit": hit, "wakes": wakes, "checks": checks, "seconds": elapsed, "texts": texts]
+        rows.append(row)
+        if let flag = args.firstIndex(of: "--json-out"), flag + 1 < args.count {
+            try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: args[flag + 1]))
+        }
+        print(String(format: "%@ %@ %d checks %.2f s | %@", hit == expected ? "PASS" : "FAIL", file.lastPathComponent, checks, elapsed, texts.joined(separator: " / ")))
+    }
+    if let flag = args.firstIndex(of: "--json-out"), flag + 1 < args.count {
+        try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]).write(to: URL(fileURLWithPath: args[flag + 1]))
+    }
+    let positives = rows.filter { $0["expected"] as? Bool == true }
+    let negatives = rows.filter { $0["expected"] as? Bool == false }
+    print("wake:", positives.filter { $0["hit"] as? Bool == true }.count, "/", positives.count,
+          "false:", negatives.filter { $0["hit"] as? Bool == true }.count, "/", negatives.count)
 
 case "hear":
     guard args.count >= 2 else { print("usage: chilk-voice hear file.wav [--fast]"); exit(2) }
