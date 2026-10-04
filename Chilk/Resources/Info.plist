@@ -26,7 +26,11 @@
 	<string>26.0</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 all0b0y</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Чилк слушает, только когда ты зовёшь его по имени или горячей клавишей.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу.</string>
 </dict>
 </plist>

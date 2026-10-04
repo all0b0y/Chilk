@@ -25,7 +25,7 @@ final class BalanceController {
     /// CHILK_BALANCE_LOG=/abs/path: signals every 10 s and every director event (for acceptance and debugging).
     private let logURL = ProcessInfo.processInfo.environment["CHILK_BALANCE_LOG"].map { URL(fileURLWithPath: $0) }
 
-    private func log(_ line: String) {
+    func log(_ line: String) {
         guard let url = logURL else { return }
         let stamp = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withTime, .withColonSeparatorInTime])
         let data = Data("\(stamp) \(line)\n".utf8)
@@ -37,6 +37,17 @@ final class BalanceController {
     }
 
     private enum Activity { case eyeGym, breathing }
+
+    /// While Чилк talks with the user the stage is theirs: balance keeps counting but shows nothing.
+    var isBusy: () -> Bool = { false }
+
+    /// After a conversation: show the current prompt again (if any).
+    func resume() {
+        if let prompt = engine.currentPrompt() { apply(prompt) }
+    }
+
+    /// Minutes since the last real stretch break — the only activity fact sent to Codex (В24).
+    var sittingMinutes: Int { Int((engine.state.needs[.stretch]?.sitting ?? 0) / 60) }
 
     init(sim: CharacterSim, edge: EdgeController, presence: PresenceMonitor) {
         var config = BalanceConfig()
@@ -84,6 +95,10 @@ final class BalanceController {
     }
 
     private func apply(_ event: BalanceEvent) {
+        if isBusy() {
+            if case .bounceDock = event { NSApp.requestUserAttention(.informationalRequest) }
+            return
+        }
         switch event {
         case .hint(let n):
             hideBubble()
@@ -211,7 +226,7 @@ final class BalanceController {
         action()
     }
 
-    private func poked() {
+    func poked() {
         guard activity == nil else { return }
         apply(engine.pokedDuringHint())
     }

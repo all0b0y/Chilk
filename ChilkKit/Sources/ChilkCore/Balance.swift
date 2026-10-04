@@ -360,6 +360,12 @@ public final class BalanceEngine {
         return out
     }
 
+    /// The prompt to show again after something else had the stage (a conversation), if any.
+    public func currentPrompt() -> BalanceEvent? {
+        guard let e = state.episode, e.phase == .showing else { return nil }
+        return stageEvent(e, again: true)
+    }
+
     /// Clicked on Чилк while he pantomimes: skip straight to the bubble.
     public func pokedDuringHint() -> [BalanceEvent] {
         guard var e = state.episode, e.stage == 0, e.phase == .showing else { return [] }

@@ -99,6 +99,9 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     mirrored = true
     sim.say("Пора закругляться 🌙", buttons: ["Заканчиваю", "Я занят"]); run(1.5)
     sim.clearBubble(); sim.takeOff(.hat); sim.takeOff(.backpack); sim.standOut = .docked
+    // Slice 3: listening ears (twitching with the voice), then thinking.
+    sim.listening = true; sim.hearing = 0.6; sim.say("Слушаю…", duration: 3); run(1.5)
+    sim.listening = false; sim.perform(.think(seconds: 2)); run(2.2)
     sim.fatigue = 0.37
     mirrored = false
     run(20)

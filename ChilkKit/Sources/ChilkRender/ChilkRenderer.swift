@@ -39,6 +39,15 @@ public enum ChilkRenderer {
         let oy = p.lookY * m.radiusY * 0.12
         out.append(Placement(slot: Slot.body, part: .body(lw: lw, shine: !p.props.contains(.hat)), transform: base, alpha: 1))
 
+        // Ears pop up while he listens (behind the head, springy, twitching with the voice).
+        if p.earsUp > 0.02 {
+            for (i, s) in [-1.0, 1.0].enumerated() {
+                let t = base.translatedBy(x: s * m.radiusX * 0.6, y: -m.radiusY * 0.62)
+                    .rotated(by: s * 0.38 + s * p.earWiggle).scaledBy(x: p.earsUp, y: p.earsUp)
+                out.append(Placement(slot: Slot.ear + i, part: .ear(lw: lw), transform: t, alpha: 1))
+            }
+        }
+
         // Props: backpack on his back with a strap over the shoulder, a beanie, a mug in his "hand".
         if p.props.contains(.backpack) {
             out.append(Placement(slot: Slot.backpack, part: .backpack(lw: lw), transform: base, alpha: 1))
@@ -149,7 +158,7 @@ public enum ChilkRenderer {
         let bw = layout.width, bh = layout.height
         let top = m.ground + p.hop - m.radiusY * 2
         var bx = min(max(p.x - bw - 14, 10), m.width - bw - 10)
-        let by = min(max(top - 28 - bh, 10), m.height)
+        let by = min(max(top - 46 - bh, 10), m.height)      // above the sprout, not over it
         var tailX = min(p.x - 22, bx + bw - 18)
         var dir = 1.0
         if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX; dir = -1 }

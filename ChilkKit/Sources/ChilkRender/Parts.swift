@@ -33,6 +33,7 @@ public enum Part: Hashable, Sendable {
     case hat(lw: Double)
     case mug(lw: Double)
     case button(title: String, hovered: Bool)
+    case ear(lw: Double)
 
     public static let waveFrames = 24
 
@@ -58,22 +59,23 @@ public struct Placement: Equatable, @unchecked Sendable {
 /// Slot numbers = drawing order.
 public enum Slot {
     public static let contactShadow = 0
-    public static let backpack = 1      // behind him
-    public static let body = 2
-    public static let strap = 3
-    public static let hat = 4           // the sprout grows through it
-    public static let stem = 5
-    public static let leaf = 6          // +0, +1
-    public static let blush = 8         // +0, +1
-    public static let eye = 10          // +0, +1
-    public static let mouth = 12
-    public static let mug = 13
-    public static let z = 14            // +0…+2
-    public static let bubbleBox = 17
-    public static let bubbleTail = 18
-    public static let bubbleStroke = 19
-    public static let button = 20       // +index
-    public static let word = 30         // +index
+    public static let ear = 1           // +0, +1 — behind the head
+    public static let backpack = 3      // behind him
+    public static let body = 4
+    public static let strap = 5
+    public static let hat = 6           // the sprout grows through it
+    public static let stem = 7
+    public static let leaf = 8          // +0, +1
+    public static let blush = 10        // +0, +1
+    public static let eye = 12          // +0, +1
+    public static let mouth = 14
+    public static let mug = 15
+    public static let z = 16            // +0…+2
+    public static let bubbleBox = 19
+    public static let bubbleTail = 20
+    public static let bubbleStroke = 21
+    public static let button = 22       // +index
+    public static let word = 34         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -143,6 +145,8 @@ extension Part {
             return box(-16.5, -10, 25, 20, margin: 5.5)
         case .button(let title, _):
             return box(0, 0, Props.buttonWidth(title), Props.buttonHeight, margin: 1.5)
+        case .ear(let lw):
+            return box(-9, -30, 18, 30, margin: max(5.5, 3.2 * lw / 2 + 1.5))
         }
     }
 
@@ -375,6 +379,12 @@ extension Part {
             Props.sticker(ctx, body, fill: Props.mugMint, outline: outline, lw: 2.6 * lw, border: false)
             ctx.setFillColor(RGBA(1, 1, 1, 0.85).cgColor)
             ctx.fill(CGRect(x: -6, y: -2, width: 12, height: 3.5))
+
+        case .ear(let lw):                                  // little rounded ear, base at the origin
+            let ear = CGPath(ellipseIn: CGRect(x: -9, y: -30, width: 18, height: 30), transform: nil)
+            Props.sticker(ctx, ear, fill: p.body.cgColor, outline: outline, lw: 3.2 * lw)
+            ctx.setFillColor(p.blush.cgColor)
+            ctx.fillEllipse(in: CGRect(x: -4.5, y: -24, width: 9, height: 17))
 
         case .button(let title, let hovered):
             let rect = CGRect(x: 0, y: 0, width: Props.buttonWidth(title), height: Props.buttonHeight)

@@ -51,6 +51,8 @@ public enum Act: Sendable, Equatable {
     case pack
     /// Breathes with the user: 4 s in, 6 s out.
     case breathe(seconds: Double)
+    /// Waits for Codex: looks up, the sprout twirls, a little «хм» bob.
+    case think(seconds: Double)
 
     public var duration: Double {
         switch self {
@@ -60,6 +62,7 @@ public enum Act: Sendable, Equatable {
         case .wave: 1.6
         case .pack: 2.4
         case .breathe(let s): s
+        case .think(let s): s
         }
     }
 }
@@ -98,6 +101,9 @@ public struct CharacterPose: Sendable, Equatable {
     public var props: Set<Prop> = []
     /// 0 = mug held at his side, 1 = at his mouth.
     public var mugLift: Double = 0
+    /// Listening: ears popped up (0…1, springy) and twitching with the voice.
+    public var earsUp: Double = 0
+    public var earWiggle: Double = 0
     public init() {}
 }
 
@@ -123,6 +129,9 @@ public final class CharacterSim {
     /// Eye gymnastics: «следи за мной».
     public var eyesWide = false
     public var hoveredButton: Int?
+    /// Listening to the user: little ears pop up; `hearing` (0…1, voice level) makes them twitch.
+    public var listening = false
+    public var hearing: Double = 0
     public private(set) var isHovering = false
     public private(set) var currentAntic: Antic?
     public private(set) var isAsleep = false
@@ -139,6 +148,7 @@ public final class CharacterSim {
     private var eyeScale = Spring(1, stiffness: 260, damping: 16)
     private var leaf = Spring(0, stiffness: 55, damping: 4.2)
     private var mug = Spring(0, stiffness: 90, damping: 14)
+    private var ears = Spring(0, stiffness: 240, damping: 11)
     private var sleepLevel = 0.0
 
     private var rng: any RandomSource
@@ -264,6 +274,7 @@ public final class CharacterSim {
         if abs(hop.velocity) > 4 { return "hop" }
         if abs(squash.velocity) > 0.05 { return "squash" }
         if abs(mug.velocity) > 0.05 { return "mug" }
+        if abs(ears.velocity) > 0.05 || (listening && hearing > 0.05) { return "ears" }
         if abs(lookX.velocity) + abs(lookY.velocity) > 0.25 { return "eyes moving" }
         if abs(leaf.velocity) > 0.35 { return "leaf swinging" }
         if abs(lookX.value - lookX.target) + abs(lookY.value - lookY.target) > 0.05 { return "eyes settling" }
@@ -392,7 +403,8 @@ public final class CharacterSim {
         x.target = m.carried ? metrics.carryX : (m.called ? metrics.outX : (isHovering ? min(metrics.peekX, stand) : stand))
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08
-        eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called ? 1.08 : 1)))
+        eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
+        ears.target = listening ? 1 : 0
 
         // Gaze: follow the pointer when it is around, otherwise little idle saccades. Asleep: head down.
         var tracking = false
@@ -420,7 +432,7 @@ public final class CharacterSim {
             }
             lookX.target = idleLook.x
             lookY.target = idleLook.y
-            if m.called { lookX.target = -0.15; lookY.target = 0.05 }
+            if m.called || listening { lookX.target = -0.2; lookY.target = 0.05 }
         }
 
         stepAct(t: t)
@@ -450,6 +462,7 @@ public final class CharacterSim {
         // Leaf: droops with fatigue and sleep, sways in a breeze, lags behind body motion (follow-through).
         leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22
             + sin(t * 0.9 + phase) * 0.07 * (1 - sleepLevel * 0.6) + sin(t * 2.3) * 0.025
+        if case .think = act { leaf.target += sin((t - actStart) * 2.4) * 0.3 }
         leaf.velocity += -x.velocity * 0.0022 - hop.velocity * 0.0009 - carry * 0.0012
 
         // Blink: random 2.2–5.8 s, 20 % double. Not while dozing.
@@ -464,7 +477,7 @@ public final class CharacterSim {
         let half = dt / 2
         for _ in 0..<2 {
             x.step(half); hop.step(half); squash.step(half); tilt.step(half)
-            lookX.step(half); lookY.step(half); eyeScale.step(half); leaf.step(half); mug.step(half)
+            lookX.step(half); lookY.step(half); eyeScale.step(half); leaf.step(half); mug.step(half); ears.step(half)
         }
     }
 
@@ -501,6 +514,10 @@ public final class CharacterSim {
             beat(1.4) { squash.impulse(4) }
         case .breathe:
             lookY.target = 0.15
+        case .think:
+            lookX.target = 0.55
+            lookY.target = -0.65
+            if k >= Double(actBeats) * 1.6 { hop.impulse(-45); actBeats += 1 }   // «хм…»
         }
     }
 
@@ -585,6 +602,8 @@ public final class CharacterSim {
         p.calledAge = t - calledAt
         p.props = props
         p.mugLift = min(1, max(0, mug.value))
+        p.earsUp = max(0, ears.value)
+        p.earWiggle = listening ? sin(t * 22) * 0.14 * min(1, hearing) : 0
         if t < bubbleUntil, let text = bubbleText {
             p.bubble = text
             p.bubbleAge = t - bubbleAt

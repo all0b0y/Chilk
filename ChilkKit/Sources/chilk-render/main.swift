@@ -86,6 +86,8 @@ func previews(into dir: URL) throws {
         ("14-breathe-in", sim({ $0.standOut = .out; $0.perform(.breathe(seconds: 30)) }, seconds: 3.95), false),
         ("15-stage2-left", sim({ $0.standOut = .out; $0.fatigue = 0.8; $0.say("Я всё ещё тут. Разомнись, а? Спина скажет спасибо", buttons: ["Иду", "Я занят"]) }, seconds: 2.5), true),
         ("16-lookaway", sim({ $0.perform(.lookAway) }, seconds: 1.2), false),
+        ("17-listening", sim({ $0.standOut = .out; $0.listening = true; $0.hearing = 0.5; $0.say("Напомни позвонить маме вечером", duration: .infinity) }, seconds: 2), false),
+        ("18-thinking", sim({ $0.standOut = .out; $0.perform(.think(seconds: 30)); $0.say("···", duration: .infinity) }, seconds: 1.5), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

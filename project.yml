@@ -23,6 +23,10 @@ targets:
         product: ChilkCore
       - package: ChilkKit
         product: ChilkRender
+      - package: ChilkKit
+        product: ChilkBrain
+      - package: ChilkKit
+        product: ChilkEars
     info:
       path: Chilk/Resources/Info.plist
       properties:
@@ -35,12 +39,16 @@ targets:
         LSMinimumSystemVersion: "26.0"
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "© 2026 all0b0y"
+        NSMicrophoneUsageDescription: "Чилк слушает, только когда ты зовёшь его по имени или горячей клавишей."
+        NSSpeechRecognitionUsageDescription: "Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.all0b0y.chilk
         PRODUCT_NAME: Chilk
         CODE_SIGN_STYLE: Manual
+        # Stable signature (own Apple Development certificate): macOS keeps the microphone permission across rebuilds.
         CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
         ENABLE_HARDENED_RUNTIME: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_EMIT_LOC_STRINGS: YES

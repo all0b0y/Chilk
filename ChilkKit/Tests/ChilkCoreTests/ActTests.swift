@@ -64,6 +64,28 @@ struct ActTests {
         #expect(sim.act == nil)
     }
 
+    @Test func earsPopUpWhileListeningAndHideAfter() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 8))
+        sim.listening = true
+        sim.hearing = 0.8
+        var peak = 0.0
+        run(sim, seconds: 0.6) { peak = max(peak, $0.pose.earsUp) }
+        #expect(peak > 1.05)                              // springy pop, overshoots a little
+        #expect(abs(sim.pose.earsUp - 1) < 0.1)
+        sim.listening = false
+        run(sim, seconds: 1)
+        #expect(sim.pose.earsUp < 0.05)
+    }
+
+    @Test func thinkingLooksUpUntilStopped() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 9))
+        sim.perform(.think(seconds: 60))
+        run(sim, seconds: 1)
+        #expect(sim.pose.lookY < -0.4)
+        sim.stopAct()
+        #expect(sim.act == nil)
+    }
+
     @Test func noAnticsDuringActs() {
         let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 5))
         sim.perform(.breathe(seconds: 60))

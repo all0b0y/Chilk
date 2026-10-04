@@ -8,6 +8,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var edge: EdgeController?
     private var presence: PresenceMonitor?
     private var balance: BalanceController?
+    private var brain: Brain?
+    private var conversation: Conversation?
+    private var hotkey: Hotkey?
 
     static func main() {
         let app = NSApplication.shared
@@ -25,25 +28,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.edge = edge
         let presence = PresenceMonitor(sim: edge.sim)
         self.presence = presence
-        balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
+        let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
+        self.balance = balance
+        let brain = Brain()
+        let conversation = Conversation(sim: edge.sim, brain: brain)
+        self.brain = brain
+        self.conversation = conversation
+        conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
+        conversation.onEnd = { [weak balance] in balance?.resume() }
+        conversation.log = { [weak balance] in balance?.log($0) }
+        balance.isBusy = { [weak conversation] in conversation?.isActive ?? false }
+        brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
+        // A click on him while he listens = «I'm done talking»; otherwise it is the balance poke.
+        edge.onPoke = { [weak conversation, weak balance] in
+            if conversation?.isActive == true { conversation?.trigger() } else { balance?.poked() }
+        }
+        let key = Hotkey.defaultKey
+        hotkey = Hotkey(keyCode: key.code, modifiers: key.modifiers, id: 1) { [weak conversation] in conversation?.trigger() }
+        if ProcessInfo.processInfo.environment["CHILK_DEMO_TALK"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation] _ in
+                MainActor.assumeIsolated { conversation?.trigger() }
+            }
+        }
         // The Dock icon is the static AppIcon (user decision: a live tile was costly and laggy).
     }
 
     /// Clicking the Dock icon calls Чилк out (until the voice slice arrives).
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        edge?.callChilk()
+        conversation?.trigger()
         return false
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
+        brain?.shutdown()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
-        menu.addItem(item(String(localized: "Позвать Чилка"), #selector(callChilk)))
+        menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.defaultKey.label, #selector(callChilk)))
+        if let brain {
+            let status = NSMenuItem(title: brain.statusLine, action: nil, keyEquivalent: "")
+            status.isEnabled = false
+            menu.addItem(status)
+            if brain.state == .signedOut { menu.addItem(item(String(localized: "Войти в Codex через ChatGPT…"), #selector(loginCodex))) }
+            if case .failed = brain.state { menu.addItem(item(String(localized: "Переподключить Codex"), #selector(reconnectCodex))) }
+        }
         let side = edge?.edge == .left
             ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
             : item(String(localized: "Переселить к левому краю"), #selector(moveLeft))
@@ -86,7 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    @objc private func callChilk() { edge?.callChilk() }
+    @objc private func callChilk() { conversation?.trigger() }
+    @objc private func loginCodex() { brain?.login() }
+    @objc private func reconnectCodex() { if let brain { Task { await brain.connect() } } }
     @objc private func moveLeft() { edge?.move(to: .left) }
     @objc private func moveRight() { edge?.move(to: .right) }
     @objc private func breathe1() { balance?.startBreathing(minutes: 1) }
