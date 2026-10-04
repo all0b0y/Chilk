@@ -1,5 +1,6 @@
 import AppKit
 import ChilkCore
+import ChilkBrain
 
 @main
 @MainActor
@@ -9,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var presence: PresenceMonitor?
     private var balance: BalanceController?
     private var brain: Brain?
+    private var actions: Actions?
     private var conversation: Conversation?
     private var ears: Ears?
     private var hotkey: Hotkey?
@@ -31,7 +33,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.presence = presence
         let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
         self.balance = balance
-        let brain = Brain()
+        let actions = Actions(balance: balance, sim: edge.sim)
+        self.actions = actions
+        let brain = Brain(tools: actions.executor == nil ? [] : ChilkToolCatalog.tools) { [weak actions] call in
+            guard let actions else { return .failure("Chilk actions unavailable") }
+            return await actions.execute(call)
+        }
         let ears = Ears()
         self.ears = ears
         let conversation = Conversation(sim: edge.sim, brain: brain, ears: ears)
@@ -48,7 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ears.log = { [weak balance] in balance?.log($0) }
         ears.start()
         conversation.log = { [weak balance] in balance?.log($0) }
-        balance.isBusy = { [weak conversation] in conversation?.isActive ?? false }
+        balance.isBusy = { [weak conversation, weak actions] in
+            (conversation?.isActive ?? false) || (actions?.ownsStage ?? false)
+        }
         brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
         // A click on him while he listens = «I'm done talking»; otherwise it is the balance poke.
         edge.onPoke = { [weak conversation, weak balance] in
@@ -72,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
+        actions?.shutdown()
         brain?.shutdown()
         ears?.shutdown()
     }
@@ -94,6 +104,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(status)
             menu.addItem(item(ears.enabled ? String(localized: "Выключить уши") : String(localized: "Включить уши"), #selector(toggleEars)))
         }
+        let timers = NSMenuItem(title: String(localized: "Таймеры Чилка"), action: nil, keyEquivalent: "")
+        let timersMenu = NSMenu()
+        let entries = actions?.executor?.entries ?? []
+        if entries.isEmpty {
+            let empty = NSMenuItem(title: String(localized: "Нет таймеров"), action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            timersMenu.addItem(empty)
+        }
+        for entry in entries.sorted(by: { $0.deadline < $1.deadline }) {
+            let date = entry.deadline.formatted(date: .abbreviated, time: .shortened)
+            let row = NSMenuItem(title: "\(entry.title) · \(date)", action: nil, keyEquivalent: "")
+            row.isEnabled = false
+            timersMenu.addItem(row)
+        }
+        timers.submenu = timersMenu
+        menu.addItem(timers)
         let side = edge?.edge == .left
             ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
             : item(String(localized: "Переселить к левому краю"), #selector(moveLeft))

@@ -23,11 +23,38 @@ for line in sys.stdin:
         send({"method": "account/login/completed", "params": {"success": True, "loginId": "L1"}})
     elif meth == "thread/start":
         assert m["params"]["sandbox"] == "read-only"
+        # No execution environment: no shell, no apply_patch/file edits, only Chilk's own functions + web.
+        assert m["params"].get("environments") == [], "thread must start without environment access"
+        if m["params"].get("dynamicTools"):
+            assert m["params"]["dynamicTools"][0]["type"] == "function"
+            assert m["params"]["dynamicTools"][0]["name"] == "chilk_status"
         send({"id": mid, "result": {"thread": {"id": "t1"}}})
     elif meth == "turn/start":
         tid = m["params"]["threadId"]
         text = m["params"]["input"][0]["text"]
         send({"id": mid, "result": {"turn": {"id": "u1"}}})
+        if text.startswith("tool"):
+            params = {"threadId": tid, "turnId": "u1", "callId": "call1", "tool": "chilk_status", "arguments": {}}
+            if text == "tool wrong-turn": params["turnId"] = "old-turn"
+            if text == "tool other-thread": params["threadId"] = "unknown-thread"
+            if text == "tool unknown": params["tool"] = "delete_secret"
+            if text == "tool namespace": params["namespace"] = "unregistered"
+            send({"id": 901, "method": "item/tool/call", "params": params})
+            reply = json.loads(sys.stdin.readline())
+            if reply.get("method") == "turn/interrupt":
+                send({"id": reply["id"], "result": {}})
+                send({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": "u1", "status": "interrupted"}}})
+                reply = json.loads(sys.stdin.readline())
+                continue
+            result = reply["result"]
+            if text == "tool twice":
+                send({"id": 902, "method": "item/tool/call", "params": params})
+                again = json.loads(sys.stdin.readline())["result"]
+                assert again == result
+            send({"method": "item/agentMessage/delta", "params": {
+                "threadId": tid, "turnId": "u1", "itemId": "i1", "delta": result["contentItems"][0]["text"]}})
+            send({"method": "turn/completed", "params": {"threadId": tid, "turn": {"id": "u1", "status": "completed"}}})
+            continue
         if text == "fail":
             send({"method": "error", "params": {"threadId": tid, "turnId": "u1", "willRetry": False,
                                                 "error": {"message": "boom"}}})

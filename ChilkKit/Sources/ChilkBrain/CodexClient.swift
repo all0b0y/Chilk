@@ -21,7 +21,20 @@ public actor CodexClient {
         }
     }
 
+    private struct ToolRequest {
+        let id: JSON
+        let call: CodexToolCall
+    }
+    private struct ToolInvocation {
+        let call: CodexToolCall
+        let task: Task<CodexToolResult, Never>
+    }
     private struct Turn {
+        let token = UUID()
+        var id: String?
+        var toolsAllowed = true
+        var waitingTools: [ToolRequest] = []
+        var toolTasks: [String: ToolInvocation] = [:]
         var text = ""
         var lastItem: String?
         let onDelta: @Sendable (String) -> Void
@@ -38,6 +51,15 @@ public actor CodexClient {
     private var pending: [Int: CheckedContinuation<JSON, Error>] = [:]
     private var turns: [String: Turn] = [:]
     private var observers: [String: [@Sendable (JSON) -> Void]] = [:]
+    private struct ToolRegistration: Sendable {
+        let names: Set<String>
+        let handler: CodexToolHandler
+    }
+    private var threadTools: [String: ToolRegistration] = [:]
+
+    func installTools(_ tools: [CodexTool], thread: String, handler: @escaping CodexToolHandler) {
+        threadTools[thread] = ToolRegistration(names: Set(tools.map(\.name)), handler: handler)
+    }
     /// Server requests answered with «decline» (approvals, tool calls) — for tests and logs.
     public private(set) var declined: [String] = []
 
@@ -73,7 +95,8 @@ public actor CodexClient {
             } catch {}
             await self?.exited()
         }
-        _ = try await request("initialize", ["clientInfo": ["name": .string(clientName), "version": .string(version)]])
+        _ = try await request("initialize", ["clientInfo": ["name": .string(clientName), "version": .string(version)],
+                                             "capabilities": ["experimentalApi": true]])
         try send(["jsonrpc": "2.0", "method": "initialized", "params": [:]])
     }
 
@@ -104,22 +127,46 @@ public actor CodexClient {
 
     /// Starts a turn on `threadId` and streams the assistant's text (the whole text so far) until it completes.
     public func ask(threadId: String, text: String, effort: String = "low", outputSchema: JSON? = nil,
+                    allowTools: Bool = true,
                     onDelta: @escaping @Sendable (String) -> Void = { _ in }) async throws -> String {
-        try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
-            turns[threadId] = Turn(onDelta: onDelta, continuation: c)
+        guard turns[threadId] == nil else { throw ClientError.turnFailed("Thread already has an active turn") }
+        return try await withCheckedThrowingContinuation { (c: CheckedContinuation<String, Error>) in
+            turns[threadId] = Turn(toolsAllowed: allowTools, onDelta: onDelta, continuation: c)
             var params: JSON = ["threadId": .string(threadId), "effort": .string(effort),
                                 "input": [["type": "text", "text": .string(text)]]]
             if let outputSchema, case .object(var o) = params {
                 o["outputSchema"] = outputSchema
                 params = .object(o)
             }
+            let token = turns[threadId]!.token
             Task {
-                do { _ = try await self.request("turn/start", params) } catch { self.failTurn(threadId, error) }
+                do {
+                    let r = try await self.request("turn/start", params)
+                    if var turn = self.turns[threadId], turn.token == token {
+                        guard let id = r["turn"]?["id"]?.string else {
+                            self.failTurn(threadId, ClientError.turnFailed("No turn id"))
+                            return
+                        }
+                        turn.id = id
+                        let waiting = turn.waitingTools
+                        turn.waitingTools.removeAll()
+                        self.turns[threadId] = turn
+                        for request in waiting { self.handleTool(id: request.id, call: request.call) }
+                    }
+                } catch {
+                    if self.turns[threadId]?.token == token { self.failTurn(threadId, error) }
+                }
             }
         }
     }
 
     public func interrupt(threadId: String) async {
+        if var turn = turns[threadId] {
+            turn.toolsAllowed = false
+            cancelTools(turn)
+            turn.waitingTools.removeAll()
+            turns[threadId] = turn
+        }
         _ = try? await request("turn/interrupt", ["threadId": .string(threadId)])
     }
 
@@ -144,8 +191,12 @@ public actor CodexClient {
         }
         guard let method else { return }
         if let id = message["id"] {                                       // the server asks us (approvals, tools)
-            declined.append(method)
-            try? send(["jsonrpc": "2.0", "id": id, "result": ["decision": "decline"]])
+            if method == "item/tool/call" {
+                handleTool(id: id, params: message["params"] ?? .null)
+            } else {
+                declined.append(method)
+                try? send(["jsonrpc": "2.0", "id": id, "result": ["decision": "decline"]])
+            }
             return
         }
         let params = message["params"] ?? .null
@@ -161,6 +212,7 @@ public actor CodexClient {
             }
         case "turn/completed":
             if let thread = params["threadId"]?.string, let turn = turns.removeValue(forKey: thread) {
+                cancelTools(turn)
                 if params["turn"]?["status"]?.string == "failed" {
                     turn.continuation.resume(throwing: ClientError.turnFailed(params["turn"]?["error"]?["message"]?.string ?? "failed"))
                 } else {
@@ -177,8 +229,61 @@ public actor CodexClient {
         for observer in observers[method] ?? [] { observer(params) }
     }
 
+    private func handleTool(id: JSON, params: JSON) {
+        guard let call = CodexToolCall(params) else {
+            replyTool(id: id, .failure("Malformed or namespaced tool request"))
+            return
+        }
+        handleTool(id: id, call: call)
+    }
+
+    private func handleTool(id: JSON, call: CodexToolCall) {
+        guard let registered = threadTools[call.threadId], registered.names.contains(call.name),
+              var turn = turns[call.threadId], turn.toolsAllowed else {
+            replyTool(id: id, .failure("Tool unavailable for this turn"))
+            return
+        }
+        // Tool requests can beat the suspended turn/start continuation to the actor.
+        guard let turnId = turn.id else {
+            guard turn.waitingTools.count < 64 else { replyTool(id: id, .failure("Too many tool requests")); return }
+            turn.waitingTools.append(ToolRequest(id: id, call: call))
+            turns[call.threadId] = turn
+            return
+        }
+        guard call.turnId == turnId else { replyTool(id: id, .failure("Stale turn")); return }
+        let invocation: ToolInvocation
+        if let existing = turn.toolTasks[call.callId] {
+            guard existing.call == call else { replyTool(id: id, .failure("Conflicting call id")); return }
+            invocation = existing
+        } else {
+            guard turn.toolTasks.count < 64 else { replyTool(id: id, .failure("Too many tool calls")); return }
+            invocation = ToolInvocation(call: call, task: Task {
+                guard !Task.isCancelled else { return .failure("Cancelled") }
+                return await registered.handler(call)
+            })
+            turn.toolTasks[call.callId] = invocation
+            turns[call.threadId] = turn
+        }
+        Task {
+            let result = await invocation.task.value
+            replyTool(id: id, result)
+        }
+    }
+
+    private func replyTool(id: JSON, _ result: CodexToolResult) {
+        try? send(["jsonrpc": "2.0", "id": id, "result": result.response])
+    }
+
+    private func cancelTools(_ turn: Turn) {
+        for invocation in turn.toolTasks.values { invocation.task.cancel() }
+        for request in turn.waitingTools { replyTool(id: request.id, .failure("Turn ended")) }
+    }
+
     private func failTurn(_ thread: String, _ error: Error) {
-        turns.removeValue(forKey: thread)?.continuation.resume(throwing: error)
+        if let turn = turns.removeValue(forKey: thread) {
+            cancelTools(turn)
+            turn.continuation.resume(throwing: error)
+        }
     }
 
     private func exited() {
@@ -187,7 +292,11 @@ public actor CodexClient {
         input = nil
         for c in pending.values { c.resume(throwing: ClientError.exited) }
         pending.removeAll()
-        for t in turns.values { t.continuation.resume(throwing: ClientError.exited) }
+        for t in turns.values {
+            cancelTools(t)
+            t.continuation.resume(throwing: ClientError.exited)
+        }
         turns.removeAll()
+        threadTools.removeAll()
     }
 }

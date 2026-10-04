@@ -42,6 +42,26 @@ public struct CodexSetup: Sendable {
         model = "\(model)"
         model_reasoning_effort = "\(effort)"
         cli_auth_credentials_store = "file"
+        web_search = "live"
+
+        [features]
+        shell_tool = false
+        unified_exec = false
+        computer_use = false
+        browser_use = false
+        browser_use_external = false
+        browser_use_full_cdp_access = false
+        code_mode_host = true
+        view_image = false
+        apps = false
+        plugins = false
+        skill_search = false
+        multi_agent = false
+        multi_agent_v2 = false
+        memories = false
+        goals = false
+        image_generation = false
+        sleep_tool = false
 
         [shell_environment_policy]
         set = { HOME = "\(realHome)" }
@@ -101,12 +121,20 @@ extension CodexClient {
         return url
     }
 
-    public func startThread(model: String, instructions: String, cwd: URL) async throws -> String {
-        let r = try await request("thread/start", [
+    /// `environments: []` = no execution environment: no shell, no apply_patch, no file edits. Chilk's actions
+    /// are only its own dynamic tools (plus web search). Verified against the live tool list (codex 0.160):
+    /// `unified_exec = false` alone is not honoured, so this parameter is the real guard.
+    public func startThread(model: String, instructions: String, cwd: URL, tools: [CodexTool] = [],
+                            onTool: CodexToolHandler? = nil) async throws -> String {
+        var params: [String: JSON] = [
             "model": .string(model), "cwd": .string(cwd.path), "developerInstructions": .string(instructions),
-            "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never",
-        ])
+            "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never", "allowProviderModelFallback": false,
+            "environments": .array([]),
+        ]
+        if !tools.isEmpty { params["dynamicTools"] = .array(tools.map(\.descriptor)) }
+        let r = try await request("thread/start", .object(params))
         guard let id = r["thread"]?["id"]?.string else { throw ClientError.rpc(code: 0, message: "no thread id") }
+        if let onTool { installTools(tools, thread: id, handler: onTool) }
         return id
     }
 }

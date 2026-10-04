@@ -1,4 +1,5 @@
 import Foundation
+import ChilkCore
 
 /// Phrases for talking to Чилк (slice 3a).
 extension Lines {
@@ -13,9 +14,6 @@ extension Lines {
 
     /// [контекст] for Codex: only time and sitting time (В24), nothing about apps or windows.
     static func context(sittingMinutes: Int, now: Date = Date()) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "ru_RU")
-        f.dateFormat = "EEEE, HH:mm"
-        return "[контекст: \(f.string(from: now)); пользователь за Mac без перерыва \(sittingMinutes) мин]\n"
+        VoiceContext.text(sittingMinutes: sittingMinutes, now: now)
     }
 }

@@ -322,6 +322,16 @@ final class BalanceController {
         settle(after: 3.5)
     }
 
+    /// The conversation owns the stage; water only changes and persists aggregates here.
+    func creditWaterFromVoice() throws {
+        _ = try engine.tookRest(.water, persisting: Self.write)
+        lastSave = Date()
+    }
+
+    var canPresentScheduledNotice: Bool {
+        !isBusy() && activity == nil && !sim.isTalking && lastSignals?.locked != true
+    }
+
     // MARK: Manual testing (Dock «Проверка»)
 
     func makeDue(_ n: Need) {
@@ -350,8 +360,7 @@ final class BalanceController {
     // MARK: Persistence (~/Library/Application Support/Chilk/balance.json, aggregates only — В24)
 
     private static var stateURL: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Chilk", isDirectory: true).appendingPathComponent("balance.json")
+        AppState.directory.appendingPathComponent("balance.json")
     }
 
     private static func load() -> BalanceState? {
@@ -361,8 +370,13 @@ final class BalanceController {
 
     func save() {
         lastSave = Date()
-        let url = Self.stateURL
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(engine.state) { try? data.write(to: url, options: .atomic) }
+        try? Self.write(engine.state)
+    }
+
+    private static func write(_ state: BalanceState) throws {
+        let url = stateURL
+        let data = try JSONEncoder().encode(state)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: url, options: .atomic)
     }
 }

@@ -28,7 +28,12 @@ final class Brain {
     /// The turn in flight: an interrupted one must finish before the next starts on the same thread.
     private var inFlight: Task<String, Error>?
 
-    init() {
+    private let tools: [CodexTool]
+    private let onTool: CodexToolHandler?
+
+    init(tools: [CodexTool] = [], onTool: CodexToolHandler? = nil) {
+        self.tools = tools
+        self.onTool = onTool
         Task { await connect() }
     }
 
@@ -82,8 +87,9 @@ final class Brain {
     private func warmSpare() {
         guard let client, let setup else { return }
         let task = Task<String, Error> {
-            let id = try await client.startThread(model: setup.model, instructions: Persona.text, cwd: setup.workDir)
-            _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».")
+            let id = try await client.startThread(model: setup.model, instructions: Persona.text, cwd: setup.workDir,
+                                                  tools: self.tools, onTool: self.onTool)
+            _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».", allowTools: false)
             return id
         }
         spare = task
@@ -156,8 +162,17 @@ enum Persona {
     «всё», тогда reply — короткое тёплое прощание; "answer" — во всех остальных случаях. Если просьба неоднозначна \
     (какой матч? какой город?) — сначала коротко уточни.
 
-    Можешь искать в интернете, когда нужен свежий факт (счёт, погода, новости). Пока не умеешь: файлы, напоминания, \
-    таймеры, Obsidian — честно скажи, что скоро научишься, и не делай вид, что сделал. В начале сообщения бывает \
-    [контекст] — служебная информация от приложения, не цитируй её.
+    Для свежих фактов (счёт, погода, новости, «последний», «сегодня») обязательно ищи в интернете. Текущая дата и \
+    timezone даны в [контекст]. Различай дату события и дату публикации; для матча называй дату самого матча, \
+    счёт и источник словами. Если дата или источник не подтверждены результатом поиска — не угадывай и не \
+    выдавай результат за проверенный. Не смешивай завершённый матч с будущим, мужскую команду с женской.
+
+    Реальные действия выполняй только предоставленными функциями Чилка и только по просьбе пользователя. \
+    Факт «я попил воды» засчитывай через chilk_water; обещание попить не засчитывай. Таймеры и запланированный \
+    короткий текст — локальные, именно в Чилке, не Apple Reminders: приложение должно работать, просроченное \
+    показывается при следующем запуске. Системные напоминания, файлы и Obsidian пока недоступны. Не обещай \
+    несуществующее действие. Говори «сделал» только после успешного результата инструмента; cancelled/credited=false \
+    и error не означают успех. Если время сегодня уже прошло или неясно, сначала уточни. Перед отменой найди \
+    точный id в списке; несколько одноимённых таймеров — повод уточнить. [контекст] не цитируй.
     """
 }

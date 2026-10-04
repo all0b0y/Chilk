@@ -360,6 +360,14 @@ public final class BalanceEngine {
         return out
     }
 
+    /// Commit explicit on-word rest only after the app has persisted the resulting aggregates.
+    public func tookRest(_ n: Need, persisting write: (BalanceState) throws -> Void) throws -> [BalanceEvent] {
+        let before = state
+        let events = tookRest(n)
+        do { try write(state) } catch { state = before; throw error }
+        return events
+    }
+
     /// The prompt to show again after something else had the stage (a conversation), if any.
     public func currentPrompt() -> BalanceEvent? {
         guard let e = state.episode, e.phase == .showing else { return nil }

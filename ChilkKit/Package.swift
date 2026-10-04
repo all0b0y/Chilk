@@ -21,7 +21,7 @@ let package = Package(
         // CoreGraphics/CoreText renderer shared by the edge panel, the AppIcon tool and previews.
         .target(name: "ChilkRender", dependencies: ["ChilkCore"]),
         // Codex app-server client (JSON-RPC over stdio) and Чилк's isolated Codex profile. Foundation only.
-        .target(name: "ChilkBrain"),
+        .target(name: "ChilkBrain", dependencies: ["ChilkCore"]),
         // WebRTC voice-activity detector, statically linked (vendored libfvad, BSD-3-Clause).
         .target(name: "CFvad", exclude: ["LICENSE", "PATENTS", "AUTHORS", "README.md"],
                 publicHeadersPath: "include", cSettings: [.headerSearchPath(".")]),
