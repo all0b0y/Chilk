@@ -1,8 +1,10 @@
 import AppKit
 import ChilkBrain
+import ChilkCore
 
-/// Чилк's connection to Codex (В4, В7): his own isolated profile, one warm thread kept ready (the first turn
-/// of a new thread takes 4–11 s, the next ones 1–2.5 s — spike 002). Problems are reported, never papered over.
+/// Чилк's connection to Codex (В4, В7): his own isolated profile. A conversation continues its thread for
+/// 15 minutes; after that it starts clean on a spare thread that is already warm (a new thread's first turn
+/// takes 4–11 s, later ones 1–2.5 s — spike 002). Problems are reported, never papered over.
 @MainActor
 final class Brain {
     enum State: Equatable {
@@ -18,8 +20,13 @@ final class Brain {
     private(set) var account: String?
     private var setup: CodexSetup?
     private var client: CodexClient?
-    private var thread: String?
-    private var warmTask: Task<Void, Error>?
+    /// The thread of the current (or last) conversation and when it last answered.
+    private var active: String?
+    private var lastExchange: Date?
+    /// A warm thread for the next clean start.
+    private var spare: Task<String, Error>?
+    /// The turn in flight: an interrupted one must finish before the next starts on the same thread.
+    private var inFlight: Task<String, Error>?
 
     init() {
         Task { await connect() }
@@ -47,8 +54,9 @@ final class Brain {
 
     func connect() async {
         await client?.stop()
-        thread = nil
-        warmTask = nil
+        active = nil
+        spare = nil
+        inFlight = nil
         state = .connecting
         guard let exe = CodexSetup.locateCodex() else { state = .missingCodex; return }
         let setup = CodexSetup(dataDir: CodexSetup.defaultDataDir, executable: exe)
@@ -64,36 +72,53 @@ final class Brain {
             try await client.start()
             guard let acc = try await client.account() else { state = .signedOut; return }
             account = acc.email
-            warm()
+            warmSpare()
         } catch {
             state = .failed(String(describing: error))
         }
     }
 
-    /// Starts the thread and spends one tiny turn on it, so the first real question is fast.
-    private func warm() {
+    /// A fresh thread with one tiny turn already spent, so a clean start answers fast.
+    private func warmSpare() {
         guard let client, let setup else { return }
-        state = .connecting
-        let task = Task<Void, Error> {
+        let task = Task<String, Error> {
             let id = try await client.startThread(model: setup.model, instructions: Persona.text, cwd: setup.workDir)
-            self.thread = id
             _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».")
+            return id
         }
-        warmTask = task
+        spare = task
         Task {
-            do { try await task.value; state = .ready } catch { state = .failed(String(describing: error)) }
+            do { _ = try await task.value; if state != .ready { state = .ready } } catch { state = .failed(String(describing: error)) }
         }
     }
 
-    /// One exchange on the warm thread. `onDelta` gets the whole answer so far (any thread).
+    /// One turn of the conversation. `onDelta` gets the whole raw message so far (JSON `{reply, mode}`).
     func ask(_ text: String, onDelta: @escaping @Sendable (String) -> Void) async throws -> String {
-        if let warmTask { try await warmTask.value }
-        guard let client, let thread else { throw CodexClient.ClientError.notStarted }
-        return try await client.ask(threadId: thread, text: text, onDelta: onDelta)
+        _ = try? await inFlight?.value
+        let task = Task<String, Error> {
+            guard let client = self.client else { throw CodexClient.ClientError.notStarted }
+            let thread = try await self.threadForNow()
+            let reply = try await client.ask(threadId: thread, text: text, outputSchema: JSON(any: Dialogue.schema), onDelta: onDelta)
+            self.lastExchange = Date()
+            return reply
+        }
+        inFlight = task
+        return try await task.value
+    }
+
+    /// Same thread within 15 minutes of the last answer; otherwise the warm spare (and a new spare behind it).
+    private func threadForNow() async throws -> String {
+        if let active, Dialogue.continues(lastExchange: lastExchange, now: Date()) { return active }
+        if spare == nil { warmSpare() }
+        guard let spare else { throw CodexClient.ClientError.notStarted }
+        let fresh = try await spare.value
+        active = fresh
+        warmSpare()
+        return fresh
     }
 
     func interrupt() async {
-        if let client, let thread { await client.interrupt(threadId: thread) }
+        if let client, let active { await client.interrupt(threadId: active) }
     }
 
     func login() {
@@ -107,7 +132,7 @@ final class Brain {
         guard ok else { state = .signedOut; return }
         Task {
             account = try? await client?.account()?.email
-            warm()
+            warmSpare()
         }
     }
 
@@ -122,10 +147,17 @@ enum Persona {
     static let text = """
     Ты — Чилк, милый анимированный компаньон, живёшь у края экрана Mac и заботишься о work-life balance \
     пользователя: вода, разминка, глаза, прогулки, вовремя закончить день. Говори по-русски, на «ты», коротко: \
-    1–2 предложения, до 160 символов, без markdown и списков. Тон добрый, с лёгкой подколкой. Нельзя: мат, шутки \
-    про внешность, вес и здоровье, стыжение, токсичная продуктивность. Не выдумывай факты; если не знаешь — так и скажи. \
-    Ты пока не умеешь выполнять действия (файлы, напоминания, таймеры, Obsidian, поиск в интернете): если просят — \
-    честно скажи, что скоро научишься, и не делай вид, что сделал. В начале сообщения бывает [контекст] — это служебная \
-    информация от приложения, не цитируй её.
+    1–2 предложения, до 160 символов. Тон добрый, с лёгкой подколкой. Нельзя: мат, шутки про внешность, вес и \
+    здоровье, стыжение, токсичная продуктивность. Не выдумывай факты; если не знаешь — так и скажи.
+
+    Это голосовой диалог: каждый ответ — JSON по схеме. reply — твоя реплика (простой текст, без markdown и ссылок; \
+    источник называй словами). mode — что дальше: "question" — ты задал вопрос, просишь уточнить или подтвердить и \
+    ждёшь ответа; "done" — просьба выполнена, ждать нечего; "end" — пользователь благодарит, прощается или говорит \
+    «всё», тогда reply — короткое тёплое прощание; "answer" — во всех остальных случаях. Если просьба неоднозначна \
+    (какой матч? какой город?) — сначала коротко уточни.
+
+    Можешь искать в интернете, когда нужен свежий факт (счёт, погода, новости). Пока не умеешь: файлы, напоминания, \
+    таймеры, Obsidian — честно скажи, что скоро научишься, и не делай вид, что сделал. В начале сообщения бывает \
+    [контекст] — служебная информация от приложения, не цитируй её.
     """
 }

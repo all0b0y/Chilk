@@ -41,12 +41,23 @@ case "ask":
     guard try await client.account() != nil else { print("NOT logged in"); exit(1) }
     let thread = try await client.startThread(model: s.model, instructions: persona, cwd: s.workDir)
     print(String(format: "app-server + thread: %.2f s", now() - t0))
-    for question in args.dropFirst() {
+    // --json: the dialogue schema (reply + mode), printing how the reply streams out of the JSON
+    let structured = args.contains("--json")
+    let schema = structured ? JSON(any: Dialogue.schema) : nil
+    let jsonNote = "\nОтвечай JSON: reply — реплика; mode — question (задал вопрос/ждёшь ответа), answer, done (просьба выполнена), end (пользователь прощается — reply = прощание)."
+    for question in args.dropFirst() where question != "--json" {
         let start = now()
-        final class First: @unchecked Sendable { var at: TimeInterval? }
+        final class First: @unchecked Sendable { var at: TimeInterval?; var partials: [String] = [] }
         let first = First()
-        let answer = try await client.ask(threadId: thread, text: question) { _ in if first.at == nil { first.at = now() } }
+        let answer = try await client.ask(threadId: thread, text: question + (structured ? jsonNote : ""), outputSchema: schema) { text in
+            if first.at == nil { first.at = now() }
+            if structured { let p = Dialogue.partialReply(text); if first.partials.last != p { first.partials.append(p) } }
+        }
         print(String(format: "> %@\n< %@\n  first token %.2f s, total %.2f s", question, answer, (first.at ?? now()) - start, now() - start))
+        if structured {
+            let r = Dialogue.parse(answer)
+            print("  parsed: mode=\(r.mode.rawValue) reply=«\(r.reply)» | streamed steps: \(first.partials.count), e.g. \(first.partials.prefix(3))")
+        }
     }
     print("declined server requests:", await client.declined)
     await client.stop()

@@ -43,7 +43,8 @@ public enum ChilkRenderer {
         if p.earsUp > 0.02 {
             for (i, s) in [-1.0, 1.0].enumerated() {
                 let t = base.translatedBy(x: s * m.radiusX * 0.6, y: -m.radiusY * 0.62)
-                    .rotated(by: s * 0.38 + s * p.earWiggle).scaledBy(x: p.earsUp, y: p.earsUp)
+                    .rotated(by: s * (0.38 + p.earsDroop * 0.9) + s * p.earWiggle)
+                    .scaledBy(x: p.earsUp * (1 - p.earsDroop * 0.3), y: p.earsUp * (1 - p.earsDroop * 0.3))
                 out.append(Placement(slot: Slot.ear + i, part: .ear(lw: lw), transform: t, alpha: 1))
             }
         }

@@ -104,6 +104,8 @@ public struct CharacterPose: Sendable, Equatable {
     /// Listening: ears popped up (0…1, springy) and twitching with the voice.
     public var earsUp: Double = 0
     public var earWiggle: Double = 0
+    /// Waiting for a follow-up: the ears slowly droop as the window closes (0 → 1).
+    public var earsDroop: Double = 0
     public init() {}
 }
 
@@ -132,6 +134,7 @@ public final class CharacterSim {
     /// Listening to the user: little ears pop up; `hearing` (0…1, voice level) makes them twitch.
     public var listening = false
     public var hearing: Double = 0
+    public var earsDroop: Double = 0 { didSet { earsDroop = min(1, max(0, earsDroop)) } }
     public private(set) var isHovering = false
     public private(set) var currentAntic: Antic?
     public private(set) var isAsleep = false
@@ -604,6 +607,7 @@ public final class CharacterSim {
         p.mugLift = min(1, max(0, mug.value))
         p.earsUp = max(0, ears.value)
         p.earWiggle = listening ? sin(t * 22) * 0.14 * min(1, hearing) : 0
+        p.earsDroop = earsDroop
         if t < bubbleUntil, let text = bubbleText {
             p.bubble = text
             p.bubbleAge = t - bubbleAt

@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
         // A click on him while he listens = «I'm done talking»; otherwise it is the balance poke.
         edge.onPoke = { [weak conversation, weak balance] in
-            if conversation?.isActive == true { conversation?.trigger() } else { balance?.poked() }
+            if conversation?.clicked() != true { balance?.poked() }
         }
         let key = Hotkey.defaultKey
         hotkey = Hotkey(keyCode: key.code, modifiers: key.modifiers, id: 1) { [weak conversation] in conversation?.trigger() }
