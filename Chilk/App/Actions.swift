@@ -27,7 +27,13 @@ final class Actions {
     private var reportedFailure = false
     /// Set by the app: a conversation owns the stage (a due bubble waits, or comes back after it).
     var conversationActive: () -> Bool = { false }
+    /// Tray → Tools (slice 5a): a switched-off tool is refused even on a thread that still lists it.
+    var switches: () -> ToolSwitches = { ToolSwitches() }
+    /// A timer fell due: the tray icon wiggles once (was the Dock bounce).
+    var onDue: () -> Void = {}
     var ownsStage: Bool { display.showing != nil }
+    /// A due timer is on screen or waits to be seen (the dot on the tray icon).
+    var noticeWaiting: Bool { display.showing != nil || !(executor?.ready.isEmpty ?? true) }
 
     init(balance: BalanceController, sim: CharacterSim, files: Files? = nil) {
         self.balance = balance
@@ -67,6 +73,13 @@ final class Actions {
     }
 
     func execute(_ call: CodexToolCall) async -> CodexToolResult {
+        let kinds = Dictionary(files.grants.map { ($0.name, $0.kind) }, uniquingKeysWith: { first, _ in first })
+        if let off = ChilkToolCatalog.switchedOff(name: call.name, arguments: call.arguments, switches: switches(),
+                                                  kindOf: { kinds[$0] }) {
+            balance?.log("tool \(call.name) refused: \(off.rawValue) switched off")
+            return .failure("Switched off by the user in Chilk's tray → Инструменты (\(off.rawValue)). Nothing was done; "
+                            + "tell the user it is switched off there.")
+        }
         let result: CodexToolResult
         if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
@@ -94,7 +107,7 @@ final class Actions {
         do {
             let due = try executor.collectDue()
             if !due.isEmpty {
-                NSApp.requestUserAttention(.informationalRequest)
+                onDue()
                 for entry in due { balance?.log("timer due \(entry.id)") }
             }
         } catch { reportFailure() }

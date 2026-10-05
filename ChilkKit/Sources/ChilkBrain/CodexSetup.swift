@@ -124,14 +124,17 @@ extension CodexClient {
     /// `environments: []` = no execution environment: no shell, no apply_patch, no file edits. Chilk's actions
     /// are only its own dynamic tools (plus web search). Verified against the live tool list (codex 0.160):
     /// `unified_exec = false` alone is not honoured, so this parameter is the real guard.
+    /// `config`: per-thread overrides of config.toml (slice 5a: `{"web_search": "disabled"}` when the user switched
+    /// web search off — verified live on codex 0.160: that thread gets no web search, others on the server keep it).
     public func startThread(model: String, instructions: String, cwd: URL, tools: [CodexTool] = [],
-                            onTool: CodexToolHandler? = nil) async throws -> String {
+                            config: JSON? = nil, onTool: CodexToolHandler? = nil) async throws -> String {
         var params: [String: JSON] = [
             "model": .string(model), "cwd": .string(cwd.path), "developerInstructions": .string(instructions),
             "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never", "allowProviderModelFallback": false,
             "environments": .array([]),
         ]
         if !tools.isEmpty { params["dynamicTools"] = .array(tools.map(\.descriptor)) }
+        if let config { params["config"] = config }
         let r = try await request("thread/start", .object(params))
         guard let id = r["thread"]?["id"]?.string else { throw ClientError.rpc(code: 0, message: "no thread id") }
         if let onTool { installTools(tools, thread: id, handler: onTool) }

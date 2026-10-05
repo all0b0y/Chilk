@@ -13,22 +13,33 @@ final class PhraseBatches {
     private var attempts: (day: String, count: Int) = ("", 0)
     /// Set by the app: the user is talking with Chilk (the batch waits).
     var busy: () -> Bool = { false }
+    /// Tray → Tools «Свежие фразы от Codex» (slice 5a): off = no batch is asked for and only the library speaks.
+    var enabled: () -> Bool = { true }
     var log: (String) -> Void = { _ in }
 
     init(brain: Brain) {
         self.brain = brain
-        if let data = try? Data(contentsOf: file), let batch = try? JSONDecoder().decode(PhraseBatch.self, from: data) {
-            Lines.batch = batch
-        }
+        Lines.batch = saved
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshIfNeeded() }
         }
         timer?.tolerance = 10
     }
 
+    private var saved: PhraseBatch? {
+        (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(PhraseBatch.self, from: $0) }
+    }
+
+    /// The switch changed: off drops today's batch from speech at once; on brings it back (or asks for one).
+    func switchChanged() {
+        Lines.batch = enabled() ? saved : nil
+        log("phrases \(enabled() ? "on" : "off")")
+        refreshIfNeeded()
+    }
+
     func refreshIfNeeded(now: Date = Date()) {
         let today = PhraseBatch.dayKey(now)
-        guard Lines.batch?.day != today, !running, !busy(), brain.state == .ready else { return }
+        guard enabled(), Lines.batch?.day != today, !running, !busy(), brain.state == .ready else { return }
         if attempts.day != today { attempts = (today, 0) }
         guard attempts.count < 3 else { return }                          // a bad day costs at most 3 turns
         attempts.count += 1
@@ -43,7 +54,7 @@ final class PhraseBatches {
                 guard let batch = PhraseBatch.parse(reply, day: today) else { return log("phrases: unusable batch") }
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try JSONEncoder().encode(batch).write(to: file, options: .atomic)
-                Lines.batch = batch
+                if enabled() { Lines.batch = batch }
                 let count = batch.lines.values.flatMap(\.values).map(\.count).reduce(0, +)
                 log("phrases: \(count) lines, \(batch.ideas.values.map(\.count).reduce(0, +)) ideas for \(today)")
             } catch {

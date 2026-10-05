@@ -64,6 +64,17 @@ final class EdgeController: NSObject {
     /// His window on screen (the long-answer panel opens beside it).
     var windowFrame: NSRect { panel.frame }
 
+    /// A rect of the scene (canonical y-down coordinates, already mirrored like `ChilkRenderer.buttonRects`) on the
+    /// screen — the name field sits exactly over a bubble button slot (slice 5a).
+    func screenRect(fromScene r: CGRect) -> NSRect {
+        NSRect(x: sceneOrigin.x + r.minX, y: sceneOrigin.y + metrics.sceneSize.height - r.maxY, width: r.width, height: r.height)
+    }
+
+    /// Bubble buttons where they are right now (scene coordinates, mirrored for the left edge).
+    var buttonRects: [(index: Int, rect: CGRect)] {
+        ChilkRenderer.buttonRects(pose: sim.pose, metrics: metrics, mirrored: isMirrored)
+    }
+
     override init() {
         sim = CharacterSim(metrics: metrics)
         placement = PlacementStore.load()

@@ -28,7 +28,10 @@ for line in sys.stdin:
         if m["params"].get("dynamicTools"):
             assert m["params"]["dynamicTools"][0]["type"] == "function"
             assert m["params"]["dynamicTools"][0]["name"] == "chilk_status"
-        send({"id": mid, "result": {"thread": {"id": "t1"}}})
+        tid = "t1"
+        if m["params"].get("config") is not None:
+            tid += ":" + json.dumps(m["params"]["config"], ensure_ascii=False, sort_keys=True)
+        send({"id": mid, "result": {"thread": {"id": tid}}})
     elif meth == "turn/start":
         tid = m["params"]["threadId"]
         text = m["params"]["input"][0]["text"]

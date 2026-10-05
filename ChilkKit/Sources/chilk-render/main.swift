@@ -161,5 +161,31 @@ let target = URL(fileURLWithPath: args[2])
 switch args[1] {
 case "icon": try icon(into: target)
 case "previews": try previews(into: target)
+case "tray":
+    // Tray icon states at 4× on white and black (how the template looks on a light and a dark menu bar).
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    for leaf in TrayLeaf.allCases {
+        for dot in [false, true] {
+            guard let glyph = TrayIconRenderer.image(TrayIconState(leaf: leaf, dot: dot), scale: 4) else { continue }
+            for (name, background, tint) in [("light", 1.0, 0.0), ("dark", 0.15, 1.0)] {
+                func context() -> CGContext {
+                    CGContext(data: nil, width: glyph.width, height: glyph.height, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+                }
+                let rect = CGRect(x: 0, y: 0, width: glyph.width, height: glyph.height)
+                let tinted = context()                  // the template's alpha in the menu-bar colour
+                tinted.draw(glyph, in: rect)
+                tinted.setBlendMode(.sourceIn)
+                tinted.setFillColor(CGColor(gray: tint, alpha: 1))
+                tinted.fill(rect)
+                let ctx = context()
+                ctx.setFillColor(CGColor(gray: background, alpha: 1))
+                ctx.fill(rect)
+                ctx.draw(tinted.makeImage()!, in: rect)
+                writePNG(ctx.makeImage()!, to: target.appendingPathComponent("tray-\(leaf)\(dot ? "-dot" : "")-\(name).png"))
+            }
+        }
+    }
 default: print("unknown command \(args[1])"); exit(2)
 }

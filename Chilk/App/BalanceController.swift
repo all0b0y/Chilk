@@ -3,7 +3,7 @@ import ChilkBrain
 import ChilkCore
 
 /// Slice 2 in the app: signals → `BalanceEngine` → what Чилк does (pantomime, bubble with buttons,
-/// standing out, Dock bounce) and the breaks themselves (eye gymnastics, breathing, water, walk).
+/// standing out, the tray-icon wiggle) and the breaks themselves (eye gymnastics, breathing, water, walk).
 @MainActor
 final class BalanceController {
     let engine: BalanceEngine
@@ -67,6 +67,21 @@ final class BalanceController {
 
     /// While Чилк talks with the user the stage is theirs: balance keeps counting but shows nothing.
     var isBusy: () -> Bool = { false }
+    /// Stage ≥ 2 insists: the tray icon wiggles (slice 5a; was the Dock bounce). Also while the stage is busy.
+    var onNudge: () -> Void = {}
+
+    /// Something of the balance holds Chilk at the edge right now: a break, a walk, a bubble of the ladder, the
+    /// shade or the pause. The tray then leaves him there (decision 7).
+    var isOccupied: Bool {
+        if activity != nil || walking || escalation.level != .none { return true }
+        if let e = engine.state.episode, e.phase == .showing, e.stage >= 1 { return true }
+        return false
+    }
+
+    /// The stage of the request on screen (`nil` = none) — the dot on the tray icon.
+    var shownStage: Int? {
+        engine.state.episode.flatMap { $0.phase == .showing ? $0.stage : nil }
+    }
 
     /// After a conversation: show the current prompt again (if any).
     func resume() {
@@ -152,7 +167,7 @@ final class BalanceController {
 
     private func apply(_ event: BalanceEvent) {
         if isBusy() {
-            if case .bounceDock = event { NSApp.requestUserAttention(.informationalRequest) }
+            if case .nudge = event { onNudge() }
             return
         }
         switch event {
@@ -198,8 +213,8 @@ final class BalanceController {
                 buttonActions = buttons.map { action(for: $0, need: n) }
             }
 
-        case .bounceDock:
-            NSApp.requestUserAttention(.informationalRequest)
+        case .nudge:
+            onNudge()
 
         case .withdraw:
             guard activity == nil else { return }
@@ -679,7 +694,7 @@ final class BalanceController {
         activity == nil && guidedRun == nil && lastSignals?.locked != true && escalation.level == .none
     }
 
-    // MARK: Manual testing (Dock «Проверка»)
+    // MARK: Manual testing (tray right-click «Проверка»)
 
     func makeDue(_ n: Need) {
         hideBubble()

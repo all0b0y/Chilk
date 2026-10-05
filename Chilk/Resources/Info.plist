@@ -24,10 +24,12 @@
 	<string>public.app-category.healthcare-fitness</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 all0b0y</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>С включёнными ушами Чилк слушает локально, чтобы услышать своё имя. Уши можно выключить в меню Dock; горячая клавиша включает микрофон только на время разговора.</string>
+	<string>С включёнными ушами Чилк слушает локально, чтобы услышать своё имя. Уши можно выключить в трее наверху → «Инструменты»; горячая клавиша включает микрофон только на время разговора.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

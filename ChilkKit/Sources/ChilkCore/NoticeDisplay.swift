@@ -9,11 +9,13 @@ public struct NoticeDisplay: Equatable, Sendable {
     public enum Action: Equatable, Sendable { case none, show(String), dismiss(String) }
 
     public private(set) var showing: String?
+    /// How long the bubble stays once the user is back (the greeting uses the reading time of each line).
+    public var seenAfter: TimeInterval
     /// Input at or before this moment does not count: the bubble was not on screen yet, or the screen was locked.
     private var notBefore: TimeInterval = 0
     private var seenFrom: TimeInterval?
 
-    public init() {}
+    public init(seenAfter: TimeInterval = NoticeDisplay.seenAfterInput) { self.seenAfter = seenAfter }
 
     public mutating func step(now: TimeInterval, idle: TimeInterval, locked: Bool, canPresent: Bool,
                               next: String?) -> Action {
@@ -31,7 +33,7 @@ public struct NoticeDisplay: Equatable, Sendable {
         }
         let lastInput = now - idle
         if seenFrom == nil, lastInput > notBefore { seenFrom = lastInput }
-        if let seenFrom, now - seenFrom >= Self.seenAfterInput {
+        if let seenFrom, now - seenFrom >= seenAfter {
             showing = nil
             self.seenFrom = nil
             return .dismiss(id)

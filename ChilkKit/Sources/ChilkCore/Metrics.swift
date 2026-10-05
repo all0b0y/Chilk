@@ -32,6 +32,9 @@ public struct Metrics: Sendable, Equatable {
     /// Carried around the screen: centred, so the panel edge (invisible away from the screen edge)
     /// never cuts him. Docked, the cut is hidden by the screen edge itself.
     public var carryX: Double { width / 2 }
+    /// The tray popover is open (slice 5a): he has gone entirely behind the screen edge, sticker border,
+    /// shadow and sprout included, to come out in the popover.
+    public var awayX: Double { width + radiusX * 1.5 + 40 }
 
     /// How far to move the panel (screen points, + = right) when his position inside the panel changes
     /// from `oldX` to `newX`, so that on screen he does not move at all.

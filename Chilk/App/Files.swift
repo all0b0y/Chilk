@@ -24,6 +24,9 @@ final class Files {
     var askUser: ((String) async -> Bool?)?
     /// The list changed (added, removed, loaded) — for whoever shows it.
     var onChange: (() -> Void)?
+    /// Tray → Tools (slice 5a): the folder kinds that are switched on. Folders of a switched-off kind are paused —
+    /// still in the list, invisible to Codex until switched back on.
+    var enabledKinds: () -> Set<ChilkFileScope> = { [.files, .obsidian] }
 
     init(file: URL, allowedContainer: URL = URL(fileURLWithPath: "/"),
          run: @escaping Runner = { executor, name, arguments in
@@ -60,7 +63,8 @@ final class Files {
     func execute(_ call: CodexToolCall) async -> CodexToolResult {
         guard await waitUntilReady(), !changing else { return .failure("Folder access unavailable or changing") }
         if call.name == "chilk_request_folder" { return await request(call) }
-        let snapshot = grants, version = generation, id = UUID()
+        let kinds = enabledKinds()
+        let snapshot = grants.filter { kinds.contains($0.kind) }, version = generation, id = UUID()
         let operation = Task {
             await executor.configure(snapshot)
             guard !Task.isCancelled, !changing, generation == version else {
@@ -134,48 +138,22 @@ final class Files {
         }
     }
 
-    func dockItem() -> NSMenuItem {
-        let item = NSMenuItem(title: String(localized: "Файлы и Obsidian"), action: nil, keyEquivalent: "")
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let header = NSMenuItem(title: grants.isEmpty ? String(localized: "Папок нет — только чтение")
-                                                      : String(localized: "Только чтение:"), action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        for grant in grants {
-            let where_ = FolderRequests.display(grant.root, home: home)
-            let title = grant.kind == .obsidian ? String(localized: "Убрать «\(where_)» (Obsidian)")
-                                                : String(localized: "Убрать «\(where_)»")
-            let remove = action(title, #selector(removeFolder(_:)))
-            remove.representedObject = grant.name
-            menu.addItem(remove)
-        }
-        menu.addItem(.separator())
-        menu.addItem(action(String(localized: "Добавить папку…"), #selector(chooseFiles)))
-        menu.addItem(action(String(localized: "Добавить хранилище Obsidian…"), #selector(chooseVault)))
-        if changing || store == nil {
-            let title = changing ? String(localized: "Изменяю доступ…")
-                : (loading != nil ? String(localized: "Загружаю доступ…") : String(localized: "Хранилище доступа недоступно"))
-            let status = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-            status.isEnabled = false
-            menu.addItem(status)
-        }
-        item.submenu = menu
-        return item
-    }
-
     var canChange: Bool { store != nil && !selecting && !changing }
-    private func action(_ title: String, _ selector: Selector) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
-        item.target = self
-        item.isEnabled = canChange
-        return item
+
+    /// Tray → Tools: why nothing can be changed right now (`nil` = it can).
+    var busyNote: String? {
+        if changing { return String(localized: "Изменяю доступ…") }
+        if store == nil {
+            return loading != nil ? String(localized: "Загружаю доступ…") : String(localized: "Хранилище доступа недоступно")
+        }
+        return nil
     }
 
-    @objc private func chooseFiles() { choose(.files) }
-    @objc private func chooseVault() { choose(.obsidian) }
-    @objc private func removeFolder(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String else { return }
+    /// «Документы/Работа» — how the list shows a folder.
+    func place(of grant: FolderGrant) -> String { FolderRequests.display(grant.root, home: home) }
+
+    /// «Убрать» in the tray: the grant itself goes (the switch only pauses).
+    func forget(name: String) {
         Task { do { try await remove(name: name) } catch { report(error) } }
     }
 

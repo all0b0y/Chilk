@@ -99,7 +99,8 @@ public enum BalanceEvent: Equatable, Sendable {
     case hint(Need)
     /// Stage ≥ 1: a bubble with buttons. `again` = after a pause or a broken promise.
     case ask(Need, stage: Int, buttons: [Reaction], again: Bool)
-    case bounceDock
+    /// Stage ≥ 2 «настаивает»: the tray icon wiggles once (was the Dock bounce until slice 5a).
+    case nudge
     /// Tact: call, fullscreen, user away, leisure after hours — hide the bubble, keep the episode.
     case withdraw
     /// The user agreed to go; show the matching activity and wait for the real rest.
@@ -432,7 +433,7 @@ public final class BalanceEngine {
                         e.workOnStage = 0
                         e.nextAfter = nextStageDelay()
                         out.append(stageEvent(e, again: true))
-                        if e.stage >= 2 { out.append(.bounceDock); e.sinceBounce = 0 }
+                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0 }
                     }
                 case .showing:
                     e.workOnStage += sat
@@ -442,9 +443,9 @@ public final class BalanceEngine {
                         e.workOnStage = 0
                         e.nextAfter = nextStageDelay()
                         out.append(stageEvent(e, again: false))
-                        if e.stage >= 2 { out.append(.bounceDock); e.sinceBounce = 0 }
+                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0 }
                     } else if e.stage >= 2, e.sinceBounce >= config.bounceEvery {
-                        out.append(.bounceDock)
+                        out.append(.nudge)
                         e.sinceBounce = 0
                     }
                 }
@@ -565,7 +566,7 @@ public final class BalanceEngine {
             e.nextAfter = nextStageDelay()
             state.episode = e
             var out = [stageEvent(e, again: true)]
-            if e.stage >= 2 { out.append(.bounceDock); e.sinceBounce = 0; state.episode = e }
+            if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; state.episode = e }
             return out
         }
     }
@@ -695,7 +696,7 @@ public final class BalanceEngine {
         state.needs[n]?.pendingSince = nil
         state.starts.append(state.clock)
         out.append(stageEvent(e, again: false))
-        if stage >= 2 { out.append(.bounceDock) }
+        if stage >= 2 { out.append(.nudge) }
     }
 
     private func creditRest(away: TimeInterval, into out: inout [BalanceEvent]) {

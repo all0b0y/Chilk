@@ -110,7 +110,7 @@ struct BalanceTests {
         #expect(asks.map { $0.e.askStage! } == [1, 2])
         #expect((hint + 300...hint + 601).contains(asks[0].t))
         #expect((asks[0].t + 300...asks[0].t + 601).contains(asks[1].t))
-        let bounces = d.times { $0 == .bounceDock }
+        let bounces = d.times { $0 == .nudge }
         #expect(bounces.first == asks[1].t)
         #expect(bounces.count >= 5)
         #expect(zip(bounces, bounces.dropFirst()).allSatisfy { $1 - $0 >= 300 })
@@ -202,7 +202,7 @@ struct BalanceTests {
         let back = d.work(minutes: 1.5)
         #expect(back.first?.askStage == 2)
         #expect(back.first?.askButtons == [.done, .snooze])            // «Я занят» is once per request
-        #expect(back.contains(.bounceDock))
+        #expect(back.contains(.nudge))
         #expect(d.engine.pressure(.water) > 1)                         // a deferral is not a rest
         #expect(d.engine.deferBusy(minutes: 15).isEmpty)
     }

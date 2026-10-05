@@ -31,8 +31,9 @@ public enum Antic: CaseIterable, Sendable {
 
 /// How far out from behind the screen edge he stands (ladder stages, activities). `center`: stage 3–4, he has
 /// left the edge and stands in the middle of the screen (the app moves the window; he is centred in it).
+/// `away`: entirely behind the edge — he went into the tray popover (slice 5a).
 public enum StandOut: Sendable, Equatable {
-    case docked, peek, out, center
+    case docked, peek, out, center, away
 }
 
 /// Things he can hold or wear. Order = drawing order (behind → front).
@@ -416,9 +417,12 @@ public final class CharacterSim {
         case .peek: metrics.peekX
         case .out: metrics.outX
         case .center: metrics.carryX
+        case .away: metrics.awayX
         }
+        // A call brings him out even from behind the edge (the tray then takes him back from the popover).
         x.target = m.carried || standOut == .center ? metrics.carryX
-            : (m.called ? metrics.outX : (isHovering ? min(metrics.peekX, stand) : stand))
+            : (m.called ? metrics.outX
+               : (standOut == .away ? stand : (isHovering ? min(metrics.peekX, stand) : stand)))
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))

@@ -11,6 +11,8 @@ final class Ears {
     private(set) var enabled: Bool
     private(set) var ready = false
     private(set) var status = String(localized: "Уши выключены")
+    /// Gave up after the quiet restarts, or no microphone access: the tray shows a problem line (slice 5a).
+    private(set) var broken = false
     var onWake: (() -> Void)?
     var onDisabled: (() -> Void)?
     var onError: (() -> Void)?
@@ -63,6 +65,7 @@ final class Ears {
         if demo == nil { UserDefaults.standard.set(enabled, forKey: "wakeEarsEnabled") }
         retryTimer?.invalidate()
         recovery.reset()
+        broken = false
         note(enabled ? "ears turned on" : "ears turned off")
         if enabled { passive.retry(); prepare() }
         else {
@@ -70,6 +73,12 @@ final class Ears {
             status = String(localized: "Уши выключены")
             onDisabled?()
         }
+    }
+
+    /// «Слух сломался — включить» in the tray: off and on again, as the user would do by hand.
+    func restart() {
+        if enabled { toggle() }
+        toggle()
     }
 
     private func prepare() {
@@ -242,6 +251,7 @@ final class Ears {
         retryTimer?.invalidate()
         if case EarsError.microphoneDenied = error {
             status = String(localized: "Нет доступа к микрофону")
+            broken = true
             notice(Lines.noMicrophone)
             onError?()
             return
@@ -255,6 +265,7 @@ final class Ears {
             }
         case .giveUp:
             status = String(localized: "Уши недоступны — выключи и включи их")
+            broken = true
             note("gave up after \(EarsRecovery.delays.count) restarts")
             notice(Lines.earsBroken)
         }

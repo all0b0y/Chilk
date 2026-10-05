@@ -62,7 +62,7 @@ public actor ChilkFileToolExecutor {
         case noFolder, unknownFolder, blocked, unreadable, unsupported
         var message: String {
             switch self {
-            case .noFolder: "No folder is shared yet: ask with chilk_request_folder or let the user add one in Chilk's tools"
+            case .noFolder: "No folder is shared yet: ask with chilk_request_folder or let the user add one in Chilk's tray → Инструменты"
             case .unknownFolder: "No such shared folder; see chilk_list_folders"
             case .blocked: "Hidden, private, linked or out-of-scope paths are not allowed"
             case .unreadable: "File unavailable or could not be read"

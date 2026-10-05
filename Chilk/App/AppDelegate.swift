@@ -15,13 +15,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var ears: Ears?
     private var hotkey: Hotkey?
     private var phrases: PhraseBatches?
+    private var tray: Tray?
+    private var greeting: FirstMeeting?
+    private let switches = ToolSwitchStore()
+    private let profile = ProfileStore()
 
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
         instance = delegate
         app.delegate = delegate
-        app.setActivationPolicy(.regular)       // lives in the Dock, not in the menu bar tray (В2)
+        // Slice 5a (SPEC «Срез 5», decision 1): the app lives in the menu-bar tray, Chilk himself at the screen edge.
+        // No Dock icon (Info.plist LSUIElement as well, so it never flashes at launch).
+        app.setActivationPolicy(.accessory)
         app.run()
     }
 
@@ -36,7 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.balance = balance
         let actions = Actions(balance: balance, sim: edge.sim)
         self.actions = actions
-        let brain = Brain(tools: ChilkToolCatalog.tools) { [weak actions] call in
+        let switches = self.switches
+        let brain = Brain(tools: { ChilkToolCatalog.tools(for: switches.switches) },
+                          threadConfig: { ChilkToolCatalog.threadConfig(for: switches.switches) }) { [weak actions] call in
             guard let actions else { return .failure("Chilk actions unavailable") }
             return await actions.execute(call)
         }
@@ -47,20 +55,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.conversation = conversation
         let phrases = PhraseBatches(brain: brain)
         phrases.busy = { [weak conversation] in conversation?.isActive ?? false }
+        phrases.enabled = { switches.isOn(.phrases) }
         phrases.log = { [weak balance] in balance?.log($0) }
+        if !switches.isOn(.phrases) { phrases.switchChanged() }
         self.phrases = phrases
         // Codex-written warm-ups, prepared ahead; the library when there is none (decision 2026-10-05).
         let warmups = WarmupSource(brain: brain)
         warmups.busy = { [weak conversation] in conversation?.isActive ?? false }
         warmups.log = { [weak balance] in balance?.log($0) }
         balance.warmups = warmups
-        conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
+        let profile = self.profile
+        conversation.context = { [weak balance] in
+            Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name)
+        }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
-        // «Подробнее» under a long answer belongs to the conversation; every other bubble button to the balance.
+
+        // Tray → Tools (decision 9): switched-off tools leave new threads; folder kinds pause their folders.
+        actions.switches = { switches.switches }
+        actions.files.enabledKinds = {
+            Set([ChilkFileScope.files, .obsidian].filter { switches.isOn($0.ability) })
+        }
+        switches.onChange.append { [weak brain, weak phrases] in
+            brain?.catalogChanged()
+            phrases?.switchChanged()
+        }
+
+        let tray = Tray(edge: edge, balance: balance, brain: brain, ears: ears, actions: actions,
+                        conversation: conversation, switches: switches)
+        tray.log = { [weak balance] in balance?.log($0) }
+        tray.menu = { [weak self] in self?.trayMenu() ?? NSMenu() }
+        self.tray = tray
+        let greeting = FirstMeeting(profile: profile, edge: edge, balance: balance)
+        greeting.log = { [weak balance] in balance?.log($0) }
+        greeting.onNamed = { [weak tray] in tray?.nudge() }
+        self.greeting = greeting
+
+        // Who holds the stage: a conversation, a due timer, Chilk on the hero card, the greeting.
+        balance.isBusy = { [weak conversation, weak actions, weak tray, weak greeting] in
+            (conversation?.isActive ?? false) || (actions?.ownsStage ?? false) || (tray?.holdsChilk ?? false)
+                || (greeting?.isActive ?? false)
+        }
+        actions.conversationActive = { [weak conversation, weak tray, weak greeting] in
+            (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
+        }
+        greeting.canPresent = { [weak conversation, weak actions, weak balance, weak tray] in
+            !(conversation?.isActive ?? true) && !(actions?.ownsStage ?? true) && !(balance?.isOccupied ?? true)
+                && !(tray?.holdsChilk ?? true)
+        }
+        tray.isFree = { [weak conversation, weak actions, weak balance, weak greeting, weak edge] in
+            guard let edge else { return false }
+            return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
+                && !(greeting?.isActive ?? true) && !edge.sim.isTalking && edge.sim.standOut == .docked
+        }
+        balance.onNudge = { [weak tray] in tray?.nudge() }
+        actions.onDue = { [weak tray] in tray?.nudge() }
+
+        // Bubble buttons: a conversation's own («Подробнее», «Да / Нет»), the greeting's, then the balance's.
         let balanceButton = edge.onButton
-        edge.onButton = { [weak conversation] i in
+        edge.onButton = { [weak conversation, weak greeting] i in
             if conversation?.pressedButton(i) == true { return }
+            if greeting?.pressedButton(i) == true { return }
             balanceButton?(i)
         }
         ears.onWake = { [weak conversation] in conversation?.wake() }
@@ -77,107 +132,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ears.log = { [weak balance] in balance?.log($0) }
         ears.start()
         conversation.log = { [weak balance] in balance?.log($0) }
-        balance.isBusy = { [weak conversation, weak actions] in
-            (conversation?.isActive ?? false) || (actions?.ownsStage ?? false)
-        }
         balance.escalation.onPause = { [weak self] paused in self?.quitShortcut(enabled: !paused) }
-        actions.conversationActive = { [weak conversation] in conversation?.isActive ?? false }
         brain.onChange = { [weak balance, weak brain, weak phrases] in
             balance?.log("brain \(brain?.statusLine ?? "?")")
             phrases?.refreshIfNeeded()                     // the day's batch as soon as Codex is ready
             balance?.warmups?.prepareIfNeeded()
         }
-        // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; otherwise the balance poke.
-        edge.onPoke = { [weak conversation, weak actions, weak balance] in
+        // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; in the greeting = next line;
+        // otherwise the balance poke.
+        edge.onPoke = { [weak conversation, weak actions, weak greeting, weak balance] in
             if conversation?.clicked() == true { return }
             if actions?.clicked() == true { return }
+            if greeting?.clicked() == true { return }
             balance?.poked()
         }
         let key = Hotkey.defaultKey
         hotkey = Hotkey(keyCode: key.code, modifiers: key.modifiers, id: 1) { [weak conversation] in conversation?.trigger() }
-        if ProcessInfo.processInfo.environment["CHILK_DEMO_TALK"] != nil {
+        let env = ProcessInfo.processInfo.environment
+        if env["CHILK_DEMO_TALK"] != nil {
             Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation] _ in
                 MainActor.assumeIsolated { conversation?.trigger() }
             }
         }
-        // The Dock icon is the static AppIcon (user decision: a live tile was costly and laggy).
-    }
-
-    /// Clicking the Dock icon calls Чилк out (until the voice slice arrives).
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        conversation?.trigger()
-        return false
+        // Acceptance only: CHILK_DEMO_TRAY=<seconds> opens the popover after that long (no Screen Recording needed
+        // to check the hand-off in the log); CHILK_DEMO_TRAY_CLOSE=<seconds> closes it again.
+        if let after = env["CHILK_DEMO_TRAY"].flatMap(Double.init) {
+            Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak tray] _ in
+                MainActor.assumeIsolated { tray?.show(demo: true) }
+            }
+            if let close = env["CHILK_DEMO_TRAY_CLOSE"].flatMap(Double.init) {
+                Timer.scheduledTimer(withTimeInterval: after + close, repeats: false) { [weak tray] _ in
+                    MainActor.assumeIsolated { tray?.close() }
+                }
+            }
+        }
+        if let raw = env["CHILK_DEMO_TOOL_OFF"] {
+            for name in raw.split(separator: ",") { if let a = ChilkAbility(rawValue: String(name)) { switches.set(a, on: false) } }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
         actions?.shutdown()
         phrases?.shutdown()
+        tray?.shutdown()
         brain?.shutdown()
         ears?.shutdown()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
-    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+    // MARK: Right click on the tray icon (decision 5)
+
+    /// «Позвать Чилка», «Проверка ▸» for acceptance, «О Чилке», «Выйти». Everything else is in the popover.
+    private func trayMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.defaultKey.label, #selector(callChilk)))
-        if let brain {
-            let status = NSMenuItem(title: brain.statusLine, action: nil, keyEquivalent: "")
-            status.isEnabled = false
-            menu.addItem(status)
-            if brain.state == .signedOut { menu.addItem(item(String(localized: "Войти в Codex через ChatGPT…"), #selector(loginCodex))) }
-            if case .failed = brain.state { menu.addItem(item(String(localized: "Переподключить Codex"), #selector(reconnectCodex))) }
-        }
-        if let ears {
-            let status = NSMenuItem(title: ears.status, action: nil, keyEquivalent: "")
-            status.isEnabled = false
-            menu.addItem(status)
-            menu.addItem(item(ears.enabled ? String(localized: "Выключить уши") : String(localized: "Включить уши"), #selector(toggleEars)))
-        }
-        let timers = NSMenuItem(title: String(localized: "Таймеры Чилка"), action: nil, keyEquivalent: "")
-        let timersMenu = NSMenu()
-        let entries = actions?.executor?.entries ?? []
-        if entries.isEmpty {
-            let empty = NSMenuItem(title: String(localized: "Нет таймеров"), action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            timersMenu.addItem(empty)
-        }
-        for entry in entries.sorted(by: { $0.deadline < $1.deadline }) {
-            let date = entry.deadline.formatted(date: .abbreviated, time: .shortened)
-            let row = NSMenuItem(title: "\(entry.title) · \(date)", action: nil, keyEquivalent: "")
-            row.isEnabled = false
-            timersMenu.addItem(row)
-        }
-        timers.submenu = timersMenu
-        menu.addItem(timers)
-        if let files = actions?.files { menu.addItem(files.dockItem()) }
-        // Modes (В16): Soft by default; softer is refused on stages 3–4 («договор с собой»).
-        let mode = NSMenuItem(title: String(localized: "Режим"), action: nil, keyEquivalent: "")
-        let modeMenu = NSMenu()
-        for m in [BalanceMode.strict, .soft, .silent] {
-            let i = item(Lines.modeName(m), #selector(chooseMode(_:)))
-            i.representedObject = m.rawValue
-            i.state = balance?.mode == m ? .on : .off
-            modeMenu.addItem(i)
-        }
-        mode.submenu = modeMenu
-        menu.addItem(mode)
-        let side = edge?.edge == .left
-            ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
-            : item(String(localized: "Переселить к левому краю"), #selector(moveLeft))
-        menu.addItem(side)
-        menu.addItem(.separator())
-
-        // Breaks on demand (В18).
-        let pause = NSMenuItem(title: String(localized: "Перерыв"), action: nil, keyEquivalent: "")
-        let pauseMenu = NSMenu()
-        pauseMenu.addItem(item(String(localized: "Подышать 1 минуту"), #selector(breathe1)))
-        pauseMenu.addItem(item(String(localized: "Подышать 3 минуты"), #selector(breathe3)))
-        pauseMenu.addItem(item(String(localized: "Гимнастика для глаз"), #selector(eyeGym)))
-        pauseMenu.addItem(item(String(localized: "Я попил воды"), #selector(drank)))
-        pause.submenu = pauseMenu
-        menu.addItem(pause)
         menu.addItem(.separator())
 
         // Manual acceptance helpers.
@@ -200,32 +210,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Уснуть"), #selector(sleepNow)))
         sub.addItem(item(String(localized: "Проснуться: «с возвращением»"), #selector(wakeWelcome)))
         sub.addItem(item(String(localized: "Проснуться: «доброе утро»"), #selector(wakeMorning)))
+        sub.addItem(.separator())
+        // The edge side moves to Settings (5c); until then it is here and by dragging him.
+        sub.addItem(edge?.edge == .left
+            ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
+            : item(String(localized: "Переселить к левому краю"), #selector(moveLeft)))
         check.submenu = sub
         menu.addItem(check)
+        menu.addItem(.separator())
+        let about = NSMenuItem(title: String(localized: "О Чилке"), action: #selector(about), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+        menu.addItem(withTitle: String(localized: "Выйти из Чилка"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         return menu
     }
 
     @objc private func callChilk() { conversation?.trigger() }
-    @objc private func toggleEars() { ears?.toggle() }
-    @objc private func loginCodex() { brain?.login() }
-    @objc private func reconnectCodex() { if let brain { Task { await brain.connect() } } }
+    @objc private func about() {
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(nil)
+    }
     @objc private func moveLeft() { edge?.move(to: .left) }
     @objc private func moveRight() { edge?.move(to: .right) }
-    @objc private func breathe1() { balance?.startBreathing(minutes: 1) }
-    @objc private func breathe3() { balance?.startBreathing(minutes: 3) }
-    @objc private func eyeGym() { balance?.startEyeGym() }
-    @objc private func drank() { balance?.drankWater() }
     @objc private func makeDue(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let n = Need(rawValue: raw) { balance?.makeDue(n) }
-    }
-    @objc private func chooseMode(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let m = BalanceMode(rawValue: raw), let balance, let edge else { return }
-        if m == balance.mode { return }
-        if balance.setMode(m) {
-            if balance.escalation.level == .none { edge.sim.say(Lines.modeSet(m), duration: 4) }
-        } else {
-            edge.sim.say(Lines.modeRefused, duration: 5)
-        }
     }
     @objc private func showPressure() { balance?.showPressure() }
     @objc private func toggleFast() { if let b = balance { b.timeScale = b.timeScale > 1 ? 1 : 60 } }

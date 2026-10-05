@@ -11,9 +11,9 @@ extension Lines {
     static let noMicrophone = String(localized: "Мне нужен микрофон: Настройки → Конфиденциальность → Микрофон → Чилк")
     static let earsFailed = String(localized: "Уши барахлят 😕 Не получилось включить распознавание речи")
     @MainActor static var earsBroken: String {
-        String(localized: "Слух сломался 😕 Нажми \(Hotkey.defaultKey.label) или включи уши заново в Dock")
+        String(localized: "Слух сломался 😕 Нажми \(Hotkey.defaultKey.label) или включи уши заново в трее")
     }
-    static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Меню Dock → «Войти в Codex»")
+    static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Нажми на меня в трее наверху → «Войти в Codex»")
     static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕")
     static let brainFailed = String(localized: "Codex сейчас не отвечает 😕 Попробуй чуть позже")
 
@@ -31,8 +31,8 @@ extension Lines {
     static let yes = String(localized: "Да")
     static let no = String(localized: "Нет")
 
-    /// [контекст] for Codex: only time and sitting time (В24), nothing about apps or windows.
-    static func context(sittingMinutes: Int, now: Date = Date()) -> String {
-        VoiceContext.text(sittingMinutes: sittingMinutes, now: now)
+    /// [контекст] for Codex: only time, sitting time and the name the user gave him (В24), nothing about apps or windows.
+    static func context(sittingMinutes: Int, name: String? = nil, now: Date = Date()) -> String {
+        VoiceContext.text(sittingMinutes: sittingMinutes, now: now, name: name)
     }
 }

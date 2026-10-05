@@ -1,7 +1,12 @@
 import Foundation
 import ChilkCore
 
-public enum ChilkFileScope: String, Codable, Sendable { case files, obsidian }
+public enum ChilkFileScope: String, Codable, Sendable {
+    case files, obsidian
+
+    /// The tray switch that governs folders of this kind (slice 5a).
+    public var ability: ChilkAbility { self == .files ? .files : .obsidian }
+}
 
 /// Breaks the user asks for by voice (decisions 2026-10-05); they start when the conversation closes.
 public enum ChilkBreak: Equatable, Sendable {
@@ -72,6 +77,54 @@ public enum ChilkToolCatalog {
             "type": "object", "properties": .object(properties),
             "required": .array(properties.keys.sorted().map(JSON.string)), "additionalProperties": false,
         ])
+    }
+
+    // MARK: Tool switches (slice 5a, decision 9; folder kinds per the read-only folders branch)
+
+    /// The four folder tools. They stay while either folder kind is on; the host shows Codex only the folders
+    /// whose kind is on (`Files.enabledKinds`).
+    public static let folderTools: Set<String> = ["chilk_list_folders", "chilk_find_files", "chilk_read_file",
+                                                  "chilk_request_folder"]
+
+    /// The catalog a NEW thread gets: switched-off abilities are left out. Status, water and mode are Chilk's own
+    /// care and are always there.
+    public static func tools(for switches: ToolSwitches) -> [CodexTool] {
+        let anyFolders = switches.isOn(.files) || switches.isOn(.obsidian)
+        return tools.filter { tool in
+            if folderTools.contains(tool.name) { return anyFolders && (tool.name != "chilk_request_folder" || switches.isOn(.files)) }
+            guard let a = ability(of: tool.name) else { return true }
+            return switches.isOn(a)
+        }
+    }
+
+    /// For a thread that still lists a tool the user has since switched off: which switch refuses this call.
+    /// `kindOf` resolves a shared folder's name (find/read name one; "all" covers only the kinds that are on).
+    public static func switchedOff(name: String, arguments: JSON, switches: ToolSwitches,
+                                   kindOf: (String) -> ChilkFileScope?) -> ChilkAbility? {
+        if folderTools.contains(name) {
+            if !switches.isOn(.files) && !switches.isOn(.obsidian) { return .files }
+            // A folder asked for is a plain folder unless it turns out to be a vault: asking needs «Файлы».
+            if name == "chilk_request_folder" { return switches.isOn(.files) ? nil : .files }
+            if let folder = arguments["folder"]?.string, folder != "all", let kind = kindOf(folder),
+               !switches.isOn(kind.ability) { return kind.ability }
+            return nil
+        }
+        guard let a = ability(of: name) else { return nil }
+        return switches.isOn(a) ? nil : a
+    }
+
+    /// Web search is Codex's own tool, not a Chilk function: switched off per thread through `thread/start` config
+    /// (verified live on codex 0.160).
+    public static func threadConfig(for switches: ToolSwitches) -> JSON? {
+        switches.isOn(.webSearch) ? nil : ["web_search": "disabled"]
+    }
+
+    private static func ability(of name: String) -> ChilkAbility? {
+        switch name {
+        case "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
+        case "chilk_reminder", "chilk_reminders": .reminders
+        default: nil
+        }
     }
 
     private static func validTitle(_ title: String) -> Bool {
