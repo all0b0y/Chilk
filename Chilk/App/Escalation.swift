@@ -6,12 +6,14 @@ import AppKit
 /// the exits are spent a 10-second hold.
 @MainActor
 final class Escalation {
-    enum Level: String { case none, dim, pause }
+    enum Level: String { case none, dim, pause, guide }
 
     private(set) var level = Level.none
     private var dims: [NSWindow] = []
     private var pauses: [PauseWindow] = []
     private var card: PauseCard?
+    private var guideCard: GuideCard?
+    private var breakTitle: String?
     private var screenFrames: [NSRect] = []
     private var observers: [(NotificationCenter, Any)] = []
 
@@ -19,8 +21,12 @@ final class Escalation {
     var onExit: ((String, Int, Bool) -> Bool)?
     /// The 10-second hold is in progress (Chilk is sad meanwhile).
     var onHolding: ((Bool) -> Void)?
-    /// The pause went up / came down (the app turns ⌘Q off meanwhile).
+    /// The pause went up / came down (the app turns ⌘Q off meanwhile). A guided break counts as a pause here.
     var onPause: ((Bool) -> Void)?
+    /// «Начать разминку» / «Иду гулять» on the pause (decision 2026-10-05).
+    var onStartBreak: (() -> Void)?
+    /// «Прервать» under a guided break.
+    var onStopGuide: (() -> Void)?
     /// Where Chilk stands: the pause card goes under him on that screen.
     var chilkFrame: () -> NSRect = { .zero }
     var log: (String) -> Void = { _ in }
@@ -59,22 +65,52 @@ final class Escalation {
 
     // MARK: Stage 4
 
-    func pause(exitsLeft: Int, restNeeded: TimeInterval) {
+    /// `breakTitle`: a button that turns the pause into the matching guided break (nil = none for this need).
+    func pause(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String? = nil) {
         if level == .pause { card?.exitsLeft = exitsLeft; return }
         lift()
         level = .pause
+        self.breakTitle = breakTitle
+        cover { [weak self] in
+            let card = PauseCard(exitsLeft: exitsLeft, restNeeded: restNeeded, breakTitle: breakTitle)
+            card.onExit = { reason, minutes, held in self?.onExit?(reason, minutes, held) ?? false }
+            card.onHolding = { holding in self?.onHolding?(holding) }
+            card.onBreak = { self?.onStartBreak?() }
+            self?.card = card
+            return card
+        }
+        log("escalation pause on \(pauses.count) screen(s), exits \(exitsLeft)")
+    }
+
+    // MARK: Guided breaks (decisions 2026-10-05)
+
+    /// The dark screen of a guided break: Chilk leads in the middle, under him «Шаг 2 из 5» and «Прервать».
+    /// Same shade, focus and lock-down as the pause; only «Прервать» ends it early.
+    func guide(caption: String) {
+        if level == .guide { guideCard?.caption = caption; return }
+        lift()
+        level = .guide
+        cover { [weak self] in
+            let card = GuideCard(caption: caption)
+            card.onStop = { self?.onStopGuide?() }
+            self?.guideCard = card
+            return card
+        }
+        log("escalation guide on \(pauses.count) screen(s)")
+    }
+
+    func demoStopGuide() { guideCard?.stop() }
+
+    private var covering: Bool { level == .pause || level == .guide }
+
+    /// Shades on every screen; the card under Chilk on his screen.
+    private func cover(card make: () -> NSView) {
         screenFrames = NSScreen.screens.map(\.frame)
         let home = NSScreen.screens.first { $0.frame.contains(NSPoint(x: chilkFrame().midX, y: chilkFrame().midY)) }
             ?? NSScreen.main ?? NSScreen.screens[0]
         for screen in NSScreen.screens {
             let w = PauseWindow(screen: screen)
-            if screen == home {
-                let card = PauseCard(exitsLeft: exitsLeft, restNeeded: restNeeded)
-                card.onExit = { [weak self] reason, minutes, held in self?.onExit?(reason, minutes, held) ?? false }
-                card.onHolding = { [weak self] holding in self?.onHolding?(holding) }
-                w.place(card, under: screen.frame.midY - 112)        // his feet are ~106 pt under the middle
-                self.card = card
-            }
+            if screen == home { w.place(make(), under: screen.frame.midY - 112) }   // his feet are ~106 pt under the middle
             w.alphaValue = 0
             w.orderFrontRegardless()
             pauses.append(w)
@@ -102,7 +138,6 @@ final class Escalation {
         }))
         takeFocus()
         onPause?(true)
-        log("escalation pause on \(pauses.count) screen(s), exits \(exitsLeft)")
     }
 
     /// Seconds still to stay away from the keyboard (input resets it — that is the rule of rest).
@@ -121,13 +156,14 @@ final class Escalation {
         dims = []
         pauses = []
         card = nil
+        guideCard = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.5
             for w in windows { w.animator().alphaValue = 0 }
         }, completionHandler: {
             MainActor.assumeIsolated { for w in windows { w.orderOut(nil) } }
         })
-        if was == .pause {
+        if was == .pause || was == .guide {
             NSApp.presentationOptions = []
             onHolding?(false)
             onPause?(false)
@@ -163,13 +199,13 @@ final class Escalation {
     // MARK: Focus
 
     private func takeFocus() {
-        guard level == .pause else { return }
+        guard covering else { return }
         NSApp.activate()
         (pauses.first { $0.contentView?.subviews.isEmpty == false } ?? pauses.first)?.makeKeyAndOrderFront(nil)
         lockDown()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.level == .pause else { return }
+                guard let self, self.covering else { return }
                 self.log("escalation pause focus active=\(NSApp.isActive) options=\(NSApp.currentSystemPresentationOptions.rawValue)")
             }
         }
@@ -177,22 +213,24 @@ final class Escalation {
 
     /// While Chilk is active under the pause: no Dock, no menu bar, no ⌘Tab. Force Quit stays (never impossible).
     private func lockDown() {
-        guard level == .pause, NSApp.isActive else { return }
+        guard covering, NSApp.isActive else { return }
         NSApp.presentationOptions = [.hideDock, .hideMenuBar, .disableProcessSwitching, .disableHideApplication]
     }
 
     private func refitScreens() {
         // Hiding the Dock and the menu bar also posts this; only a real change of screens rebuilds the pause.
-        guard level == .pause, NSScreen.screens.map(\.frame) != screenFrames else { return }
+        guard covering, NSScreen.screens.map(\.frame) != screenFrames else { return }
         log("escalation screens changed")
-        let exits = card?.exitsLeft ?? 0, rest = card?.restNeeded ?? 180
+        let exits = card?.exitsLeft ?? 0, rest = card?.restNeeded ?? 180, caption = guideCard?.caption ?? ""
+        let was = level
         level = .none
         for (center, token) in observers { center.removeObserver(token) }
         observers = []
         for w in pauses { w.orderOut(nil) }
         pauses = []
         card = nil
-        pause(exitsLeft: exits, restNeeded: rest)
+        guideCard = nil
+        if was == .guide { guide(caption: caption) } else { pause(exitsLeft: exits, restNeeded: rest, breakTitle: breakTitle) }
     }
 }
 
@@ -232,6 +270,7 @@ private final class PauseWindow: NSWindow {
 private final class PauseCard: NSView, NSTextFieldDelegate {
     var onExit: ((String, Int, Bool) -> Bool)?
     var onHolding: ((Bool) -> Void)?
+    var onBreak: (() -> Void)?
     let restNeeded: TimeInterval
     var exitsLeft: Int { didSet { if exitsLeft != oldValue { refresh() } } }
     var restLeft: TimeInterval = .infinity { didSet { refreshCountdown() } }
@@ -246,10 +285,18 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
     private let hold = HoldButton()
     private let hint = NSTextField(labelWithString: "")
 
-    init(exitsLeft: Int, restNeeded: TimeInterval) {
+    private let breakButton = NSButton()
+
+    init(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String?) {
         self.exitsLeft = exitsLeft
         self.restNeeded = restNeeded
         super.init(frame: .zero)
+        breakButton.bezelStyle = .rounded
+        breakButton.controlSize = .large
+        breakButton.title = breakTitle ?? ""
+        breakButton.isHidden = breakTitle == nil
+        breakButton.target = self
+        breakButton.action = #selector(startBreak)
         countdown.font = .systemFont(ofSize: 17, weight: .medium)
         countdown.textColor = NSColor(white: 1, alpha: 0.92)
         countdown.alignment = .center
@@ -290,7 +337,7 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
         hold.heightAnchor.constraint(equalToConstant: 30).isActive = true
         form.isHidden = true
 
-        let stack = NSStackView(views: [countdown, exitButton, form])
+        let stack = NSStackView(views: [countdown, breakButton, exitButton, form])
         stack.orientation = .vertical
         stack.spacing = 18
         stack.alignment = .centerX
@@ -331,6 +378,8 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) { validate() }
+
+    @objc private func startBreak() { onBreak?() }
 
     @objc private func openForm() {
         form.isHidden = false
@@ -441,4 +490,45 @@ private final class HoldButton: NSView {
 
     override func accessibilityRole() -> NSAccessibility.Role? { .button }
     override func accessibilityLabel() -> String? { title }
+}
+
+/// Under a guided break: «Шаг 2 из 5» (or the walk's idea) and «Прервать» — no reason, no limit.
+@MainActor
+private final class GuideCard: NSView {
+    var onStop: (() -> Void)?
+    var caption: String { didSet { label.stringValue = caption } }
+    private let label = NSTextField(labelWithString: "")
+    private let stopButton = NSButton()
+
+    init(caption: String) {
+        self.caption = caption
+        super.init(frame: .zero)
+        label.stringValue = caption
+        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.textColor = NSColor(white: 1, alpha: 0.75)
+        label.alignment = .center
+        label.maximumNumberOfLines = 3
+        label.lineBreakMode = .byWordWrapping
+        label.preferredMaxLayoutWidth = 380
+        stopButton.isBordered = false
+        stopButton.attributedTitle = NSAttributedString(string: Lines.guideStop, attributes: [
+            .foregroundColor: NSColor(white: 1, alpha: 0.6), .font: NSFont.systemFont(ofSize: 13),
+            .underlineStyle: NSUnderlineStyle.single.rawValue])
+        stopButton.target = self
+        stopButton.action = #selector(stop)
+        let stack = NSStackView(views: [label, stopButton])
+        stack.orientation = .vertical
+        stack.spacing = 14
+        stack.alignment = .centerX
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor), stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor), stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc func stop() { onStop?() }
 }

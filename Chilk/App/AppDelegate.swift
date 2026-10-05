@@ -49,6 +49,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         phrases.busy = { [weak conversation] in conversation?.isActive ?? false }
         phrases.log = { [weak balance] in balance?.log($0) }
         self.phrases = phrases
+        // Codex-written warm-ups, prepared ahead; the library when there is none (decision 2026-10-05).
+        let warmups = WarmupSource(brain: brain)
+        warmups.busy = { [weak conversation] in conversation?.isActive ?? false }
+        warmups.log = { [weak balance] in balance?.log($0) }
+        balance.warmups = warmups
         conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
@@ -80,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         brain.onChange = { [weak balance, weak brain, weak phrases] in
             balance?.log("brain \(brain?.statusLine ?? "?")")
             phrases?.refreshIfNeeded()                     // the day's batch as soon as Codex is ready
+            balance?.warmups?.prepareIfNeeded()
         }
         // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; otherwise the balance poke.
         edge.onPoke = { [weak conversation, weak actions, weak balance] in

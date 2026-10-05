@@ -52,6 +52,8 @@ final class Actions {
                     return changed
                         ? ["mode": .string(balance.mode.rawValue), "changed": true]
                         : ["mode": .string(balance.mode.rawValue), "changed": false, "refused": "escalation_in_progress"]
+                }, breaks: { [weak balance] b in
+                    balance?.queueBreak(b) ?? ["willStart": false]
                 })
         } catch {
             executor = nil

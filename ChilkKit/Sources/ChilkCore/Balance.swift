@@ -89,6 +89,11 @@ public enum Reaction: String, Codable, Sendable {
     case busy
 }
 
+public enum GuidedKind: String, Sendable, Equatable { case warmup, walk }
+
+/// Where a guided break came from (decides what «Прервать» costs).
+public enum GuidedOrigin: String, Sendable, Equatable { case voluntary, request, pause }
+
 public enum BalanceEvent: Equatable, Sendable {
     /// Ladder stage 0: silent pantomime (drinks from a mug, stretches…).
     case hint(Need)
@@ -306,6 +311,8 @@ extension DayStats {
 public final class BalanceEngine {
     public var config: BalanceConfig
     public private(set) var state: BalanceState
+    /// A guided break in progress (not persisted): the engine stands still meanwhile — no sitting, no stages.
+    public private(set) var guided: GuidedOrigin?
     private var rng: any RandomSource
     private let calendar: Calendar
 
@@ -369,6 +376,10 @@ public final class BalanceEngine {
         let hourAgo = state.clock - 3600
         state.starts.removeAll { $0 <= hourAgo }
         rollDay(s.now, into: &out)
+        if guided != nil {                         // the screen is dark and Chilk leads: neither work nor rest
+            state.lastFront = s.frontApp
+            return out
+        }
 
         // Under the pause a video in the background is not being watched: it must not block the rest.
         let paused = state.episode.map { $0.stage >= 4 && $0.phase == .showing } ?? false
@@ -503,6 +514,60 @@ public final class BalanceEngine {
             break                                                      // `deferBusy(minutes:)`
         }
         return out
+    }
+
+    // MARK: Guided breaks (decisions 2026-10-05)
+
+    /// Starts a guided break. The origin decides what «Прервать» costs: nothing when the user asked for it,
+    /// a broken promise when he chose «Разминка со мной» after «Иду», back to the pause when it came from there.
+    @discardableResult
+    public func beginGuided(_ kind: GuidedKind) -> GuidedOrigin {
+        let need: Need = kind == .warmup ? .stretch : .walk
+        let origin: GuidedOrigin
+        if let e = state.episode, e.need == need || (kind == .walk && e.need == .stretch) {
+            origin = e.stage >= 4 && e.phase == .showing ? .pause : (e.phase == .promised ? .request : .voluntary)
+        } else {
+            origin = .voluntary
+        }
+        guided = origin
+        return origin
+    }
+
+    /// Finished: credits what the break counts (by rest — a finished walk refills the emergency exits).
+    public func finishGuided(_ session: GuidedSession) -> [BalanceEvent] {
+        guard guided != nil else { return [] }
+        guided = nil
+        state.restLevel = session.credits.contains(.walk) ? 2 : max(state.restLevel, 1)
+        var out: [BalanceEvent] = []
+        for n in session.credits { credit(n, byRest: true, into: &out) }
+        return out
+    }
+
+    /// «Прервать»: nothing is counted. After «Иду» it is a broken promise (a stage up, like 90 s of work);
+    /// from the pause, the pause comes back.
+    public func interruptGuided() -> [BalanceEvent] {
+        guard let origin = guided else { return [] }
+        guided = nil
+        guard var e = state.episode else { return [] }
+        switch origin {
+        case .voluntary:
+            return e.phase == .showing ? [stageEvent(e, again: true)] : []
+        case .pause:
+            e.phase = .showing
+            state.episode = e
+            return [stageEvent(e, again: true)]
+        case .request:
+            guard e.phase == .promised else { return [] }
+            e.phase = .showing
+            e.promiseWork = 0
+            e.stage = max(min(e.stage + 1, cap(e.need)), min(1, cap(e.need)))
+            e.workOnStage = 0
+            e.nextAfter = nextStageDelay()
+            state.episode = e
+            var out = [stageEvent(e, again: true)]
+            if e.stage >= 2 { out.append(.bounceDock); e.sinceBounce = 0; state.episode = e }
+            return out
+        }
     }
 
     // MARK: Modes and the emergency exit

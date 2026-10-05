@@ -3,6 +3,12 @@ import ChilkCore
 
 public enum ChilkFileScope: String, Codable, Sendable { case files, obsidian }
 
+/// Breaks the user asks for by voice (decisions 2026-10-05); they start when the conversation closes.
+public enum ChilkBreak: Equatable, Sendable {
+    case eyeGym, warmup, walk
+    case breathe(minutes: Int)
+}
+
 public enum ChilkAction: Equatable, Sendable {
     case status, water, timers
     case cancel(id: String)
@@ -17,6 +23,7 @@ public enum ChilkAction: Equatable, Sendable {
     case reminder(title: String, at: Date)
     case reminders
     case mode(BalanceMode)
+    case takeBreak(ChilkBreak)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -52,6 +59,11 @@ public enum ChilkToolCatalog {
             tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (title, due). Other lists are never read.", [:]),
             tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
                  ["mode": ["type": "string", "enum": ["strict", "soft", "silent"]]]),
+            tool("chilk_eye_gym", "Only when the user asks: eye gymnastics with Chilk — he flies a figure-eight to follow, then «look into the distance» for 20 s. Starts after your short reply, when the conversation closes.", [:]),
+            tool("chilk_warmup", "Only when the user asks: a 5-minute warm-up with Chilk in the middle of a dark screen — 5 steps of about a minute (body, eyes, breathing, something calm for the head). Starts after your short reply; the user can stop it any time.", [:]),
+            tool("chilk_breathe", "Only when the user asks: breathe with Chilk for 1 or 3 minutes (he inflates on the in-breath). Starts after your short reply.",
+                 ["minutes": ["type": "integer", "enum": [1, 3]]]),
+            tool("chilk_walk", "Only when the user asks: a 15-minute walk — Chilk in a hat in the middle of a dark screen with a countdown and an idea; the user can stop it. Starts after your short reply.", [:]),
         ]
     }()
 
@@ -141,6 +153,13 @@ public enum ChilkToolCatalog {
         case "chilk_reminders":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .reminders
+        case "chilk_eye_gym", "chilk_warmup", "chilk_walk":
+            guard fields.isEmpty else { throw ToolError.invalidArguments }
+            return .takeBreak(name == "chilk_eye_gym" ? .eyeGym : name == "chilk_warmup" ? .warmup : .walk)
+        case "chilk_breathe":
+            guard Set(fields.keys) == ["minutes"], case .number(let m) = fields["minutes"], m == 1 || m == 3
+            else { throw ToolError.invalidArguments }
+            return .takeBreak(.breathe(minutes: Int(m)))
         case "chilk_mode":
             guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
                   let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }

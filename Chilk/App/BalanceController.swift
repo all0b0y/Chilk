@@ -1,4 +1,5 @@
 import AppKit
+import ChilkBrain
 import ChilkCore
 
 /// Slice 2 in the app: signals → `BalanceEngine` → what Чилк does (pantomime, bubble with buttons,
@@ -28,6 +29,9 @@ final class BalanceController {
     private let logURL = ProcessInfo.processInfo.environment["CHILK_BALANCE_LOG"].map { URL(fileURLWithPath: $0) }
     private let env = ProcessInfo.processInfo.environment
     private var demoExitScheduled = false
+    /// CHILK_DEMO_PRESS=0,0 (acceptance only): press these bubble buttons in turn, 2 s after each appears.
+    private lazy var demoPresses: [Int] = (env["CHILK_DEMO_PRESS"] ?? "").split(separator: ",").compactMap { Int($0) }
+    private var demoPressSince: Date?
 
     func log(_ line: String) {
         guard let url = logURL else { return }
@@ -40,13 +44,36 @@ final class BalanceController {
         }
     }
 
-    private enum Activity { case eyeGym, breathing }
+    private enum Activity { case eyeGym, breathing, guided }
+
+    /// Guided warm-up / walk in progress (decisions 2026-10-05).
+    private struct GuidedRun {
+        let session: GuidedSession
+        let kind: GuidedKind
+        let origin: GuidedOrigin
+        let idea: String
+        let source: WarmupSource.Origin?
+        var step = -1
+        var lastMove: TimeInterval = 0
+    }
+    private var guidedRun: GuidedRun?
+    private var guideTimer: Timer?
+    /// A break asked for by voice: it starts when the conversation closes.
+    private var pendingBreak: (ChilkBreak, Date)?
+    /// Codex-written warm-ups with the library as the fallback (set by the app).
+    var warmups: WarmupSource?
+    /// CHILK_GUIDE_SCALE (acceptance only): guided time runs this many times faster.
+    private lazy var guideScale = env["CHILK_GUIDE_SCALE"].flatMap(Double.init) ?? 1
 
     /// While Чилк talks with the user the stage is theirs: balance keeps counting but shows nothing.
     var isBusy: () -> Bool = { false }
 
     /// After a conversation: show the current prompt again (if any).
     func resume() {
+        if let (b, at) = pendingBreak {
+            pendingBreak = nil
+            if Date().timeIntervalSince(at) < 300 { return startBreak(b) }
+        }
         if let prompt = engine.currentPrompt() { apply(prompt) }
     }
 
@@ -67,6 +94,8 @@ final class BalanceController {
         escalation.onExit = { [weak self] reason, minutes, held in self?.emergencyExit(reason: reason, minutes: minutes, held: held) ?? false }
         escalation.onHolding = { [weak sim] holding in sim?.isSad = holding }
         escalation.log = { [weak self] in self?.log($0) }
+        escalation.onStartBreak = { [weak self] in self?.startFromPause() }
+        escalation.onStopGuide = { [weak self] in self?.stopGuided() }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
@@ -75,6 +104,12 @@ final class BalanceController {
         if let raw = env["CHILK_DEMO_DUE"], let n = Need(rawValue: raw) {
             Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.makeDue(n) }
+            }
+        }
+        // CHILK_DEMO_GUIDE=warmup|walk: a guided break 5 s after launch; CHILK_DEMO_GUIDE_STOP=<s>: «Прервать».
+        if let raw = env["CHILK_DEMO_GUIDE"], let kind = GuidedKind(rawValue: raw) {
+            Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { kind == .warmup ? self?.startWarmup() : self?.startWalk() }
             }
         }
     }
@@ -103,6 +138,12 @@ final class BalanceController {
             pantomime(e.need)
         }
         if Date().timeIntervalSince(lastSave) > 30 { save() }
+        if !demoPresses.isEmpty, !buttonActions.isEmpty {
+            if let since = demoPressSince, Date().timeIntervalSince(since) >= 2 {
+                demoPressSince = nil
+                pressed(demoPresses.removeFirst())
+            } else if demoPressSince == nil { demoPressSince = Date() }
+        } else { demoPressSince = nil }
     }
 
     private func apply(_ events: [BalanceEvent]) {
@@ -130,7 +171,13 @@ final class BalanceController {
                 buttonActions = []
                 sim.say(Lines.pause(n), duration: .infinity)
                 edge.raised = true
-                escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest)
+                escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest,
+                                 breakTitle: n == .stretch ? Lines.startWarmup : (n == .walk ? Lines.goWalk : nil))
+                if let after = env["CHILK_DEMO_PAUSE_BREAK"].flatMap(Double.init) {
+                    Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated { self?.startFromPause() }
+                    }
+                }
                 scheduleDemoExit()
                 if let path = env["CHILK_DEMO_SNAPSHOT"] {
                     Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
@@ -166,10 +213,10 @@ final class BalanceController {
             case .eyes:
                 startEyeGym(forEpisode: true)
             case .stretch:
+                // «Иду» → «Разминка со мной» / «Сам» (user decision «2», 2026-10-05).
                 sim.standOut = .peek
-                sim.perform(.stretches)
-                sim.say(Lines.stretchTips.randomElement()!, duration: 8)
-                settle(after: 8)
+                sim.say(Lines.stretchHow, buttons: [Lines.warmupWithMe, Lines.onMyOwn])
+                buttonActions = [{ [weak self] in self?.startWarmup() }, { [weak self] in self?.stretchOnMyOwn() }]
             case .walk:
                 walking = true
                 sim.standOut = .out
@@ -266,6 +313,7 @@ final class BalanceController {
     /// The shade and the pause exist only while the engine shows stage 3–4. Every way out (rest, a promise,
     /// a call, an exit, a softer mode, a new day) ends here, even while a conversation holds the stage.
     private func syncEscalation() {
+        guard guidedRun == nil else { return }                 // the guided break owns the dark screen
         let shown = engine.state.episode.flatMap { $0.phase == .showing ? $0.stage : nil } ?? 0
         if shown < 3 || (shown == 3 && escalation.level == .pause) {
             if escalation.level != .none { escalation.lift() }
@@ -445,6 +493,168 @@ final class BalanceController {
         settle(after: 3)
     }
 
+    private func stretchOnMyOwn() {
+        sim.standOut = .peek
+        sim.perform(.stretches)
+        sim.say(Lines.stretchTips.randomElement()!, duration: 8)
+        settle(after: 8)
+    }
+
+    // MARK: Guided warm-up and walk (decisions 2026-10-05)
+
+    /// Entry points for the tray popup (slice 5a) and the voice tools.
+    func startWarmup() { startGuided(.warmup) }
+    func startWalk() { startGuided(.walk) }
+
+    /// A break asked for by voice: refused while another runs or while a pause it would not end is up.
+    func queueBreak(_ b: ChilkBreak) -> JSON {
+        if activity != nil || guidedRun != nil { return ["willStart": false, "reason": "another_break_in_progress"] }
+        if escalation.level == .pause, let need = engine.state.episode?.need {
+            let fits = (b == .warmup && need == .stretch) || (b == .walk && (need == .walk || need == .stretch))
+            if !fits { return ["willStart": false, "reason": "pause_in_progress"] }
+        }
+        pendingBreak = (b, Date())
+        log("break queued \(b)")
+        return ["willStartAfterReply": true]
+    }
+
+    private func startBreak(_ b: ChilkBreak) {
+        log("break from voice \(b)")
+        switch b {
+        case .eyeGym: startEyeGym()
+        case .warmup: startWarmup()
+        case .walk: startWalk()
+        case .breathe(let minutes): startBreathing(minutes: Double(minutes))
+        }
+    }
+
+    /// «Начать разминку» / «Иду гулять» on the pause.
+    private func startFromPause() {
+        guard let need = engine.state.episode?.need else { return }
+        if need == .stretch { startWarmup() } else if need == .walk { startWalk() }
+    }
+
+    private func startGuided(_ kind: GuidedKind) {
+        guard activity == nil, guidedRun == nil else { return }
+        let session: GuidedSession
+        var source: WarmupSource.Origin?
+        switch kind {
+        case .warmup:
+            var rng = SystemRandomNumberGenerator()
+            let taken: (steps: [Exercise], origin: WarmupSource.Origin) = warmups?.take()
+                ?? (Warmup.compose(from: Lines.warmupLibrary, using: &rng) ?? [], .library)
+            guard Warmup.isValid(taken.steps) else { return log("guided warmup unavailable") }
+            session = GuidedSession(.warmup(taken.steps), started: ProcessInfo.processInfo.systemUptime)
+            source = taken.origin
+        case .walk:
+            session = GuidedSession(.walk, started: ProcessInfo.processInfo.systemUptime)
+        }
+        let origin = engine.beginGuided(kind)
+        activity = .guided
+        buttonActions = []
+        settleTimer?.invalidate()
+        activityTimer?.invalidate()
+        sim.isSad = false
+        guidedRun = GuidedRun(session: session, kind: kind, origin: origin, idea: Lines.idea(hour: sim.hourOfDay), source: source)
+        escalation.guide(caption: kind == .warmup ? Lines.warmupCaption(step: 1, of: Warmup.stepCount) : Lines.walkCaption)
+        edge.raised = true
+        sim.standOut = .center
+        if kind == .walk { sim.wear(.hat); sim.wear(.backpack); sim.perform(.wave) }
+        sim.say(kind == .warmup ? Lines.warmupStart : Lines.walkCountdown(guidedRun!.idea, left: GuidedSession.clock(session.duration)),
+                duration: .infinity)
+        log("guided \(kind.rawValue) started origin=\(origin.rawValue) source=\(source?.rawValue ?? "-")")
+        guideTimer?.invalidate()
+        guideTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.guideTick() }
+        }
+        if let path = env["CHILK_DEMO_GUIDE_SNAPSHOT"] {
+            Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.escalation.snapshot(to: URL(fileURLWithPath: path), openForm: false) }
+            }
+        }
+        if let after = env["CHILK_DEMO_GUIDE_STOP"].flatMap(Double.init) {
+            Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.escalation.demoStopGuide() }
+            }
+        }
+    }
+
+    private func guideTick() {
+        guard var run = guidedRun else { return }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let now = run.session.started + (uptime - run.session.started) * guideScale
+        guard let step = run.session.step(at: now) else { return finishGuided() }
+        guard !isBusy() else { return }                        // a conversation has the bubble for now
+        switch run.session.kind {
+        case .warmup(let steps):
+            let exercise = steps[step.index]
+            if step.index != run.step {
+                run.step = step.index
+                run.lastMove = 0
+                escalation.guide(caption: Lines.warmupCaption(step: step.index + 1, of: steps.count))
+                log("guided step \(step.index + 1) \(exercise.kind.rawValue)/\(exercise.move.rawValue)")
+                if exercise.move == .breathe { sim.perform(.breathe(seconds: step.left / guideScale)) }
+                if exercise.move == .still { sim.stopAct() }
+            }
+            if [.stretch, .lookFar, .wave].contains(exercise.move), uptime - run.lastMove > 6 {
+                run.lastMove = uptime
+                sim.perform(exercise.move == .stretch ? .stretches : exercise.move == .lookFar ? .lookAway : .wave)
+            }
+            let elapsed = now - run.session.started
+            sim.updateBubble(step.index == 0 && elapsed < 4 ? Lines.warmupStart
+                             : Lines.warmupStep(exercise.text, left: GuidedSession.clock(step.left)))
+        case .walk:
+            sim.updateBubble(Lines.walkCountdown(run.idea, left: GuidedSession.clock(step.left)))
+        }
+        guidedRun = run
+    }
+
+    private func finishGuided() {
+        guard let run = guidedRun else { return }
+        guideTimer?.invalidate()
+        guidedRun = nil
+        activity = nil
+        let events = engine.finishGuided(run.session)
+        save()
+        log("guided \(run.kind.rawValue) finished: \(events)")
+        if run.kind == .warmup { warmups?.prepareIfNeeded() }          // the next one, written ahead
+        endGuideScreen(walk: run.kind == .walk)
+        sim.say(run.kind == .warmup ? Lines.warmupDone : Lines.walkDone, duration: 4)
+        syncEscalation()
+        settle(after: 4, takeOffProps: true)
+        Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resume() }      // another need's request, if one is waiting
+        }
+    }
+
+    /// «Прервать»: free when the user asked; after «Иду» a broken promise; from the pause, back to it.
+    private func stopGuided() {
+        guard let run = guidedRun else { return }
+        guideTimer?.invalidate()
+        guidedRun = nil
+        activity = nil
+        let events = engine.interruptGuided()
+        save()
+        log("guided \(run.kind.rawValue) interrupted origin=\(run.origin.rawValue) events=\(events)")
+        if case .warmup(let steps) = run.session.kind, let source = run.source { warmups?.giveBack(steps, origin: source) }
+        endGuideScreen(walk: run.kind == .walk)
+        if events.isEmpty {
+            sim.say(Lines.guideStopped, duration: 3)
+            settle(after: 3, takeOffProps: true)
+        } else {
+            apply(events)
+            syncEscalation()
+        }
+    }
+
+    private func endGuideScreen(walk: Bool) {
+        escalation.lift()
+        edge.raised = false
+        sim.stopAct()
+        if walk { tidyProps() }
+        sim.standOut = .peek
+    }
+
     func drankWater() {
         let events = engine.state.episode?.need == .water ? engine.handle(.done) : engine.tookRest(.water)
         if events.isEmpty { return }
@@ -466,7 +676,7 @@ final class BalanceController {
     /// An explicit timer outranks balance prompts (they come back after it); it only waits for an exercise
     /// in progress and an unlocked screen. Conversations are checked by `Actions` itself.
     var canPresentScheduledNotice: Bool {
-        activity == nil && lastSignals?.locked != true && escalation.level == .none
+        activity == nil && guidedRun == nil && lastSignals?.locked != true && escalation.level == .none
     }
 
     // MARK: Manual testing (Dock «Проверка»)

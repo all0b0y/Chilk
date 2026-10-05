@@ -9,15 +9,17 @@ public final class ChilkToolExecutor {
     private let status: () -> JSON
     private let water: () throws -> JSON
     private let mode: (BalanceMode) -> JSON
+    private let breaks: (ChilkBreak) -> JSON
     public var entries: [LocalTimers.Entry] { store.timers.entries }
     public var ready: [LocalTimers.Entry] { store.timers.ready }
 
     public init(file: URL, now: @escaping @Sendable () -> Date = { Date() },
                 status: @escaping () -> JSON = { [:] },
                 water: @escaping () throws -> JSON = { ["credited": false] },
-                mode: @escaping (BalanceMode) -> JSON = { _ in ["changed": false] }) throws {
+                mode: @escaping (BalanceMode) -> JSON = { _ in ["changed": false] },
+                breaks: @escaping (ChilkBreak) -> JSON = { _ in ["started": false] }) throws {
         store = try LocalTimerStore(file: file)
-        self.now = now; self.status = status; self.water = water; self.mode = mode
+        self.now = now; self.status = status; self.water = water; self.mode = mode; self.breaks = breaks
     }
 
     public func execute(name: String, arguments: JSON) -> CodexToolResult {
@@ -31,6 +33,7 @@ public final class ChilkToolExecutor {
             case .status: return .ok(status())
             case .water: return .ok(try water())
             case .mode(let m): return .ok(mode(m))
+            case .takeBreak(let b): return .ok(breaks(b))
             case .timers: return .ok(["timers": .array(entries.map(Self.describe))])
             case .cancel(let id): return .ok(["cancelled": .bool(try store.cancel(id: id))])
             case .timer(let seconds, let title):

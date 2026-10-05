@@ -40,7 +40,7 @@ struct ChilkToolExecutorTests {
     }
 
     @Test func theRegisteredCatalogMatchesTheSupportedActions() {
-        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_mode"])
+        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_mode", "chilk_eye_gym", "chilk_warmup", "chilk_breathe", "chilk_walk"])
         #expect(ChilkToolCatalog.tools.allSatisfy { $0.inputSchema["additionalProperties"]?.bool == false })
     }
 
@@ -58,5 +58,24 @@ struct ChilkToolExecutorTests {
         #expect(e.execute(name: "chilk_mode", arguments: ["mode": "strict"]).value["changed"]?.bool == true)
         #expect(e.execute(name: "chilk_mode", arguments: ["mode": "soft"]).value["refused"]?.string == "escalation")
         #expect(asked == [.strict, .soft])
+    }
+
+    /// Decisions 2026-10-05: the four breaks by voice reach the app callback; breathing is 1 or 3 minutes.
+    @Test func breaksByVoiceReachTheAppAndBreathingIsOneOrThreeMinutes() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var asked: [ChilkBreak] = []
+        let executor = try ChilkToolExecutor(file: dir.appendingPathComponent("timers.json"),
+                                             breaks: { asked.append($0); return ["willStartAfterReply": true] })
+        for name in ["chilk_eye_gym", "chilk_warmup", "chilk_walk"] {
+            #expect(executor.execute(name: name, arguments: [:]).value["willStartAfterReply"]?.bool == true)
+        }
+        #expect(executor.execute(name: "chilk_breathe", arguments: ["minutes": 3]).success)
+        #expect(asked == [.eyeGym, .warmup, .walk, .breathe(minutes: 3)])
+        for bad: JSON in [["minutes": 2], ["minutes": "1"], [:], ["minutes": 1, "x": 1]] {
+            #expect(!executor.execute(name: "chilk_breathe", arguments: bad).success)
+        }
+        #expect(!executor.execute(name: "chilk_warmup", arguments: ["minutes": 5]).success)
+        #expect(asked.count == 4)
     }
 }

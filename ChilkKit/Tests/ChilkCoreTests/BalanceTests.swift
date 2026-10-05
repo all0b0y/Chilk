@@ -496,3 +496,66 @@ struct BalanceStrictTests {
         #expect(late.engine.state.history.map(\.key) == ["2026-10-05"])
     }
 }
+
+@Suite("Balance: guided warm-up and walk (decisions 2026-10-05)")
+@MainActor
+struct BalanceGuidedTests {
+    let warmup = GuidedSession(.warmup(WarmupTests.sample), started: 0)
+
+    @Test func aFinishedWarmupCountsOnlyStretchAndEndsTheRequest() {
+        let d = Day(only(.stretch))
+        d.work(minutes: 76)
+        d.react(.going)
+        #expect(d.engine.beginGuided(.warmup) == .request)
+        let credits = d.engine.finishGuided(warmup)
+        #expect(credits == [.credited(.stretch, byRest: true, endedEpisode: true)])
+        #expect(d.engine.state.episode == nil && d.engine.guided == nil)
+        #expect(d.engine.state.needs[.eyes]?.lastCredit == nil)                      // «2»: not the eyes
+    }
+
+    @Test func theEngineStandsStillDuringAGuidedBreakNoSittingNoBrokenPromise() {
+        let d = Day(only(.stretch))
+        d.work(minutes: 76)
+        d.react(.going)
+        d.engine.beginGuided(.warmup)
+        let sitting = d.engine.state.needs[.stretch]?.sitting
+        #expect(d.work(minutes: 5).isEmpty)                         // typing on a dark screen: no 90-second rule
+        #expect(d.engine.state.needs[.stretch]?.sitting == sitting)
+        #expect(d.engine.state.episode?.phase == .promised)
+    }
+
+    @Test func interruptingAfterGoingIsABrokenPromiseAndCostsAStep() {
+        let d = Day(only(.stretch))
+        d.work(minutes: 76)
+        let stage = d.engine.state.episode?.stage ?? 0
+        d.react(.going)
+        d.engine.beginGuided(.warmup)
+        let events = d.engine.interruptGuided()
+        #expect(events.first?.askStage == min(stage + 1, 2))
+        #expect(events.first?.askAgain == true)
+        #expect(d.engine.state.needs[.stretch]?.lastCredit == nil)
+    }
+
+    @Test func aWarmupTheUserAskedForCostsNothingWhenInterrupted() {
+        let d = Day(only(.stretch))
+        d.work(minutes: 5)
+        #expect(d.engine.beginGuided(.warmup) == .voluntary)
+        #expect(d.engine.interruptGuided().isEmpty)
+        #expect(d.engine.state.episode == nil)
+    }
+
+    @Test func fromThePauseInterruptBringsThePauseBackAndAFinishedWalkLiftsItAndRefillsExits() {
+        let d = Day(only(.stretch))
+        d.climb(to: 4)
+        #expect(d.engine.beginGuided(.warmup) == .pause)
+        #expect(d.engine.interruptGuided().first?.askStage == 4)
+        #expect(d.engine.state.episode?.stage == 4)
+
+        d.engine.beginGuided(.walk)
+        let credits = d.engine.finishGuided(GuidedSession(.walk, started: 0))
+        let needs: [Need] = credits.compactMap { if case .credited(let n, _, _) = $0 { return n } else { return nil } }
+        #expect(Set(needs) == Set([Need.walk, .stretch, .eyes]))
+        #expect(d.engine.state.episode == nil)
+        #expect(d.engine.state.exitsLeft == d.engine.config.emergencyExits)
+    }
+}
