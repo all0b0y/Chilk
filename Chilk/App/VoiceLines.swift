@@ -10,6 +10,9 @@ extension Lines {
     static let more = String(localized: "Подробнее")
     static let noMicrophone = String(localized: "Мне нужен микрофон: Настройки → Конфиденциальность → Микрофон → Чилк")
     static let earsFailed = String(localized: "Уши барахлят 😕 Не получилось включить распознавание речи")
+    @MainActor static var earsBroken: String {
+        String(localized: "Слух сломался 😕 Нажми \(Hotkey.defaultKey.label) или включи уши заново в Dock")
+    }
     static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Меню Dock → «Войти в Codex»")
     static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕")
     static let brainFailed = String(localized: "Codex сейчас не отвечает 😕 Попробуй чуть позже")

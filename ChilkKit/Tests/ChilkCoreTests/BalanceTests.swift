@@ -162,16 +162,18 @@ struct BalanceTests {
         #expect(credits[0].t - d.timeline.first { $0.e == .promised(.stretch) }!.t >= 180)
     }
 
-    @Test func aBrokenPromiseIsNoticedAfter90SecondsOfWork() {
+    @Test func aBrokenPromiseIsNoticedAfter90SecondsOfWorkAndCostsAStep() {
         let d = Day(only(.stretch))
         d.work(minutes: 76)
+        let before = d.engine.state.episode?.stage ?? 0
         d.react(.going)
-        let ev = d.work(minutes: 2)
-        #expect(ev.count == 1)
-        #expect(ev[0].askAgain)
+        let asks = d.work(minutes: 2).filter { $0.askStage != nil }
+        #expect(asks.count == 1)
+        #expect(asks[0].askAgain)
+        #expect(asks[0].askStage == min(before + 1, 2))
     }
 
-    @Test func snoozeIsLimitedToTwiceInARow() {
+    @Test func twoDeferralsPerRequestBothButtonsTogetherAndTheLadderKeepsItsStage() {
         let d = Day(only(.water))
         d.work(until: .hint(.water))
         let ask = d.engine.pokedDuringHint()
@@ -179,21 +181,44 @@ struct BalanceTests {
         #expect(d.react(.snooze) == [.snoozed(.water)])
         #expect(d.work(minutes: 9.5).isEmpty)                          // quiet for 10 minutes
         let second = d.work(minutes: 1.5)
-        #expect(second.first?.askStage == 1)                           // back straight at the bubble
-        d.react(.snooze)
-        let third = d.work(minutes: 11)
-        #expect(third.first?.askButtons == [.done, .busy])             // no third «Через 10 мин»
+        #expect(second.first?.askStage == 1)                           // back where it was, not lower
+        #expect(d.engine.deferBusy(minutes: 15) == [.deferred(.water, minutes: 15)])
+        let third = d.work(minutes: 16)
+        #expect(third.first?.askStage == 2)                            // «Я занят»: back insisting
+        #expect(third.first?.askButtons == [.done])                    // two deferrals spent: only «Попил»
+        #expect(d.react(.snooze).isEmpty && d.engine.deferBusy(minutes: 15).isEmpty)
+        #expect(d.engine.state.episode?.need == .water)
+
+        #expect(d.react(.done) == [.credited(.water, byRest: false, endedEpisode: true)])   // a real rest resets
+        #expect(d.engine.buttons(for: .water) == [.done, .snooze, .busy])
     }
 
-    @Test func busyDefersFifteenMinutesWithADebtAndComesBackInsisting() {
+    @Test func busyAsksForHowLongOnceAndComesBackInsisting() {
         let d = Day(only(.water))
         d.work(minutes: 71)
-        #expect(d.react(.busy) == [.deferred(.water)])
-        #expect(d.work(minutes: 14.5).isEmpty)
+        #expect(d.engine.deferBusy(minutes: 20).isEmpty)                // only 15 / 30 / 60
+        #expect(d.engine.deferBusy(minutes: 60) == [.deferred(.water, minutes: 60)])
+        #expect(d.work(minutes: 59.5).isEmpty)
         let back = d.work(minutes: 1.5)
         #expect(back.first?.askStage == 2)
+        #expect(back.first?.askButtons == [.done, .snooze])            // «Я занят» is once per request
         #expect(back.contains(.bounceDock))
-        #expect(d.engine.pressure(.water) > 1)                         // the debt: pressure was not reset
+        #expect(d.engine.pressure(.water) > 1)                         // a deferral is not a rest
+        #expect(d.engine.deferBusy(minutes: 15).isEmpty)
+    }
+
+    @Test func waterOnTheWordCountsAtMostOnceIn20Minutes() {
+        let d = Day(only(.water))
+        #expect(d.engine.tookRest(.water) == [.credited(.water, byRest: false, endedEpisode: false)])
+        d.work(minutes: 10)
+        #expect(d.engine.tookRest(.water) == [.tooSoon(.water)])
+        d.work(minutes: 10.5)
+        #expect(d.engine.tookRest(.water) == [.credited(.water, byRest: false, endedEpisode: false)])
+    }
+
+    @Test func anOldNeedTrackKeepsItsSnoozesAsDeferrals() throws {
+        let old = try JSONDecoder().decode(NeedTrack.self, from: Data(#"{"sitting":5,"threshold":3000,"debt":false,"snoozesInRow":1,"quietUntil":0}"#.utf8))
+        #expect(old.deferrals == 1 && old.threshold == 3000 && !old.busyUsed && old.resumeStage == 0)
     }
 
     @Test func walkCountsAfterFifteenMinutesAwayOrLockedButNotDuringCallsOrVideo() {
@@ -222,6 +247,7 @@ struct BalanceTests {
         let d = Day { c in
             only(.water)(&c)
             c.waterMinutes = 1...1.5
+            c.waterMinGap = 0                                          // this test is about the budget only
         }
         for _ in 0..<120 {
             if d.work(minutes: 1).contains(where: { $0 == .hint(.water) }) { d.react(.done) }
@@ -411,6 +437,22 @@ struct BalanceStrictTests {
         #expect(d.work(minutes: 14.5).isEmpty)                              // let go: nothing at all
         d.work(minutes: 5)
         #expect(d.timeline.last { $0.e.askStage != nil }?.e.askStage == 2)  // back at «настаивает» (the debt)
+    }
+
+    @Test func aDeferralOnStage3ComesBackOnStage3AndBrokenPromisesClimbToThePause() {
+        let d = Day(only(.stretch))
+        d.climb(to: 3)
+        #expect(d.react(.snooze) == [.snoozed(.stretch)])
+        d.work(minutes: 11)
+        #expect(d.timeline.last { $0.e.askStage != nil }?.e.askStage == 3)
+
+        let p = Day(only(.stretch))
+        p.climb(to: 1)
+        for expected in [2, 3, 4] {
+            p.react(.going)
+            let back = p.work(minutes: 1.6).compactMap(\.askStage)
+            #expect(back == [expected])                                // «Иду» and keep working → one step up
+        }
     }
 
     @Test func withNoExitsLeftTheButtonIsHeldAndAWalkRefillsThem() throws {

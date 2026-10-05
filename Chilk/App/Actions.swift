@@ -42,8 +42,9 @@ final class Actions {
                             "mode": .string(balance.mode.rawValue)]
                 }, water: { [weak balance] in
                     guard let balance else { throw CodexClient.ClientError.notStarted }
-                    try balance.creditWaterFromVoice()
-                    return ["credited": true]
+                    return try balance.creditWaterFromVoice()
+                        ? ["credited": true]
+                        : ["credited": false, "reason": "less_than_20_minutes_since_last_glass"]
                 }, mode: { [weak balance] mode in
                     guard let balance else { return ["changed": false] }
                     // The conversation owns the stage: the change is applied and saved, he says it himself.

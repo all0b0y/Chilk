@@ -83,9 +83,9 @@ public enum Reaction: String, Codable, Sendable {
     case done
     /// «Иду» / «Заканчиваю» / «Давай гимнастику» — counted once the rest really happens.
     case going
-    /// «Через 10 мин» — at most twice in a row.
+    /// «Через 10 мин»: same stage in 10 minutes. Counts towards the deferral limit.
     case snooze
-    /// «Я занят» — deferred with a debt: next time he starts at «настаивает».
+    /// «Я занят»: once per request, 15/30/60 minutes (the app asks), back at «настаивает» or higher.
     case busy
 }
 
@@ -101,7 +101,9 @@ public enum BalanceEvent: Equatable, Sendable {
     case promised(Need)
     case credited(Need, byRest: Bool, endedEpisode: Bool)
     case snoozed(Need)
-    case deferred(Need)
+    case deferred(Need, minutes: Int)
+    /// «Попил» too soon after the last glass (decision 2026-10-05): not counted, the request stays.
+    case tooSoon(Need)
     /// Emergency exit taken: no interventions for `minutes`; the need comes back at «настаивает».
     case released(Need, minutes: Int)
     /// Mood channel: time for a joke or a bigger antic.
@@ -122,8 +124,12 @@ public struct BalanceConfig: Sendable, Equatable {
     /// Seconds of continued work without a reaction before the next ladder stage.
     public var nextStageAfter = 300.0...600.0
     public var snooze: TimeInterval = 10 * 60
-    public var maxSnoozesInRow = 2
-    public var busyDefer: TimeInterval = 15 * 60
+    /// Deferrals («Через 10 мин» + «Я занят» together) per request; only a counted rest resets them (2026-10-05).
+    public var maxDeferrals = 2
+    /// «Через сколько вернуться?» after «Я занят»; the default is the first.
+    public var busyMinutes = [15, 30, 60]
+    /// Water on the user's word at most this often.
+    public var waterMinGap: TimeInterval = 20 * 60
     /// Interventions (new episodes + mood) per sliding hour.
     public var budgetPerHour = 4
     /// Gap between mood moments: ≈ 2–3 per hour, never closer than the lower bound.
@@ -165,13 +171,38 @@ public struct NeedTrack: Codable, Sendable, Equatable {
     /// Seconds sat since the last rest.
     public var sitting: TimeInterval = 0
     public var threshold: TimeInterval
-    /// Deferred with «Я занят»: next episode starts at «настаивает».
+    /// After «Заканчиваю» and after an emergency exit: the next episode starts at «настаивает».
     public var debt = false
-    public var snoozesInRow = 0
+    /// Deferrals of the current request («Через 10 мин» + «Я занят»); only a counted rest resets them.
+    public var deferrals = 0
+    /// «Я занят» is once per request.
+    public var busyUsed = false
+    /// A deferral pauses the ladder: the request comes back at this stage.
+    public var resumeStage = 0
     /// No new episode before this engine-clock time.
     public var quietUntil: TimeInterval = 0
     /// Due since (engine clock), waiting for a convenient moment.
     public var pendingSince: TimeInterval?
+    /// Engine clock of the last counted rest (water on the word: not again within `waterMinGap`).
+    public var lastCredit: TimeInterval?
+
+    public init(threshold: TimeInterval) { self.threshold = threshold }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        threshold = try c.decodeIfPresent(TimeInterval.self, forKey: .threshold) ?? 0
+        sitting = try c.decodeIfPresent(TimeInterval.self, forKey: .sitting) ?? 0
+        debt = try c.decodeIfPresent(Bool.self, forKey: .debt) ?? false
+        deferrals = try c.decodeIfPresent(Int.self, forKey: .deferrals)
+            ?? (try? decoder.container(keyedBy: Legacy.self).decodeIfPresent(Int.self, forKey: .snoozesInRow)) ?? 0
+        busyUsed = try c.decodeIfPresent(Bool.self, forKey: .busyUsed) ?? false
+        resumeStage = try c.decodeIfPresent(Int.self, forKey: .resumeStage) ?? 0
+        quietUntil = try c.decodeIfPresent(TimeInterval.self, forKey: .quietUntil) ?? 0
+        pendingSince = try c.decodeIfPresent(TimeInterval.self, forKey: .pendingSince)
+        lastCredit = try c.decodeIfPresent(TimeInterval.self, forKey: .lastCredit)
+    }
+
+    private enum Legacy: String, CodingKey { case snoozesInRow }
 }
 
 public struct Episode: Codable, Sendable, Equatable {
@@ -313,8 +344,11 @@ public final class BalanceEngine {
     public func buttons(for n: Need, stage: Int = 1) -> [Reaction] {
         guard stage < 4 else { return [] }
         var b: [Reaction] = [n.restsOnWord && n != .eyes ? .done : .going]
-        if (state.needs[n]?.snoozesInRow ?? 0) < config.maxSnoozesInRow { b.append(.snooze) }
-        b.append(.busy)
+        let t = state.needs[n]
+        if (t?.deferrals ?? 0) < config.maxDeferrals {
+            b.append(.snooze)
+            if t?.busyUsed != true { b.append(.busy) }
+        }
         return b
     }
 
@@ -382,8 +416,12 @@ public final class BalanceEngine {
                     if e.promiseWork >= config.promiseGrace {
                         e.phase = .showing
                         e.promiseWork = 0
-                        e.stage = max(e.stage, min(1, cap(e.need)))     // a broken promise is never just a mime
+                        // A broken promise costs a step (2026-10-05): «Иду» is not a free 90-second snooze.
+                        e.stage = max(min(e.stage + 1, cap(e.need)), min(1, cap(e.need)))
+                        e.workOnStage = 0
+                        e.nextAfter = nextStageDelay()
                         out.append(stageEvent(e, again: true))
+                        if e.stage >= 2 { out.append(.bounceDock); e.sinceBounce = 0 }
                     }
                 case .showing:
                     e.workOnStage += sat
@@ -423,33 +461,46 @@ public final class BalanceEngine {
     }
 
     public func handle(_ r: Reaction) -> [BalanceEvent] {
+        r == .busy ? deferBusy(minutes: config.busyMinutes[0]) : react(r)
+    }
+
+    /// «Я занят» → «Через сколько вернуться?» → this (15/30/60). Once per request, inside the deferral limit.
+    public func deferBusy(minutes: Int) -> [BalanceEvent] {
+        guard let e = state.episode, e.stage < 4, var t = state.needs[e.need], !t.busyUsed,
+              t.deferrals < config.maxDeferrals, config.busyMinutes.contains(minutes) else { return [] }
+        t.deferrals += 1
+        t.busyUsed = true
+        t.resumeStage = max(e.stage, min(2, cap(e.need)))           // back at «настаивает» or higher
+        t.quietUntil = state.clock + Double(minutes) * 60
+        state.needs[e.need] = t
+        state.episode = nil
+        state.day.busy += 1
+        return [.deferred(e.need, minutes: minutes)]
+    }
+
+    private func react(_ r: Reaction) -> [BalanceEvent] {
         var out: [BalanceEvent] = []
         guard var e = state.episode, e.stage < 4 else { return out }       // the pause has no buttons
         let n = e.need
         switch r {
         case .done where n.restsOnWord:
-            credit(n, byRest: false, into: &out)
+            creditOnWord(n, into: &out)
         case .done, .going:
             e.phase = .promised
             e.promiseWork = 0
             state.episode = e
             out.append(.promised(n))
         case .snooze:
-            guard (state.needs[n]?.snoozesInRow ?? 0) < config.maxSnoozesInRow else { return out }
-            let until = state.clock + config.snooze
-            state.needs[n]?.snoozesInRow += 1
-            state.needs[n]?.quietUntil = until
+            guard var t = state.needs[n], t.deferrals < config.maxDeferrals else { return out }
+            t.deferrals += 1
+            t.resumeStage = max(t.resumeStage, e.stage)               // the ladder pauses, it does not reset
+            t.quietUntil = state.clock + config.snooze
+            state.needs[n] = t
             state.episode = nil
             state.day.snoozes += 1
             out.append(.snoozed(n))
         case .busy:
-            state.needs[n]?.debt = true
-            let until = state.clock + config.busyDefer
-            state.needs[n]?.snoozesInRow = 0
-            state.needs[n]?.quietUntil = until
-            state.episode = nil
-            state.day.busy += 1
-            out.append(.deferred(n))
+            break                                                      // `deferBusy(minutes:)`
         }
         return out
     }
@@ -484,7 +535,6 @@ public final class BalanceEngine {
         state.day.exits.append(EmergencyExit(at: now, need: e.need, minutes: minutes,
                                              reason: String(reason.prefix(200)), held: spent))
         state.needs[e.need]?.debt = true
-        state.needs[e.need]?.snoozesInRow = 0
         state.needs[e.need]?.pendingSince = nil
         state.releasedUntil = state.clock + Double(minutes) * 60
         state.episode = nil
@@ -495,7 +545,7 @@ public final class BalanceEngine {
     public func tookRest(_ n: Need) -> [BalanceEvent] {
         guard n.restsOnWord else { return [] }
         var out: [BalanceEvent] = []
-        credit(n, byRest: false, into: &out)
+        creditOnWord(n, into: &out)
         return out
     }
 
@@ -574,7 +624,7 @@ public final class BalanceEngine {
 
     private func start(_ n: Need, into out: inout [BalanceEvent]) {
         guard let t = state.needs[n] else { return }
-        let stage = min(t.debt ? 2 : (t.snoozesInRow > 0 ? 1 : 0), cap(n))
+        let stage = min(max(t.resumeStage, t.debt ? 2 : 0), cap(n))
         let e = Episode(need: n, stage: stage, phase: .showing, nextAfter: nextStageDelay())
         state.episode = e
         state.needs[n]?.pendingSince = nil
@@ -594,11 +644,23 @@ public final class BalanceEngine {
         }
     }
 
+    /// Water and eyes on the user's word; water not again within `waterMinGap` («Ты же только что пил»).
+    private func creditOnWord(_ n: Need, into out: inout [BalanceEvent]) {
+        if n == .water, let last = state.needs[n]?.lastCredit, state.clock - last < config.waterMinGap {
+            out.append(.tooSoon(n))
+            return
+        }
+        credit(n, byRest: false, into: &out)
+    }
+
     private func credit(_ n: Need, byRest: Bool, into out: inout [BalanceEvent]) {
         var t = state.needs[n] ?? NeedTrack(threshold: threshold(n))
         t.sitting = 0
         t.threshold = threshold(n)
-        t.snoozesInRow = 0
+        t.deferrals = 0
+        t.busyUsed = false
+        t.resumeStage = 0
+        t.lastCredit = state.clock
         t.pendingSince = nil
         if n == .endOfDay {
             // Finished for today: quiet for a while, then work apps meet him at «настаивает» right away.

@@ -29,6 +29,11 @@ final class Ears {
     private var checkCount = 0
     private var dictating = false
     private var passive = PassiveEarsPolicy()
+    private var recovery = EarsRecovery()
+    private var retryTimer: Timer?
+    private let journal = EarsJournal()
+    /// Acceptance runs only: CHILK_EARS_FAIL=n — the first n microphone starts break 3 s later.
+    private var injectedFailures = ProcessInfo.processInfo.environment["CHILK_EARS_FAIL"].flatMap(Int.init) ?? 0
     private let demo = ProcessInfo.processInfo.environment["CHILK_WAKE_FILE"].map { URL(fileURLWithPath: $0) }
 
     init() {
@@ -37,13 +42,18 @@ final class Ears {
         // Bench 3c (2026-10-05): speech that arrives while a phrase is being checked is checked next, so a TV or a
         // podcast that never pauses no longer leaves him deaf after the first phrase.
         input = VoiceInput(recognize: { try await model.recognize($0) }, gate: WakeAudioGate(continuous: true))
-        input.onCheck = { [weak self] _, hit, seconds in
+        // CHILK_WAKE_TEXT=1 (diagnosis with synthetic speech only): what Whisper heard goes to the debug log —
+        // never to the journal, never by default.
+        let showText = ProcessInfo.processInfo.environment["CHILK_WAKE_TEXT"] != nil
+        input.onCheck = { [weak self] text, hit, seconds in
             guard let self else { return }
             self.checkCount += 1
             // Only event/cost; never the background transcript.
-            self.log(String(format: "wake check %d hit=%@ %.2f s", self.checkCount, hit ? "yes" : "no", seconds))
+            self.note(String(format: "wake check %d hit=%@ %.2f s", self.checkCount, hit ? "yes" : "no", seconds))
+            if showText { self.log("wake text «\(text)»") }
         }
         input.onError = { [weak self] error in self?.fail(error) }
+        note("ears \(enabled ? "on" : "off") at launch")
     }
 
     func start() { if enabled { prepare() } }
@@ -51,11 +61,13 @@ final class Ears {
     func toggle() {
         enabled.toggle()
         if demo == nil { UserDefaults.standard.set(enabled, forKey: "wakeEarsEnabled") }
+        retryTimer?.invalidate()
+        recovery.reset()
+        note(enabled ? "ears turned on" : "ears turned off")
         if enabled { passive.retry(); prepare() }
         else {
-            stopCapture()
+            stopCapture(because: "turned off")
             status = String(localized: "Уши выключены")
-            log("ears disabled; microphone closed")
             onDisabled?()
         }
     }
@@ -76,7 +88,7 @@ final class Ears {
                 }
                 ready = true
                 preparation = nil
-                log("wake model ready")
+                note("wake model ready")
                 startPassive()
             } catch {
                 preparation = nil
@@ -103,7 +115,7 @@ final class Ears {
         guard enabled, ready, !dictating, passive.allowed else { return }
         input.arm { [weak self] in
             guard let self, self.enabled, !self.dictating, self.passive.allowed else { return }
-            self.log("wake accepted")
+            self.note("wake accepted")
             self.onWake?()
         }
         status = String(localized: "Уши включены: «Чилк» / «Эй, Чилк»")
@@ -137,13 +149,14 @@ final class Ears {
     func stopListening() {
         passive.pause()
         dictating = false
-        stopCapture()
+        stopCapture(because: "answering")
         if enabled { status = String(localized: "Уши на паузе: Чилк отвечает") }
     }
 
-    func shutdown() { passive.pause(); stopCapture() }
+    func shutdown() { passive.pause(); retryTimer?.invalidate(); stopCapture(because: "quit") }
 
-    private func stopCapture() {
+    private func stopCapture(because reason: String) {
+        if capturing { note("capture stopped (\(reason))") }
         captureGeneration += 1
         passiveStart?.cancel()
         capture?.cancel()
@@ -171,7 +184,7 @@ final class Ears {
                     try? await Task.sleep(for: .milliseconds(40))
                 }
             }
-            log("capture started (file)")
+            started("file")
             return
         }
         guard await Microphone.requestAccess() else { throw EarsError.microphoneDenied }
@@ -200,18 +213,65 @@ final class Ears {
             }
             continuation.finish()
         }
-        log("capture started (microphone)")
+        started("microphone")
     }
 
+    private func started(_ source: String) {
+        let now = ProcessInfo.processInfo.systemUptime
+        recovery.started(at: now)
+        note("capture started (\(source))")
+        if injectedFailures > 0 {
+            injectedFailures -= 1
+            let generation = captureGeneration
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.capturing, self.captureGeneration == generation else { return }
+                    self.fail(EarsError.assets("injected failure (CHILK_EARS_FAIL)"))
+                }
+            }
+        }
+    }
+
+    /// Decision 2026-10-05: restart quietly after 2 / 10 / 60 s; the 4th failure in a row is said out loud.
+    /// Denied microphone access is never retried — only the user can change it.
     private func fail(_ error: Error) {
         passive.fail()
-        stopCapture()
+        stopCapture(because: "error")
         dictating = false
-        status = String(localized: "Уши недоступны — попробуй выключить и включить их")
-        log("ears error: \(error)")
-        if case EarsError.microphoneDenied = error { notice(Lines.noMicrophone) }
-        else { notice(Lines.earsFailed) }
+        note("ears error: \(error)")
+        retryTimer?.invalidate()
+        if case EarsError.microphoneDenied = error {
+            status = String(localized: "Нет доступа к микрофону")
+            notice(Lines.noMicrophone)
+            onError?()
+            return
+        }
+        switch recovery.failed(at: ProcessInfo.processInfo.systemUptime) {
+        case .retry(let after):
+            status = String(localized: "Уши: перезапускаю…")
+            note(String(format: "retry %d in %.0f s", recovery.attempts, after))
+            retryTimer = Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.retry() }
+            }
+        case .giveUp:
+            status = String(localized: "Уши недоступны — выключи и включи их")
+            note("gave up after \(EarsRecovery.delays.count) restarts")
+            notice(Lines.earsBroken)
+        }
         onError?()
+    }
+
+    private func retry() {
+        guard enabled else { return }
+        passive.retry()
+        note("retrying")
+        if ready { startPassive() } else { prepare() }
+    }
+
+    /// Ears events go to the always-on local journal (no audio, no words) and to the debug log.
+    private func note(_ line: String) {
+        journal.write(line)
+        log(line)
     }
 
     private enum AudioPacket: Sendable { case audio([Float], Float, TimeInterval), failed }
@@ -220,5 +280,35 @@ final class Ears {
         private var flag = false
         func set() { lock.withLock { flag = true } }
         var value: Bool { lock.withLock { flag } }
+    }
+}
+
+/// `ears.log` next to the app state: events and error codes only — never audio or recognised words. ~1 MB at
+/// most (one previous file is kept as ears.1.log).
+@MainActor
+final class EarsJournal {
+    private let url = AppState.directory.appendingPathComponent("ears.log")
+    private let limit = 512 * 1024
+    private let stamp: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withFullDate, .withTime, .withColonSeparatorInTime, .withDashSeparatorInDate]
+        f.timeZone = .current
+        return f
+    }()
+
+    func write(_ line: String) {
+        let data = Data("\(stamp.string(from: Date())) \(line)\n".utf8)
+        let fm = FileManager.default
+        if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > limit {
+            let old = url.deletingLastPathComponent().appendingPathComponent("ears.1.log")
+            try? fm.removeItem(at: old)
+            try? fm.moveItem(at: url, to: old)
+        }
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: url)
+        }
     }
 }

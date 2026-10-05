@@ -196,10 +196,14 @@ extension Lines {
         String(localized: "Договорились. Но я засёк время"),
     ]
 
-    static let deferred: [String] = [
-        String(localized: "Понял, ты занят. Вернусь через 15 минут"),
-        String(localized: "Хорошо, не мешаю. Но долг записан 📒"),
-    ]
+    static let busyHowLong = String(localized: "Понял. Через сколько вернуться?")
+
+    static func deferred(_ minutes: Int) -> String {
+        [String(localized: "Хорошо, вернусь через \(minutes) мин"),
+         String(localized: "Не мешаю. Через \(minutes) мин я снова тут 📒")].randomElement()!
+    }
+
+    static let tooSoonWater = String(localized: "Ты же только что пил 🙂 Засчитаю чуть позже")
 
     static let jokes: [String] = [
         String(localized: "Знаешь, почему у меня листик? Я расту над собой 🌱"),

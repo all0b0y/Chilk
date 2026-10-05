@@ -143,12 +143,12 @@ final class BalanceController {
                 }
             case 3:
                 sim.say(again ? Lines.ask(n, stage: stage, again: true) : Lines.disturb(n), buttons: buttons.map { Lines.button($0, for: n) })
-                buttonActions = buttons.map { r in { [weak self] in self?.react(r) } }
+                buttonActions = buttons.map { action(for: $0, need: n) }
                 edge.raised = false
                 escalation.dim()
             default:
                 sim.say(Lines.ask(n, stage: stage, again: again), buttons: buttons.map { Lines.button($0, for: n) })
-                buttonActions = buttons.map { r in { [weak self] in self?.react(r) } }
+                buttonActions = buttons.map { action(for: $0, need: n) }
             }
 
         case .bounceDock:
@@ -205,10 +205,17 @@ final class BalanceController {
             sim.say(Lines.snoozed.randomElement()!, duration: 2.8)
             settle(after: 2.8, takeOffProps: true)
 
-        case .deferred:
+        case .deferred(_, let minutes):
             buttonActions = []
-            sim.say(Lines.deferred.randomElement()!, duration: 3)
+            sim.say(Lines.deferred(minutes), duration: 3)
             settle(after: 3, takeOffProps: true)
+
+        case .tooSoon:
+            // Not counted: say so, then the request (if any) comes back as it was.
+            sim.say(Lines.tooSoonWater, duration: 3)
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resume() }
+            }
 
         case .released(_, let minutes):
             buttonActions = []
@@ -237,6 +244,23 @@ final class BalanceController {
     private func react(_ r: Reaction) {
         apply(engine.handle(r))
         syncEscalation()
+    }
+
+    /// «Я занят» first asks «Через сколько вернуться?» (15 / 30 / 60 мин, decision 2026-10-05).
+    private func action(for r: Reaction, need n: Need) -> () -> Void {
+        r == .busy ? { [weak self] in self?.askHowLong() } : { [weak self] in self?.react(r) }
+    }
+
+    private func askHowLong() {
+        let minutes = engine.config.busyMinutes
+        sim.say(Lines.busyHowLong, buttons: minutes.map(Lines.minutesLabel))
+        buttonActions = minutes.map { m in
+            { [weak self] in
+                guard let self else { return }
+                self.apply(self.engine.deferBusy(minutes: m))
+                self.syncEscalation()
+            }
+        }
     }
 
     /// The shade and the pause exist only while the engine shows stage 3–4. Every way out (rest, a promise,
@@ -425,15 +449,18 @@ final class BalanceController {
         let events = engine.state.episode?.need == .water ? engine.handle(.done) : engine.tookRest(.water)
         if events.isEmpty { return }
         hideBubble()
+        if events.contains(.tooSoon(.water)) { return apply(events) }
         sim.perform(.drink)
         sim.say(Lines.thanks(.water), duration: 3.5)
         settle(after: 3.5)
     }
 
     /// The conversation owns the stage; water only changes and persists aggregates here.
-    func creditWaterFromVoice() throws {
-        _ = try engine.tookRest(.water, persisting: Self.write)
+    /// `false` = not counted: the last glass was less than 20 minutes ago.
+    func creditWaterFromVoice() throws -> Bool {
+        let events = try engine.tookRest(.water, persisting: Self.write)
         lastSave = Date()
+        return !events.contains(.tooSoon(.water))
     }
 
     /// An explicit timer outranks balance prompts (they come back after it); it only waits for an exercise
