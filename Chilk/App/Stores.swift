@@ -54,3 +54,121 @@ final class ProfileStore {
         try? JSONEncoder().encode(profile).write(to: url, options: .atomic)
     }
 }
+
+/// Reads a saved value. A file that cannot be decoded is set aside (`<name>.damaged-<time>.json`); a file that cannot
+/// be read or set aside is left alone and the store does not write over it (chats and memory are the only copies).
+private enum Loaded<T> {
+    case missing
+    case value(T)
+    case untouchable
+}
+
+@MainActor
+private func load<T: Decodable>(_ type: T.Type, from url: URL) -> Loaded<T> {
+    guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
+    guard let data = try? Data(contentsOf: url) else { return .untouchable }
+    if let value = try? JSONDecoder().decode(T.self, from: data) { return .value(value) }
+    let stamp = Int(Date().timeIntervalSince1970)
+    let aside = url.deletingPathExtension().appendingPathExtension("damaged-\(stamp).json")
+    do {
+        try FileManager.default.moveItem(at: url, to: aside)
+        return .missing
+    } catch {
+        return .untouchable
+    }
+}
+
+@MainActor
+private func store<T: Encodable>(_ value: T, to url: URL) {
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? JSONEncoder().encode(value).write(to: url, options: .atomic)
+}
+
+/// Slice 5b (decisions 10–12): the chat log on disk (`chats.json`), voice kept as text only. Inactive chats are
+/// removed after `autoDeleteDays` at launch and every hour.
+@MainActor
+final class ChatStore {
+    private let url = AppState.directory.appendingPathComponent("chats.json")
+    private(set) var log: ChatLog
+    var onChange: [() -> Void] = []
+    private var purgeTimer: Timer?
+    /// `false` when the file exists but could not be read: this session keeps the chat in memory only.
+    private let writable: Bool
+
+    init() {
+        switch load(ChatLog.self, from: url) {
+        case .value(let log): self.log = log; writable = true
+        case .missing: log = ChatLog(); writable = true
+        case .untouchable: log = ChatLog(); writable = false
+        }
+        purge()
+        purgeTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.purge() }
+        }
+        purgeTimer?.tolerance = 60
+    }
+
+    @discardableResult
+    func record(question: String, answer: String, via: ChatTurn.Via, chips: [ChatChip], thread: String,
+                continuing: UUID?) -> UUID {
+        let id = log.record(question: question, answer: answer, via: via, chips: chips, thread: thread,
+                            continuing: continuing, at: Date())
+        changed()
+        return id
+    }
+
+    func delete(_ id: UUID) {
+        log.delete(id)
+        changed()
+    }
+
+    private func purge() {
+        if log.purge(now: Date()) > 0 { changed() }
+    }
+
+    private func changed() {
+        if writable { store(log, to: url) }
+        for f in onChange { f() }
+    }
+}
+
+/// Slice 5b (decision 17): Chilk's memory on disk (`memory.json`).
+@MainActor
+final class MemoryStore {
+    private let url = AppState.directory.appendingPathComponent("memory.json")
+    private(set) var book: MemoryBook
+    /// After every change (the brain re-warms its spare thread; the memory panel refreshes).
+    var onChange: [() -> Void] = []
+    /// `false` when the file exists but could not be read: nothing is written over it this session.
+    private let writable: Bool
+
+    init() {
+        switch load(MemoryBook.self, from: url) {
+        case .value(let book): self.book = book; writable = true
+        case .missing: book = MemoryBook(); writable = true
+        case .untouchable: book = MemoryBook(); writable = false
+        }
+    }
+
+    func remember(_ text: String, selfNoted: Bool) -> MemoryBook.Outcome {
+        let outcome = book.remember(text, selfNoted: selfNoted, now: Date())
+        if case .added = outcome { changed() }
+        return outcome
+    }
+
+    func edit(_ id: UUID, to text: String) -> MemoryBook.Outcome {
+        let outcome = book.edit(id, to: text)
+        if case .added = outcome { changed() }
+        return outcome
+    }
+
+    func forget(_ id: UUID) {
+        book.forget(id)
+        changed()
+    }
+
+    private func changed() {
+        if writable { store(book, to: url) }
+        for f in onChange { f() }
+    }
+}

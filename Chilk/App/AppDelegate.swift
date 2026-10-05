@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var greeting: FirstMeeting?
     private let switches = ToolSwitchStore()
     private let profile = ProfileStore()
+    private let chats = ChatStore()
+    private let memory = MemoryStore()
+    private var chat: ChatController?
 
     static func main() {
         let app = NSApplication.shared
@@ -43,8 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let actions = Actions(balance: balance, sim: edge.sim)
         self.actions = actions
         let switches = self.switches
+        let memory = self.memory
         let brain = Brain(tools: { ChilkToolCatalog.tools(for: switches.switches) },
-                          threadConfig: { ChilkToolCatalog.threadConfig(for: switches.switches) }) { [weak actions] call in
+                          threadConfig: { ChilkToolCatalog.threadConfig(for: switches.switches) },
+                          memory: { memory.book.instructions }) { [weak actions] call in
             guard let actions else { return .failure("Chilk actions unavailable") }
             return await actions.execute(call)
         }
@@ -81,20 +86,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             phrases?.switchChanged()
         }
 
+        // Slice 5b: the chat (voice and text in one log) and Chilk's memory.
+        let chat = ChatController(store: chats, memory: memory, brain: brain, conversation: conversation, ears: ears,
+                                  sim: edge.sim)
+        chat.context = { [weak conversation] in conversation?.context() ?? "" }
+        chat.log = { [weak balance] in balance?.log($0) }
+        self.chat = chat
+        actions.memory = memory
+        actions.onChip = { [weak chat] thread, chip in chat?.chip(chip, thread: thread) }
+        brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
+        brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }
+        chat.onTurnEnd = { [weak balance] in balance?.resume() }
+        memory.onChange.append { [weak brain] in brain?.memoryChanged() }
+        conversation.onTurn = { [weak chat] question, answer, thread in
+            chat?.recordVoice(question: question, answer: answer, thread: thread)
+        }
+
         let tray = Tray(edge: edge, balance: balance, brain: brain, ears: ears, actions: actions,
                         conversation: conversation, switches: switches)
         tray.log = { [weak balance] in balance?.log($0) }
         tray.menu = { [weak self] in self?.trayMenu() ?? NSMenu() }
+        tray.openChat = { [weak chat] in chat?.show() }
         self.tray = tray
         let greeting = FirstMeeting(profile: profile, edge: edge, balance: balance)
         greeting.log = { [weak balance] in balance?.log($0) }
         greeting.onNamed = { [weak tray] in tray?.nudge() }
         self.greeting = greeting
 
-        // Who holds the stage: a conversation, a due timer, Chilk on the hero card, the greeting.
-        balance.isBusy = { [weak conversation, weak actions, weak tray, weak greeting] in
+        // Who holds the stage: a conversation, a due timer, Chilk on the hero card, the greeting, a typed question.
+        balance.isBusy = { [weak conversation, weak actions, weak tray, weak greeting, weak chat] in
             (conversation?.isActive ?? false) || (actions?.ownsStage ?? false) || (tray?.holdsChilk ?? false)
-                || (greeting?.isActive ?? false)
+                || (greeting?.isActive ?? false) || (chat?.thinking ?? false)
+        }
+        chat.chilkFree = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak edge] in
+            guard let edge else { return false }
+            return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
+                && !(tray?.holdsChilk ?? true) && !(greeting?.isActive ?? true) && !edge.sim.isTalking
         }
         actions.conversationActive = { [weak conversation, weak tray, weak greeting] in
             (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
@@ -168,6 +195,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let raw = env["CHILK_DEMO_TOOL_OFF"] {
             for name in raw.split(separator: ",") { if let a = ChilkAbility(rawValue: String(name)) { switches.set(a, on: false) } }
+        }
+        // Acceptance only: CHILK_DEMO_CHAT="first||second||@new||@oldest||…" types these into the chat window one by
+        // one once Codex is ready; CHILK_DEMO_CHAT_SNAPSHOT=/file.png draws the window afterwards.
+        if let raw = env["CHILK_DEMO_CHAT"], !raw.isEmpty {
+            chat.runDemo(raw.components(separatedBy: "||"),
+                         snapshot: env["CHILK_DEMO_CHAT_SNAPSHOT"].map { URL(fileURLWithPath: $0) })
         }
     }
 
@@ -263,6 +296,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: String(localized: "Выйти из Чилка"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
+        // Slice 5b: the chat window needs editing keys (⌘C / ⌘V / ⌘A / ⌘Z) and ⌘W / ⌘M.
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let edit = NSMenu(title: String(localized: "Правка"))
+        edit.addItem(withTitle: String(localized: "Отменить"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: String(localized: "Повторить"), action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: String(localized: "Вырезать"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: String(localized: "Копировать"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: String(localized: "Вставить"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: String(localized: "Выделить всё"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        let windowItem = NSMenuItem()
+        main.addItem(windowItem)
+        let window = NSMenu(title: String(localized: "Окно"))
+        window.addItem(withTitle: String(localized: "Свернуть"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: String(localized: "Закрыть"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowItem.submenu = window
+        NSApp.windowsMenu = window
         return main
     }
 }

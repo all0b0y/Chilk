@@ -35,6 +35,8 @@ final class Tray: NSObject, NSPopoverDelegate {
     var isFree: () -> Bool = { true }
     /// The right-click menu («Позвать», «Проверка ▸», «О Чилке», «Выйти»), built fresh each time.
     var menu: () -> NSMenu = { NSMenu() }
+    /// «Чат» (slice 5b): opens the chat window.
+    var openChat: () -> Void = {}
     var log: (String) -> Void = { _ in }
 
     init(edge: EdgeController, balance: BalanceController, brain: Brain, ears: Ears, actions: Actions,
@@ -275,6 +277,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         model.addFolder = { [weak self] kind in self?.closing { self?.actions.files.choose(kind) } }
         model.removeFolder = { [weak self] name in self?.actions.files.forget(name: name) }
         model.login = { [weak self] in self?.closing { self?.brain.login() } }
+        model.openChat = { [weak self] in self?.closing { self?.openChat() } }
         model.reconnect = { [weak self] in
             guard let brain = self?.brain else { return }
             Task { await brain.connect() }

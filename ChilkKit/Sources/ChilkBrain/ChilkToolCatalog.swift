@@ -29,6 +29,8 @@ public enum ChilkAction: Equatable, Sendable {
     case reminders
     case mode(BalanceMode)
     case takeBreak(ChilkBreak)
+    /// Slice 5b, decision 17: one short fact for Chilk's memory; `asked` = the user asked («запомни…»).
+    case remember(fact: String, asked: Bool)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -69,6 +71,8 @@ public enum ChilkToolCatalog {
             tool("chilk_breathe", "Only when the user asks: breathe with Chilk for 1 or 3 minutes (he inflates on the in-breath). Starts after your short reply.",
                  ["minutes": ["type": "integer", "enum": [1, 3]]]),
             tool("chilk_walk", "Only when the user asks: a 15-minute walk — Chilk in a hat in the middle of a dark screen with a countdown and an idea; the user can stop it. Starts after your short reply.", [:]),
+            tool("chilk_remember", "Remember ONE short lasting fact about the user for future conversations (preferences, people, pets, routines, how they like to be helped), written in Russian in the third person, e.g. «пьёт чай без сахара». asked=true when the user asked («запомни…»); asked=false only when you notice something clearly important and lasting on your own — then do it rarely. Never secrets: passwords, tokens, keys, PINs, card or document numbers. Result: added / duplicate (already known) / refused with a reason (memory_full, looks_secret, too_long).",
+                 ["fact": ["type": "string", "minLength": 1, "maxLength": 200], "asked": ["type": "boolean"]]),
         ]
     }()
 
@@ -206,6 +210,11 @@ public enum ChilkToolCatalog {
         case "chilk_reminders":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .reminders
+        case "chilk_remember":
+            guard Set(fields.keys) == ["fact", "asked"], let fact = fields["fact"]?.string,
+                  !fact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fact.count <= 200,
+                  let asked = fields["asked"]?.bool else { throw ToolError.invalidArguments }
+            return .remember(fact: fact, asked: asked)
         case "chilk_eye_gym", "chilk_warmup", "chilk_walk":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .takeBreak(name == "chilk_eye_gym" ? .eyeGym : name == "chilk_warmup" ? .warmup : .walk)

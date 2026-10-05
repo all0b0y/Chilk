@@ -67,6 +67,22 @@ final class Conversation {
         ears.onLevel = { [weak self] level in self?.heard.setLevel(level) }
     }
 
+    // MARK: The chat (slice 5b)
+
+    /// A voice turn finished: question (as heard), answer, the thread — it goes to the chat as text (decision 10).
+    var onTurn: ((String, String, String) -> Void)?
+
+    /// He hears, thinks or answers by voice right now: a typed question waits.
+    var voiceBusy: Bool { phase == .listening || phase == .thinking || phase == .answering }
+
+    /// The user started typing while he waited for a spoken follow-up: the wait closes quietly, the text goes to
+    /// the same thread («Решено по умолчанию»).
+    func yieldToChat() {
+        guard phase == .waiting else { return }
+        log("follow-up closed by the chat")
+        leave(saying: nil, after: 0.2)
+    }
+
     // MARK: Controls
 
     func trigger() {
@@ -363,10 +379,11 @@ final class Conversation {
             do {
                 let raw = try await brain.ask(context() + question) { partial in answer.set(partial) }
                 guard !Task.isCancelled else { return }
-                let reply = Dialogue.parse(raw)
+                let reply = Dialogue.parse(raw.text)
                 let text = Dialogue.plain(reply.reply)
                 turns += 1
                 log(String(format: "turn %d in %.1f s: [%@] «%@»", turns, now - asked, reply.mode.rawValue, text))
+                onTurn?(question, text, raw.thread)
                 phase = .answering
                 sim.stopAct()
                 showReply(text)

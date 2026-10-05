@@ -73,6 +73,32 @@ final class Actions {
     }
 
     func execute(_ call: CodexToolCall) async -> CodexToolResult {
+        let result = await run(call)
+        // Slice 5b, decision 14: what was done, as a chip under the answer (refusals and failures in red).
+        if let chip = ChatChips.chip(name: call.name, arguments: call.arguments, result: result) { onChip(call.threadId, chip) }
+        return result
+    }
+
+    /// Chips of the turn in flight, by thread (set by the app: the chat collects them).
+    var onChip: (String, ChatChip) -> Void = { _, _ in }
+    /// Chilk's memory (slice 5b, decision 17).
+    var memory: MemoryStore?
+
+    private func remember(_ call: CodexToolCall) -> CodexToolResult {
+        guard case .remember(let fact, let asked)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
+        else { return .failure("Invalid arguments: {fact: one short fact in Russian, ≤ 200 characters, asked: true|false}") }
+        guard let memory else { return .failure("Memory unavailable") }
+        switch memory.remember(fact, selfNoted: !asked) {
+        case .added: return .ok(["added": true, "facts": .number(Double(memory.book.facts.count))])
+        case .duplicate: return .ok(["added": false, "duplicate": true])
+        case .full: return .failure("memory_full: 50 facts; the user can remove some in the chat window → «Память»")
+        case .tooLong: return .failure("too_long: one short fact, at most 200 characters")
+        case .empty: return .failure("empty fact")
+        case .looksSecret: return .failure("looks_secret: passwords, codes, keys and card numbers are never kept")
+        }
+    }
+
+    private func run(_ call: CodexToolCall) async -> CodexToolResult {
         let kinds = Dictionary(files.grants.map { ($0.name, $0.kind) }, uniquingKeysWith: { first, _ in first })
         if let off = ChilkToolCatalog.switchedOff(name: call.name, arguments: call.arguments, switches: switches(),
                                                   kindOf: { kinds[$0] }) {
@@ -81,7 +107,9 @@ final class Actions {
                             + "tell the user it is switched off there.")
         }
         let result: CodexToolResult
-        if ChilkFileToolExecutor.handles(call.name) {
+        if call.name == "chilk_remember" {
+            result = remember(call)
+        } else if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
         } else if ChilkReminderExecutor.handles(call.name) {
             result = await reminders.execute(name: call.name, arguments: call.arguments)

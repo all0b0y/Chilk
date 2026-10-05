@@ -25,20 +25,34 @@ final class Brain {
     private var lastExchange: Date?
     /// A warm thread for the next clean start.
     private var spare: Task<String, Error>?
-    /// Bumped by `catalogChanged()`: a spare awaited across a bump is dropped.
+    /// Bumped when what a NEW thread is made of changes (tool switches, memory): a spare awaited across a bump is
+    /// dropped.
     private var catalogGeneration = 0
     /// The turn in flight: an interrupted one must finish before the next starts on the same thread.
-    private var inFlight: Task<String, Error>?
+    private var inFlight: Task<Reply, Error>?
+
+    /// An answer and the thread that gave it (slice 5b: the chat a turn belongs to follows the thread).
+    struct Reply: Sendable {
+        let text: String
+        let thread: String
+    }
 
     /// The catalog and per-thread config for a NEW thread: tools switched off in the tray are left out (slice 5a).
     private let tools: () -> [CodexTool]
     private let threadConfig: () -> JSON?
+    /// Chilk's memory for a NEW thread (slice 5b, decision 17): appended to the persona.
+    private let memory: () -> String?
     private let onTool: CodexToolHandler?
+    /// Codex searched the web in this thread (a chip under the answer).
+    var onWebSearch: ((String) -> Void)?
+    /// A turn starts on this thread (turns run one at a time): chips left there by an unfinished turn are dropped.
+    var onTurnStart: ((String) -> Void)?
 
     init(tools: @escaping () -> [CodexTool] = { [] }, threadConfig: @escaping () -> JSON? = { nil },
-         onTool: CodexToolHandler? = nil) {
+         memory: @escaping () -> String? = { nil }, onTool: CodexToolHandler? = nil) {
         self.tools = tools
         self.threadConfig = threadConfig
+        self.memory = memory
         self.onTool = onTool
         Task { await connect() }
     }
@@ -79,6 +93,10 @@ final class Brain {
             let ok = params["success"]?.bool == true
             Task { @MainActor [weak self] in self?.loginFinished(ok) }
         }
+        await client.observe("item/completed") { params in
+            guard ChatChips.webSearch(params) != nil, let thread = params["threadId"]?.string else { return }
+            Task { @MainActor [weak self] in self?.onWebSearch?(thread) }
+        }
         do {
             try await client.start()
             guard let acc = try await client.account() else { state = .signedOut; return }
@@ -93,8 +111,9 @@ final class Brain {
     private func warmSpare() {
         guard let client, let setup else { return }
         let tools = self.tools(), config = threadConfig()
+        let instructions = memory().map { Persona.text + "\n\n" + $0 } ?? Persona.text
         let task = Task<String, Error> {
-            let id = try await client.startThread(model: setup.model, instructions: Persona.text, cwd: setup.workDir,
+            let id = try await client.startThread(model: setup.model, instructions: instructions, cwd: setup.workDir,
                                                   tools: tools, config: config, onTool: self.onTool)
             _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».", allowTools: false)
             return id
@@ -115,23 +134,50 @@ final class Brain {
         warmSpare()
     }
 
+    /// The memory changed: the next fresh thread must carry it. The live thread already heard it from the tool.
+    func memoryChanged() {
+        guard state == .ready || state == .connecting, client != nil else { return }
+        catalogGeneration += 1
+        spare = nil
+        warmSpare()
+    }
+
+    /// The chat of the live thread was deleted (decision 12: deleting deletes everything): the next turn starts clean,
+    /// so Codex no longer has that conversation.
+    func dropLiveThread() {
+        active = nil
+        lastExchange = nil
+    }
+
+    /// The live thread (within 15 minutes of its last answer), if any — the chat it writes to is the current one.
+    var liveThread: String? {
+        guard let active, Dialogue.continues(lastExchange: lastExchange, now: Date()) else { return nil }
+        return active
+    }
+
     /// One turn of the conversation. `onDelta` gets the whole raw message so far (JSON `{reply, mode}`).
-    func ask(_ text: String, onDelta: @escaping @Sendable (String) -> Void) async throws -> String {
+    /// `fresh`: start a clean thread even within 15 minutes (an old chat is continued). `seed`: what a clean thread
+    /// hears first (the old chat as text, decision 12); a continued live thread does not get it again.
+    func ask(_ text: String, fresh: Bool = false, seed: String? = nil,
+             onDelta: @escaping @Sendable (String) -> Void) async throws -> Reply {
         _ = try? await inFlight?.value
-        let task = Task<String, Error> {
+        let task = Task<Reply, Error> {
             guard let client = self.client else { throw CodexClient.ClientError.notStarted }
-            let thread = try await self.threadForNow()
-            let reply = try await client.ask(threadId: thread, text: text, outputSchema: JSON(any: Dialogue.schema), onDelta: onDelta)
+            if fresh { self.active = nil }
+            let (thread, isNew) = try await self.threadForNow()
+            self.onTurnStart?(thread)
+            let message = isNew ? seed.map { $0 + "\n\n" + text } ?? text : text
+            let reply = try await client.ask(threadId: thread, text: message, outputSchema: JSON(any: Dialogue.schema), onDelta: onDelta)
             self.lastExchange = Date()
-            return reply
+            return Reply(text: reply, thread: thread)
         }
         inFlight = task
         return try await task.value
     }
 
     /// Same thread within 15 minutes of the last answer; otherwise the warm spare (and a new spare behind it).
-    private func threadForNow() async throws -> String {
-        if let active, Dialogue.continues(lastExchange: lastExchange, now: Date()) { return active }
+    private func threadForNow() async throws -> (id: String, isNew: Bool) {
+        if let active, Dialogue.continues(lastExchange: lastExchange, now: Date()) { return (active, false) }
         if spare == nil { warmSpare() }
         guard let spare else { throw CodexClient.ClientError.notStarted }
         let generation = catalogGeneration
@@ -140,7 +186,7 @@ final class Brain {
         guard generation == catalogGeneration else { return try await threadForNow() }
         active = fresh
         warmSpare()
-        return fresh
+        return (fresh, true)
     }
 
     func interrupt() async {
@@ -250,5 +296,16 @@ enum Persona {
     что это у тебя выключено и включается в трее → «Инструменты»; не обещай сделать иначе и не проси папку, пока \
     файлы выключены. Если в [контекст] есть имя пользователя, обращайся по имени изредка и естественно, не в \
     каждой реплике.
+
+    Память: chilk_remember сохраняет один короткий факт о пользователе на будущие разговоры. «Запомни…» — \
+    asked=true. Сам — asked=false и только если это явно важно и надолго (предпочтения, люди, питомцы, \
+    распорядок), редко. Никогда не запоминай пароли, коды, ключи, номера карт и документов; на такую просьбу \
+    честно откажи. duplicate — ты это уже знаешь; memory_full — память полная, предложи убрать лишнее в окне \
+    чата → «Память». Блок [память] в инструкциях — что ты уже знаешь; не пересказывай его без повода. \
+    Забыть факт ты не можешь сам — его удаляют в окне чата → «Память».
+
+    Чат: если в [контекст] есть «написано в чате», пользователь пишет текстом в окне чата и читает ответ там — \
+    можно чуть подробнее (до 4–5 предложений), но так же без markdown. Голосовые и текстовые реплики — одна \
+    переписка. Блок [переписка ранее] — продолжение старого чата: опирайся на него, не пересказывай.
     """
 }

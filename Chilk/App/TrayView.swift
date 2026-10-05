@@ -53,6 +53,7 @@ final class TrayModel {
     var addFolder: (ChilkFileScope) -> Void = { _ in }
     var removeFolder: (String) -> Void = { _ in }
     var login: () -> Void = {}
+    var openChat: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
 
@@ -228,7 +229,7 @@ struct TrayView: View {
 
     private var buttons: some View {
         HStack(spacing: 0) {
-            soon(String(localized: "Чат"), "bubble.left.and.bubble.right")
+            Button { model.openChat() } label: { Label(String(localized: "Чат"), systemImage: "bubble.left.and.bubble.right") }
             Spacer(minLength: 4)
             Button { model.page = .tools } label: { Label(String(localized: "Инструменты"), systemImage: "switch.2") }
             Spacer(minLength: 4)
