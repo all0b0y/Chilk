@@ -31,7 +31,7 @@ let package = Package(
         // Renders AppIcon PNGs and preview frames headlessly (no window server needed).
         .executableTarget(name: "chilk-render", dependencies: ["ChilkRender"]),
         // Voice/brain checks without the app: real Codex turns, dictation of audio files.
-        .executableTarget(name: "chilk-voice", dependencies: ["ChilkBrain", "ChilkEars", "ChilkCore"]),
+        .executableTarget(name: "chilk-voice", dependencies: ["ChilkBrain", "ChilkEars", "ChilkCore", "CFvad"]),
         .testTarget(name: "ChilkCoreTests", dependencies: ["ChilkCore"]),
         // Pixel-level checks of the renderer against the redraw logic (no ghost pixels).
         .testTarget(name: "ChilkRenderTests", dependencies: ["ChilkCore", "ChilkRender"]),

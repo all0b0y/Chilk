@@ -118,6 +118,9 @@ case "wake":
     print("wake:", positives.filter { $0["hit"] as? Bool == true }.count, "/", positives.count,
           "false:", negatives.filter { $0["hit"] as? Bool == true }.count, "/", negatives.count)
 
+case "bench":
+    try await Bench.run(Array(args.dropFirst()))
+
 case "hear":
     guard args.count >= 2 else { print("usage: chilk-voice hear file.wav [--fast]"); exit(2) }
     let url = URL(fileURLWithPath: args[1])

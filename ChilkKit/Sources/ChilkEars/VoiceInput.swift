@@ -17,7 +17,7 @@ public final class VoiceInput {
 
     private let recognize: Recognize
     private let vad = WebRTCVAD()
-    private var gate = WakeAudioGate()
+    private var gate: WakeAudioGate
     private var task: Task<Void, Never>?
     private var generation = 0
     private var onWake: () -> Void = {}
@@ -28,7 +28,10 @@ public final class VoiceInput {
     private var frame: [Float] = []
     private let pendingLimit = 16_000 * 12
 
-    public init(recognize: @escaping Recognize) { self.recognize = recognize }
+    public init(recognize: @escaping Recognize, gate: WakeAudioGate = WakeAudioGate()) {
+        self.recognize = recognize
+        self.gate = gate
+    }
 
     public func arm(onWake: @escaping () -> Void) {
         suspend()
