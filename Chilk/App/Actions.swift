@@ -15,6 +15,7 @@ enum AppState {
 @MainActor
 final class Actions {
     let executor: ChilkToolExecutor?
+    let files: Files
     private weak var balance: BalanceController?
     private let sim: CharacterSim
     private var timer: Timer?
@@ -26,9 +27,10 @@ final class Actions {
     var conversationActive: () -> Bool = { false }
     var ownsStage: Bool { display.showing != nil }
 
-    init(balance: BalanceController, sim: CharacterSim) {
+    init(balance: BalanceController, sim: CharacterSim, files: Files? = nil) {
         self.balance = balance
         self.sim = sim
+        self.files = files ?? Files(file: AppState.directory.appendingPathComponent("folders.json"))
         do {
             executor = try ChilkToolExecutor(file: AppState.directory.appendingPathComponent("timers.json"),
                 status: { [weak balance] in
@@ -51,9 +53,15 @@ final class Actions {
         timer?.tolerance = 0.1
     }
 
-    func execute(_ call: CodexToolCall) -> CodexToolResult {
-        guard let executor else { return .failure("Chilk actions unavailable: timer storage could not be loaded") }
-        let result = executor.execute(name: call.name, arguments: call.arguments)
+    func execute(_ call: CodexToolCall) async -> CodexToolResult {
+        let result: CodexToolResult
+        if ChilkFileToolExecutor.handles(call.name) {
+            result = await files.execute(call)
+        } else if let executor {
+            result = executor.execute(name: call.name, arguments: call.arguments)
+        } else {
+            result = .failure("Chilk actions unavailable: timer storage could not be loaded")
+        }
         balance?.log("tool \(call.name) success=\(result.success)")
         return result
     }

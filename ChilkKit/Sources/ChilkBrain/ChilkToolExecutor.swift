@@ -23,6 +23,7 @@ public final class ChilkToolExecutor {
         do {
             let action = try ChilkToolCatalog.parse(name: name, arguments: arguments)
             switch action {
+            case .findFiles, .readFile, .appendNote: return .failure("File access is handled by the selected-folder tools")
             case .status: return .ok(status())
             case .water: return .ok(try water())
             case .timers: return .ok(["timers": .array(entries.map(Self.describe))])

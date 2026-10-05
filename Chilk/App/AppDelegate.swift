@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.balance = balance
         let actions = Actions(balance: balance, sim: edge.sim)
         self.actions = actions
-        let brain = Brain(tools: actions.executor == nil ? [] : ChilkToolCatalog.tools) { [weak actions] call in
+        let brain = Brain(tools: ChilkToolCatalog.tools) { [weak actions] call in
             guard let actions else { return .failure("Chilk actions unavailable") }
             return await actions.execute(call)
         }
@@ -123,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         timers.submenu = timersMenu
         menu.addItem(timers)
+        if let files = actions?.files { menu.addItem(files.dockItem()) }
         let side = edge?.edge == .left
             ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
             : item(String(localized: "Переселить к левому краю"), #selector(moveLeft))
