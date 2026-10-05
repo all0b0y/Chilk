@@ -30,6 +30,10 @@
 	<string>С включёнными ушами Чилк слушает локально, чтобы услышать своё имя. Уши можно выключить в меню Dock; горячая клавиша включает микрофон только на время разговора.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу.</string>
 </dict>

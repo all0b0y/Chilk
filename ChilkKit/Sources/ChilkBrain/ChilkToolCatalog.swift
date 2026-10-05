@@ -10,6 +10,8 @@ public enum ChilkAction: Equatable, Sendable {
     case findFiles(scope: ChilkFileScope, query: String, offset: Int)
     case readFile(scope: ChilkFileScope, path: String)
     case appendNote(path: String, text: String)
+    case reminder(title: String, at: Date)
+    case reminders
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -39,6 +41,9 @@ public enum ChilkToolCatalog {
                   "text": ["type": "string", "minLength": 1, "maxLength": 16000]]),
             tool("chilk_cancel_timer", "Cancel one local Chilk timer by its exact id, only on the user's request.",
                  ["id": ["type": "string", "minLength": 1, "maxLength": 128]]),
+            tool("chilk_reminder", "Create an Apple Reminders reminder for the user in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Explicit future ISO-8601 timestamp with timezone. Creates only: no editing, completing or deleting.",
+                 ["at": ["type": "string", "maxLength": 64], "title": ["type": "string", "minLength": 1, "maxLength": 120]]),
+            tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (title, due). Other lists are never read.", [:]),
         ]
     }()
 
@@ -50,8 +55,22 @@ public enum ChilkToolCatalog {
     }
 
     private static func validTitle(_ title: String) -> Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= 80
+        validTitle(title, limit: 80)
+    }
+
+    private static func validTitle(_ title: String, limit: Int) -> Bool {
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= limit
         && !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+    }
+
+    /// An explicit ISO-8601 timestamp WITH a timezone («2026-10-06T09:00:00+03:00»); nothing else is guessed.
+    static func timestamp(_ text: String) -> Date? {
+        guard text.count <= 64, text.range(of: "T.*(Z|[+-][0-9]{2}:[0-9]{2})$", options: .regularExpression) != nil else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = f.date(from: text) { return date }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: text)
     }
 
     static func validRelativePath(_ path: String) -> Bool {
@@ -92,17 +111,18 @@ public enum ChilkToolCatalog {
             return .cancel(id: id)
         case "chilk_schedule":
             guard Set(fields.keys) == ["at", "title", "message"],
-                  let text = fields["at"]?.string, text.count <= 64,
-                  text.range(of: "T.*(Z|[+-][0-9]{2}:[0-9]{2})$", options: .regularExpression) != nil,
+                  let text = fields["at"]?.string, let date = timestamp(text),
                   let title = fields["title"]?.string, validTitle(title),
                   let message = fields["message"]?.string, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   message.count <= 240 else { throw ToolError.invalidArguments }
-            let f = ISO8601DateFormatter()
-            f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            var date = f.date(from: text)
-            if date == nil { f.formatOptions = [.withInternetDateTime]; date = f.date(from: text) }
-            guard let date else { throw ToolError.invalidArguments }
             return .schedule(at: date, title: title, message: message)
+        case "chilk_reminder":
+            guard Set(fields.keys) == ["at", "title"], let text = fields["at"]?.string, let date = timestamp(text),
+                  let title = fields["title"]?.string, validTitle(title, limit: 120) else { throw ToolError.invalidArguments }
+            return .reminder(title: title.trimmingCharacters(in: .whitespacesAndNewlines), at: date)
+        case "chilk_reminders":
+            guard fields.isEmpty else { throw ToolError.invalidArguments }
+            return .reminders
         case "chilk_timer":
             guard Set(fields.keys) == ["seconds", "title"],
                   case .number(let seconds) = fields["seconds"], seconds.isFinite, seconds.rounded(.towardZero) == seconds,

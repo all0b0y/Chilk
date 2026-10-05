@@ -16,6 +16,8 @@ enum AppState {
 final class Actions {
     let executor: ChilkToolExecutor?
     let files: Files
+    private let reminders = ChilkReminderExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil
+                                                  ? FakeReminders() : EventKitReminders())
     private weak var balance: BalanceController?
     private let sim: CharacterSim
     private var timer: Timer?
@@ -57,6 +59,8 @@ final class Actions {
         let result: CodexToolResult
         if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
+        } else if ChilkReminderExecutor.handles(call.name) {
+            result = await reminders.execute(name: call.name, arguments: call.arguments)
         } else if let executor {
             result = executor.execute(name: call.name, arguments: call.arguments)
         } else {

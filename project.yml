@@ -41,6 +41,8 @@ targets:
         NSHumanReadableCopyright: "© 2026 all0b0y"
         NSMicrophoneUsageDescription: "С включёнными ушами Чилк слушает локально, чтобы услышать своё имя. Уши можно выключить в меню Dock; горячая клавиша включает микрофон только на время разговора."
         NSSpeechRecognitionUsageDescription: "Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу."
+        NSRemindersFullAccessUsageDescription: "Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его."
+        NSRemindersUsageDescription: "Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.all0b0y.chilk
