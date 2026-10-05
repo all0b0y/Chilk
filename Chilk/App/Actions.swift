@@ -38,11 +38,19 @@ final class Actions {
                 status: { [weak balance] in
                     guard let balance else { return [:] }
                     return ["sittingMinutes": .number(Double(balance.sittingMinutes)),
-                            "waterPressure": .number(balance.engine.pressure(.water))]
+                            "waterPressure": .number(balance.engine.pressure(.water)),
+                            "mode": .string(balance.mode.rawValue)]
                 }, water: { [weak balance] in
                     guard let balance else { throw CodexClient.ClientError.notStarted }
                     try balance.creditWaterFromVoice()
                     return ["credited": true]
+                }, mode: { [weak balance] mode in
+                    guard let balance else { return ["changed": false] }
+                    // The conversation owns the stage: the change is applied and saved, he says it himself.
+                    let changed = balance.setMode(mode)
+                    return changed
+                        ? ["mode": .string(balance.mode.rawValue), "changed": true]
+                        : ["mode": .string(balance.mode.rawValue), "changed": false, "refused": "escalation_in_progress"]
                 })
         } catch {
             executor = nil

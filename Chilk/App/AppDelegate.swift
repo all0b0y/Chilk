@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.isBusy = { [weak conversation, weak actions] in
             (conversation?.isActive ?? false) || (actions?.ownsStage ?? false)
         }
+        balance.escalation.onPause = { [weak self] paused in self?.quitShortcut(enabled: !paused) }
         actions.conversationActive = { [weak conversation] in conversation?.isActive ?? false }
         brain.onChange = { [weak balance, weak brain, weak phrases] in
             balance?.log("brain \(brain?.statusLine ?? "?")")
@@ -140,6 +141,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers.submenu = timersMenu
         menu.addItem(timers)
         if let files = actions?.files { menu.addItem(files.dockItem()) }
+        // Modes (В16): Soft by default; softer is refused on stages 3–4 («договор с собой»).
+        let mode = NSMenuItem(title: String(localized: "Режим"), action: nil, keyEquivalent: "")
+        let modeMenu = NSMenu()
+        for m in [BalanceMode.strict, .soft, .silent] {
+            let i = item(Lines.modeName(m), #selector(chooseMode(_:)))
+            i.representedObject = m.rawValue
+            i.state = balance?.mode == m ? .on : .off
+            modeMenu.addItem(i)
+        }
+        mode.submenu = modeMenu
+        menu.addItem(mode)
         let side = edge?.edge == .left
             ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
             : item(String(localized: "Переселить к левому краю"), #selector(moveLeft))
@@ -195,6 +207,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func makeDue(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let n = Need(rawValue: raw) { balance?.makeDue(n) }
     }
+    @objc private func chooseMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let m = BalanceMode(rawValue: raw), let balance, let edge else { return }
+        if m == balance.mode { return }
+        if balance.setMode(m) {
+            if balance.escalation.level == .none { edge.sim.say(Lines.modeSet(m), duration: 4) }
+        } else {
+            edge.sim.say(Lines.modeRefused, duration: 5)
+        }
+    }
     @objc private func showPressure() { balance?.showPressure() }
     @objc private func toggleFast() { if let b = balance { b.timeScale = b.timeScale > 1 ? 1 : 60 } }
     @objc private func resetNeeds() { balance?.resetNeeds() }
@@ -206,6 +227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: "")
         i.target = self
         return i
+    }
+
+    /// Under the pause ⌘Q is off: the way out is the emergency exit. Logout and Force Quit still work.
+    private func quitShortcut(enabled: Bool) {
+        NSApp.mainMenu?.items.first?.submenu?.items.first { $0.action == #selector(NSApplication.terminate(_:)) }?
+            .keyEquivalent = enabled ? "q" : ""
     }
 
     private func makeMainMenu() -> NSMenu {

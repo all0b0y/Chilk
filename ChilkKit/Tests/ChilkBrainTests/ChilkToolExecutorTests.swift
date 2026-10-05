@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import ChilkBrain
+import ChilkCore
 
 @Suite("Chilk tool execution")
 @MainActor
@@ -39,7 +40,23 @@ struct ChilkToolExecutorTests {
     }
 
     @Test func theRegisteredCatalogMatchesTheSupportedActions() {
-        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_append_note", "chilk_reminder", "chilk_reminders"])
+        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_append_note", "chilk_reminder", "chilk_reminders", "chilk_mode"])
         #expect(ChilkToolCatalog.tools.allSatisfy { $0.inputSchema["additionalProperties"]?.bool == false })
+    }
+
+    @Test func theModeToolTakesOnlyAKnownModeAndReportsWhatTheAppDecided() throws {
+        #expect(try ChilkToolCatalog.parse(name: "chilk_mode", arguments: ["mode": "strict"]) == .mode(.strict))
+        #expect(throws: ChilkToolCatalog.ToolError.self) { try ChilkToolCatalog.parse(name: "chilk_mode", arguments: ["mode": "harsh"]) }
+        #expect(throws: ChilkToolCatalog.ToolError.self) { try ChilkToolCatalog.parse(name: "chilk_mode", arguments: [:]) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("mode-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        var asked: [BalanceMode] = []
+        let e = try ChilkToolExecutor(file: file, mode: { m in
+            asked.append(m)
+            return m == .soft ? ["mode": "strict", "changed": false, "refused": "escalation"] : ["mode": .string(m.rawValue), "changed": true]
+        })
+        #expect(e.execute(name: "chilk_mode", arguments: ["mode": "strict"]).value["changed"]?.bool == true)
+        #expect(e.execute(name: "chilk_mode", arguments: ["mode": "soft"]).value["refused"]?.string == "escalation")
+        #expect(asked == [.strict, .soft])
     }
 }

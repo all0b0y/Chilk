@@ -24,6 +24,32 @@ public enum AppCategory: String, Codable, Sendable {
     case work, leisure
 }
 
+/// How far the ladder may climb (В16). Soft is the default; Strict is switched on by the user (2026-10-05).
+public enum BalanceMode: String, CaseIterable, Codable, Sendable {
+    case strict, soft, silent
+
+    /// Highest stage: Strict — 4 «блокирует», Soft — 2 «настаивает», Silence — 0 pantomime only.
+    public var cap: Int {
+        switch self {
+        case .strict: 4
+        case .soft: 2
+        case .silent: 0
+        }
+    }
+}
+
+/// Why the engine refused a request from the user.
+public enum BalanceRefusal: Error, Equatable, Sendable {
+    /// «Договор с собой»: no softer mode on stages 3–4, only the emergency exit.
+    case softeningDuringEscalation
+    /// The emergency exit is for stages 3–4.
+    case nothingToExit
+    case reasonRequired
+    case badDuration
+    /// No exits left: the button must be held for `BalanceConfig.emergencyHold` seconds.
+    case holdRequired
+}
+
 /// One look at the user's situation, taken about once a second (all without extra permissions, spike 001).
 public struct Signals: Sendable, Equatable {
     public var now: Date
@@ -76,6 +102,8 @@ public enum BalanceEvent: Equatable, Sendable {
     case credited(Need, byRest: Bool, endedEpisode: Bool)
     case snoozed(Need)
     case deferred(Need)
+    /// Emergency exit taken: no interventions for `minutes`; the need comes back at «настаивает».
+    case released(Need, minutes: Int)
     /// Mood channel: time for a joke or a bigger antic.
     case mood
 }
@@ -106,8 +134,10 @@ public struct BalanceConfig: Sendable, Equatable {
     public var weekendBudget: TimeInterval = 4 * 3600
     /// The day (and its budget) starts at this local hour; working past midnight is «конец дня».
     public var dayStartsAtHour = 5
-    /// Mode ceiling. Slice 2 stops at «настаивает»; Strict mode (slice 4) raises it to 4.
-    public var modeCap = 2
+    /// Emergency exits (В13): how many, for how long, and the hold once they are spent.
+    public var emergencyExits = 3
+    public var exitMinutes = [15, 30, 60]
+    public var emergencyHold: TimeInterval = 10
     /// «Иду», but keeps working this long → he asks again.
     public var promiseGrace: TimeInterval = 90
     public var bounceEvery: TimeInterval = 5 * 60
@@ -163,6 +193,19 @@ public struct DayStats: Codable, Sendable, Equatable {
     public var credited: [Need: Int] = [:]
     public var snoozes = 0
     public var busy = 0
+    public var exits: [EmergencyExit] = []
+
+    public init(key: String) { self.key = key }
+}
+
+/// One emergency exit, kept for the weekly summary (В13). The reason stays on this Mac.
+public struct EmergencyExit: Codable, Sendable, Equatable {
+    public var at: Date
+    public var need: Need
+    public var minutes: Int
+    public var reason: String
+    /// Taken with no exits left (the 10-second hold).
+    public var held: Bool
 }
 
 public struct BalanceState: Codable, Sendable, Equatable {
@@ -179,6 +222,49 @@ public struct BalanceState: Codable, Sendable, Equatable {
     /// Rest already counted for the current stretch away from the keyboard: 0 none, 1 stretch, 2 walk.
     public var restLevel = 0
     public var forceEndOfDay = false
+    public var mode = BalanceMode.soft
+    public var exitsLeft = 3
+    /// After an emergency exit: no new episode or mood before this engine-clock time.
+    public var releasedUntil: TimeInterval = 0
+    /// Finished days, newest last (the weekly summary reads them).
+    public var history: [DayStats] = []
+}
+
+// Files written by older builds lack newer fields: every field falls back to its default instead of the whole
+// state being dropped.
+extension BalanceState {
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        func field<T: Decodable>(_ key: CodingKeys, _ fallback: T) throws -> T {
+            try c.decodeIfPresent(T.self, forKey: key) ?? fallback
+        }
+        self.init(needs: try field(.needs, [:]), nextMood: try field(.nextMood, 0))
+        clock = try field(.clock, 0)
+        lastNow = try c.decodeIfPresent(Date.self, forKey: .lastNow)
+        episode = try c.decodeIfPresent(Episode.self, forKey: .episode)
+        day = try field(.day, DayStats(key: ""))
+        starts = try field(.starts, [])
+        lastFront = try c.decodeIfPresent(String.self, forKey: .lastFront)
+        restLevel = try field(.restLevel, 0)
+        forceEndOfDay = try field(.forceEndOfDay, false)
+        mode = try field(.mode, .soft)
+        exitsLeft = try field(.exitsLeft, 3)
+        releasedUntil = try field(.releasedUntil, 0)
+        history = try field(.history, [])
+    }
+}
+
+extension DayStats {
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(key: try c.decodeIfPresent(String.self, forKey: .key) ?? "")
+        firstActivity = try c.decodeIfPresent(Date.self, forKey: .firstActivity)
+        active = try c.decodeIfPresent(TimeInterval.self, forKey: .active) ?? 0
+        credited = try c.decodeIfPresent([Need: Int].self, forKey: .credited) ?? [:]
+        snoozes = try c.decodeIfPresent(Int.self, forKey: .snoozes) ?? 0
+        busy = try c.decodeIfPresent(Int.self, forKey: .busy) ?? 0
+        exits = try c.decodeIfPresent([EmergencyExit].self, forKey: .exits) ?? []
+    }
 }
 
 // MARK: - Engine
@@ -201,9 +287,11 @@ public final class BalanceEngine {
         if var s = saved {
             s.lastNow = nil          // time while Chilk was not running is unknown — not rest, not sitting
             state = s
+            for n in Need.allCases where state.needs[n] == nil { state.needs[n] = NeedTrack(threshold: threshold(n)) }
         } else {
             for n in Need.allCases { state.needs[n] = NeedTrack(threshold: threshold(n)) }
             state.nextMood = self.rng.uniform(config.moodEvery.lowerBound, config.moodEvery.upperBound)
+            state.exitsLeft = config.emergencyExits
         }
     }
 
@@ -221,11 +309,19 @@ public final class BalanceEngine {
         Need.body.map { min(1, max(0, (pressure($0) - 0.5) / 0.7)) }.max() ?? 0
     }
 
-    public func buttons(for n: Need) -> [Reaction] {
+    /// Stage 4 is the pause: no buttons, only the emergency exit (the app draws it).
+    public func buttons(for n: Need, stage: Int = 1) -> [Reaction] {
+        guard stage < 4 else { return [] }
         var b: [Reaction] = [n.restsOnWord && n != .eyes ? .done : .going]
         if (state.needs[n]?.snoozesInRow ?? 0) < config.maxSnoozesInRow { b.append(.snooze) }
         b.append(.busy)
         return b
+    }
+
+    /// The pause is up (stage 4, showing): the rest that ends it, in seconds away from the keyboard.
+    public var pauseRest: TimeInterval? {
+        guard let e = state.episode, e.stage >= 4, e.phase == .showing else { return nil }
+        return e.need == .stretch ? config.stretchRest : config.walkRest
     }
 
     // MARK: Inputs
@@ -240,9 +336,12 @@ public final class BalanceEngine {
         state.starts.removeAll { $0 <= hourAgo }
         rollDay(s.now, into: &out)
 
+        // Under the pause a video in the background is not being watched: it must not block the rest.
+        let paused = state.episode.map { $0.stage >= 4 && $0.phase == .showing } ?? false
+        let video = s.video && !paused
         // Idle is never scaled: a typing pause must stay a pause even when minutes run in seconds.
         let idle = s.idle
-        let atMac = !s.locked && (idle < config.activeWithin || s.inCall || s.video)
+        let atMac = !s.locked && (idle < config.activeWithin || s.inCall || video)
         let sat = atMac && realDt <= 10 ? dt : 0          // a long gap is the Mac asleep, not sitting
         if sat > 0 {
             for n in Need.body { state.needs[n]?.sitting += sat }
@@ -252,7 +351,7 @@ public final class BalanceEngine {
 
         // Rest (В10): away from the keyboard counts, unless a call or a video keeps the user busy.
         if realDt > 10 { creditRest(away: dt, into: &out) }
-        if !s.inCall && !s.video && (s.locked || idle >= config.activeWithin) {
+        if !s.inCall && !video && (s.locked || idle >= config.activeWithin) {
             creditRest(away: idle, into: &out)
         } else if atMac {
             state.restLevel = 0
@@ -264,7 +363,10 @@ public final class BalanceEngine {
         let blocked = s.inCall || s.fullscreen || !atMac
 
         if var e = state.episode {
-            let off = blocked || (e.need == .endOfDay && (s.category == .leisure || !endOfDayDue))
+            // The pause stays up while the user is away (that is the rest); only a call takes it down.
+            let off = e.stage >= 4
+                ? s.inCall
+                : blocked || (e.need == .endOfDay && (s.category == .leisure || !endOfDayDue))
             if off {
                 if e.phase == .showing {
                     e.phase = .withdrawn
@@ -305,7 +407,7 @@ public final class BalanceEngine {
         let due = dueNeeds(category: s.category, endOfDayDue: endOfDayDue)
         let clock = state.clock
         for n in due where state.needs[n]?.pendingSince == nil { state.needs[n]?.pendingSince = clock }
-        guard !blocked else { return out }
+        guard !blocked, state.clock >= state.releasedUntil else { return out }
         let typingPause = s.idle >= 2 && s.idle <= 30
         let convenient = appSwitched || typingPause
         let budgetLeft = state.starts.count < config.budgetPerHour
@@ -322,7 +424,7 @@ public final class BalanceEngine {
 
     public func handle(_ r: Reaction) -> [BalanceEvent] {
         var out: [BalanceEvent] = []
-        guard var e = state.episode else { return out }
+        guard var e = state.episode, e.stage < 4 else { return out }       // the pause has no buttons
         let n = e.need
         switch r {
         case .done where n.restsOnWord:
@@ -350,6 +452,43 @@ public final class BalanceEngine {
             out.append(.deferred(n))
         }
         return out
+    }
+
+    // MARK: Modes and the emergency exit
+
+    /// «Договор с собой» (В16): stricter at once; softer only outside stages 3–4. A stage above the new
+    /// ceiling comes down to it right away.
+    public func setMode(_ mode: BalanceMode) throws -> [BalanceEvent] {
+        guard mode != state.mode else { return [] }
+        if mode.cap < state.mode.cap, let e = state.episode, e.stage >= 3 {
+            throw BalanceRefusal.softeningDuringEscalation
+        }
+        state.mode = mode
+        guard var e = state.episode, e.stage > cap(e.need) else { return [] }
+        e.stage = cap(e.need)
+        e.workOnStage = 0
+        state.episode = e
+        return e.phase == .showing ? [stageEvent(e, again: false)] : []
+    }
+
+    /// Emergency exit (В13) on stages 3–4: a reason is required; 3 exits, refilled by a walk; with none left
+    /// the app makes the user hold the button for `emergencyHold` seconds and passes `held`. Never impossible.
+    public func emergencyExit(reason: String, minutes: Int, held: Bool = false, now: Date) throws -> [BalanceEvent] {
+        guard let e = state.episode, e.stage >= 3 else { throw BalanceRefusal.nothingToExit }
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { throw BalanceRefusal.reasonRequired }
+        guard config.exitMinutes.contains(minutes) else { throw BalanceRefusal.badDuration }
+        let spent = state.exitsLeft <= 0
+        guard !spent || held else { throw BalanceRefusal.holdRequired }
+        if !spent { state.exitsLeft -= 1 }
+        state.day.exits.append(EmergencyExit(at: now, need: e.need, minutes: minutes,
+                                             reason: String(reason.prefix(200)), held: spent))
+        state.needs[e.need]?.debt = true
+        state.needs[e.need]?.snoozesInRow = 0
+        state.needs[e.need]?.pendingSince = nil
+        state.releasedUntil = state.clock + Double(minutes) * 60
+        state.episode = nil
+        return [.released(e.need, minutes: minutes)]
     }
 
     /// «Попил» / «Сделал» outside a bubble (Dock menu, later «Чилк, попил») — only for rest taken on the word.
@@ -407,7 +546,7 @@ public final class BalanceEngine {
 
     // MARK: Rules
 
-    private func cap(_ n: Need) -> Int { min(n.stageCap, config.modeCap) }
+    private func cap(_ n: Need) -> Int { min(n.stageCap, state.mode.cap) }
 
     private func threshold(_ n: Need) -> TimeInterval {
         let r = config.minutes(n)
@@ -419,7 +558,7 @@ public final class BalanceEngine {
     }
 
     private func stageEvent(_ e: Episode, again: Bool) -> BalanceEvent {
-        e.stage == 0 ? .hint(e.need) : .ask(e.need, stage: e.stage, buttons: buttons(for: e.need), again: again)
+        e.stage == 0 ? .hint(e.need) : .ask(e.need, stage: e.stage, buttons: buttons(for: e.need, stage: e.stage), again: again)
     }
 
     private func dueNeeds(category: AppCategory, endOfDayDue: Bool) -> [Need] {
@@ -469,6 +608,7 @@ public final class BalanceEngine {
             t.quietUntil = 0
             t.debt = false
         }
+        if n == .walk && byRest { state.exitsLeft = config.emergencyExits }     // «пополняются после прогулки»
         state.needs[n] = t
         state.day.credited[n, default: 0] += 1
         let ended = state.episode?.need == n
@@ -498,6 +638,10 @@ public final class BalanceEngine {
     private func rollDay(_ now: Date, into out: inout [BalanceEvent]) {
         let key = dayKey(now)
         guard key != state.day.key else { return }
+        if !state.day.key.isEmpty {
+            state.history.append(state.day)
+            if state.history.count > 35 { state.history.removeFirst(state.history.count - 35) }
+        }
         state.day = DayStats(key: key)
         state.forceEndOfDay = false
         state.needs[.endOfDay] = NeedTrack(threshold: 0)

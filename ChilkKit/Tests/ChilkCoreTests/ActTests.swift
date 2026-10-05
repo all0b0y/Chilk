@@ -27,6 +27,18 @@ struct ActTests {
         #expect(abs(sim.pose.x - m.dockX) < 3)
     }
 
+    @Test func inTheMiddleOfTheScreenHeStaysCentredEvenWhenCalledAndCanLookSad() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 1))
+        sim.standOut = .center
+        sim.call(line: "Да?")
+        run(sim, seconds: 2)
+        #expect(abs(sim.pose.x - m.carryX) < 3)
+        #expect(!sim.pose.mood.sad)
+        sim.isSad = true
+        run(sim, seconds: 0.1)
+        #expect(sim.pose.mood.sad)
+    }
+
     @Test func drinkingBringsAMugToHisMouthAndPutsItAway() {
         let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 2))
         sim.perform(.drink)

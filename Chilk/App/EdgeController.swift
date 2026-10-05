@@ -27,6 +27,12 @@ final class EdgeController: NSObject {
     private var drag: Drag?
     private var carryVelocity = 0.0
     private var lastBusy: Bool?
+    /// Stage 3–4: he has left the edge for the middle of the screen (follows `sim.standOut == .center`).
+    private var centered = false
+    /// Stage 4: above the pause shade, which is above everything else.
+    var raised = false {
+        didSet { panel.level = raised ? NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue + 1) : .floating }
+    }
     /// Bubble buttons and clicks on the body go to the balance controller.
     var onButton: ((Int) -> Void)?
     var onPoke: (() -> Void)?
@@ -110,6 +116,11 @@ final class EdgeController: NSObject {
         if let f = flight {
             flyStep(f, now: now)
         } else if drag == nil {
+            if (sim.standOut == .center) != centered {
+                // Re-anchor without a jump (centred in his window, like when carried), then glide there.
+                centered.toggle()
+                _ = reframe(to: centered ? metrics.carryX : metrics.dockX, mirrored: isMirrored)
+            }
             let target = targetOrigin()
             originX.target = target.x
             originY.target = target.y
@@ -327,7 +338,12 @@ final class EdgeController: NSObject {
     private var visibleFrame: CGRect { (NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
 
     private func targetOrigin() -> CGPoint {
-        placement.panelOrigin(panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
+        if centered {
+            // The whole screen, not the visible frame: the pause hides the Dock and the menu bar.
+            let f = (NSScreen.main ?? NSScreen.screens[0]).frame
+            return CGPoint(x: (f.midX - metrics.sceneSize.width / 2).rounded(), y: (f.midY - metrics.sceneSize.height / 2).rounded())
+        }
+        return placement.panelOrigin(panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
     }
 }
 

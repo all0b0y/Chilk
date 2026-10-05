@@ -100,6 +100,9 @@ public enum ChilkRenderer {
                 part = .eyeSleep(lw: lw)
             } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) {
                 part = .eyeHappy(lw: lw)
+            } else if mood.sad {
+                part = .eyeOpen                                    // half-closed, looking down
+                t = eye.translatedBy(x: 0, y: 2).scaledBy(x: 1, y: 0.5 * p.eyeOpen)
             } else {
                 part = .eyeOpen
                 t = eye.scaledBy(x: 1 - abs(p.lookX) * 0.2, y: p.eyeOpen).scaledBy(x: p.eyeScale, y: p.eyeScale)
@@ -120,7 +123,7 @@ public enum ChilkRenderer {
             mouthPart = .mouthO
         } else if mood.called || mood.yawning {
             mouthPart = .mouthOpen(yawn: mood.yawning)
-        } else if mood.annoyed {
+        } else if mood.annoyed || mood.sad {
             mouthPart = .mouthFrown(lw: lw)
         } else {
             let tired = clamp((p.fatigue - 0.45) / 0.55)

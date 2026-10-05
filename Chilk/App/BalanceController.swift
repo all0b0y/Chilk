@@ -9,6 +9,8 @@ final class BalanceController {
     private let sim: CharacterSim
     private let edge: EdgeController
     private let monitor = SignalMonitor()
+    /// Stage 3 shade and stage 4 pause (slice 4).
+    let escalation = Escalation()
     private var timer: Timer?
     private var activityTimer: Timer?
     private var settleTimer: Timer?
@@ -24,6 +26,8 @@ final class BalanceController {
     private var ticks = 0
     /// CHILK_BALANCE_LOG=/abs/path: signals every 10 s and every director event (for acceptance and debugging).
     private let logURL = ProcessInfo.processInfo.environment["CHILK_BALANCE_LOG"].map { URL(fileURLWithPath: $0) }
+    private let env = ProcessInfo.processInfo.environment
+    private var demoExitScheduled = false
 
     func log(_ line: String) {
         guard let url = logURL else { return }
@@ -59,10 +63,20 @@ final class BalanceController {
         edge.onPoke = { [weak self] in self?.poked() }
         presence.greetingOverride = { [weak self] in self?.takeReturnLine() }
         presence.onWake = { [weak self] in self?.backFromAway() }
+        escalation.chilkFrame = { [weak edge] in edge?.windowFrame ?? .zero }
+        escalation.onExit = { [weak self] reason, minutes, held in self?.emergencyExit(reason: reason, minutes: minutes, held: held) ?? false }
+        escalation.onHolding = { [weak sim] holding in sim?.isSad = holding }
+        escalation.log = { [weak self] in self?.log($0) }
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         timer?.tolerance = 0.2
+        // Acceptance runs: CHILK_DEMO_DUE=stretch makes a need due 3 s after launch.
+        if let raw = env["CHILK_DEMO_DUE"], let n = Need(rawValue: raw) {
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.makeDue(n) }
+            }
+        }
     }
 
     // MARK: Loop
@@ -82,6 +96,7 @@ final class BalanceController {
         }
         ticks += 1
         apply(events)
+        syncEscalation()
         sim.fatigue = engine.leafFatigue
         if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(),
            Date().timeIntervalSince(lastPantomime) > 25 {
@@ -107,11 +122,34 @@ final class BalanceController {
 
         case .ask(let n, let stage, let buttons, let again):
             guard activity == nil else { return }
-            sim.standOut = stage >= 2 ? .out : .peek
+            sim.standOut = stage >= 3 ? .center : (stage >= 2 ? .out : .peek)
             if n == .walk { sim.wear(.hat) }
             if n == .endOfDay && stage >= 2 { sim.wear(.backpack) }
-            sim.say(Lines.ask(n, stage: stage, again: again), buttons: buttons.map { Lines.button($0, for: n) })
-            buttonActions = buttons.map { r in { [weak self] in self?.react(r) } }
+            switch stage {
+            case 4...:
+                buttonActions = []
+                sim.say(Lines.pause(n), duration: .infinity)
+                edge.raised = true
+                escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest)
+                scheduleDemoExit()
+                if let path = env["CHILK_DEMO_SNAPSHOT"] {
+                    Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            self?.escalation.snapshot(to: URL(fileURLWithPath: path), openForm: false)
+                            self?.escalation.snapshot(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-form.png")),
+                                                      openForm: true)
+                        }
+                    }
+                }
+            case 3:
+                sim.say(again ? Lines.ask(n, stage: stage, again: true) : Lines.disturb(n), buttons: buttons.map { Lines.button($0, for: n) })
+                buttonActions = buttons.map { r in { [weak self] in self?.react(r) } }
+                edge.raised = false
+                escalation.dim()
+            default:
+                sim.say(Lines.ask(n, stage: stage, again: again), buttons: buttons.map { Lines.button($0, for: n) })
+                buttonActions = buttons.map { r in { [weak self] in self?.react(r) } }
+            }
 
         case .bounceDock:
             NSApp.requestUserAttention(.informationalRequest)
@@ -172,6 +210,12 @@ final class BalanceController {
             sim.say(Lines.deferred.randomElement()!, duration: 3)
             settle(after: 3, takeOffProps: true)
 
+        case .released(_, let minutes):
+            buttonActions = []
+            syncEscalation()
+            sim.say(Lines.released(minutes), duration: 3.5)
+            settle(after: 3.5, takeOffProps: true)
+
         case .mood:
             guard activity == nil, !sim.isTalking, !sim.isAsleep else { return }
             sim.say(Lines.jokes.randomElement()!, duration: 5)
@@ -192,6 +236,70 @@ final class BalanceController {
 
     private func react(_ r: Reaction) {
         apply(engine.handle(r))
+        syncEscalation()
+    }
+
+    /// The shade and the pause exist only while the engine shows stage 3–4. Every way out (rest, a promise,
+    /// a call, an exit, a softer mode, a new day) ends here, even while a conversation holds the stage.
+    private func syncEscalation() {
+        let shown = engine.state.episode.flatMap { $0.phase == .showing ? $0.stage : nil } ?? 0
+        if shown < 3 || (shown == 3 && escalation.level == .pause) {
+            if escalation.level != .none { escalation.lift() }
+            if edge.raised { edge.raised = false }
+            sim.isSad = false
+            if sim.standOut == .center { sim.standOut = engine.state.episode?.phase == .showing ? .out : .docked }
+        }
+        if shown >= 4, let rest = engine.pauseRest {
+            escalation.update(restLeft: max(0, rest - (lastSignals?.idle ?? 0)), exitsLeft: engine.state.exitsLeft)
+        }
+    }
+
+    // MARK: Modes (В16) and the emergency exit (В13)
+
+    var mode: BalanceMode { engine.state.mode }
+
+    /// `false` = refused: no softer mode during stages 3–4 («договор с собой»).
+    @discardableResult
+    func setMode(_ m: BalanceMode) -> Bool {
+        do {
+            let events = try engine.setMode(m)
+            save()
+            log("mode \(m.rawValue)")
+            apply(events)
+            syncEscalation()
+            return true
+        } catch {
+            log("mode \(m.rawValue) refused")
+            return false
+        }
+    }
+
+    private func emergencyExit(reason: String, minutes: Int, held: Bool) -> Bool {
+        do {
+            let events = try engine.emergencyExit(reason: reason, minutes: minutes, held: held, now: Date())
+            save()
+            log("emergency exit \(minutes) min held=\(held) left=\(engine.state.exitsLeft)")   // the reason stays out of logs
+            apply(events)
+            syncEscalation()
+            return true
+        } catch {
+            log("emergency exit refused \(error)")
+            return false
+        }
+    }
+
+    /// CHILK_DEMO_EXIT=<reason> (acceptance only): the pause is left through its own form after
+    /// CHILK_DEMO_EXIT_AFTER seconds (default 6), so an unattended run never holds the screen for long.
+    private func scheduleDemoExit() {
+        guard let reason = env["CHILK_DEMO_EXIT"], !demoExitScheduled else { return }
+        demoExitScheduled = true
+        let after = env["CHILK_DEMO_EXIT_AFTER"].flatMap(Double.init) ?? 6
+        Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.demoExitScheduled = false
+                self?.escalation.demoExit(reason: reason)
+            }
+        }
     }
 
     private func hideBubble() {
@@ -331,7 +439,7 @@ final class BalanceController {
     /// An explicit timer outranks balance prompts (they come back after it); it only waits for an exercise
     /// in progress and an unlocked screen. Conversations are checked by `Actions` itself.
     var canPresentScheduledNotice: Bool {
-        activity == nil && lastSignals?.locked != true
+        activity == nil && lastSignals?.locked != true && escalation.level == .none
     }
 
     // MARK: Manual testing (Dock «Проверка»)

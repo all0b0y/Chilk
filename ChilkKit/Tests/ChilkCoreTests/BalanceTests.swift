@@ -328,3 +328,129 @@ struct BalanceTests {
         #expect(d.times { $0 == .hint(.water) }.count == 1)
     }
 }
+
+// MARK: - Slice 4: Strict mode, stages 3–4, the emergency exit (decisions 2026-10-05)
+
+@MainActor
+private extension Day {
+    /// Strict mode, then work until the stretch ladder reaches `stage`.
+    func climb(to stage: Int, need: Need = .stretch) {
+        _ = try? engine.setMode(.strict)
+        while !timeline.contains(where: { $0.e.askStage == stage }) && elapsed < 600 * 60 { work(minutes: 1.0 / 60) }
+    }
+}
+
+@Suite("Balance: Strict mode, pause, emergency exit")
+@MainActor
+struct BalanceStrictTests {
+
+    @Test func softIsTheDefaultAndStrictClimbsToThePauseOnlyForStretchWalkAndEndOfDay() {
+        #expect(Day().engine.state.mode == .soft)
+        let d = Day(only(.stretch))
+        d.climb(to: 4)
+        let asks = d.timeline.compactMap { $0.e.askStage }
+        #expect(asks == [1, 2, 3, 4])
+        let pause = d.timeline.last { $0.e.askStage == 4 }!.e
+        #expect(pause.askButtons == [])                                    // only the emergency exit
+        #expect(d.engine.pauseRest == Optional(TimeInterval(180)))
+
+        let w = Day(only(.water))
+        _ = try? w.engine.setMode(.strict)
+        w.work(minutes: 140)
+        #expect(w.timeline.compactMap { $0.e.askStage } == [1, 2])         // water never goes past «настаивает»
+    }
+
+    @Test func thePauseIgnoresButtonsStaysUpWhileAwayAndEndsWithTheRest() {
+        let d = Day(only(.stretch))
+        d.climb(to: 4)
+        #expect(d.react(.snooze).isEmpty && d.react(.busy).isEmpty && d.react(.going).isEmpty)
+        #expect(d.engine.state.episode?.stage == 4)
+        let away = d.away(minutes: 3.1)
+        #expect(!away.contains(.withdraw))
+        #expect(away.contains(.credited(.stretch, byRest: true, endedEpisode: true)))
+        #expect(d.engine.state.episode == nil)
+    }
+
+    @Test func aVideoUnderThePauseDoesNotBlockTheRestButACallTakesThePauseDown() {
+        let d = Day(only(.stretch))
+        d.climb(to: 4)
+        #expect(d.away(minutes: 3.1) { $0.video = true }.contains(.credited(.stretch, byRest: true, endedEpisode: true)))
+
+        let c = Day(only(.stretch))
+        c.climb(to: 4)
+        #expect(c.work(minutes: 2) { $0.inCall = true } == [.withdraw])
+        let back = c.work(minutes: 1.0 / 60)
+        #expect(back.first?.askStage == 4 && back.first?.askAgain == true)
+    }
+
+    @Test func softerModesWaitUntilTheEscalationIsOverStricterOnesApplyAtOnce() throws {
+        let d = Day(only(.stretch))
+        d.climb(to: 3)
+        #expect(throws: BalanceRefusal.softeningDuringEscalation) { try d.engine.setMode(.soft) }
+        #expect(throws: BalanceRefusal.softeningDuringEscalation) { try d.engine.setMode(.silent) }
+        #expect(d.engine.state.mode == .strict)
+
+        let s = Day(only(.stretch))
+        s.climb(to: 2)
+        #expect(try s.engine.setMode(.silent) == [.hint(.stretch)])        // down to the pantomime right away
+        #expect(s.engine.state.episode?.stage == 0)
+        #expect(try s.engine.setMode(.strict).isEmpty)
+    }
+
+    @Test func theEmergencyExitNeedsAReasonAndLetsGoForTheChosenTime() throws {
+        let d = Day(only(.stretch))
+        #expect(throws: BalanceRefusal.nothingToExit) { try d.engine.emergencyExit(reason: "созвон", minutes: 15, now: d.now) }
+        d.climb(to: 4)
+        #expect(throws: BalanceRefusal.reasonRequired) { try d.engine.emergencyExit(reason: "  \n", minutes: 15, now: d.now) }
+        #expect(throws: BalanceRefusal.badDuration) { try d.engine.emergencyExit(reason: "созвон", minutes: 20, now: d.now) }
+        #expect(try d.engine.emergencyExit(reason: "  срочный созвон ", minutes: 15, now: d.now) == [.released(.stretch, minutes: 15)])
+        #expect(d.engine.state.episode == nil && d.engine.state.exitsLeft == 2)
+        #expect(d.engine.state.day.exits.map(\.reason) == ["срочный созвон"])
+        #expect(d.engine.state.day.exits.first?.held == false)
+
+        #expect(d.work(minutes: 14.5).isEmpty)                              // let go: nothing at all
+        d.work(minutes: 5)
+        #expect(d.timeline.last { $0.e.askStage != nil }?.e.askStage == 2)  // back at «настаивает» (the debt)
+    }
+
+    @Test func withNoExitsLeftTheButtonIsHeldAndAWalkRefillsThem() throws {
+        let d = Day { c in only(.stretch)(&c); c.emergencyExits = 1 }
+        d.climb(to: 3)
+        _ = try d.engine.emergencyExit(reason: "дедлайн", minutes: 15, now: d.now)
+        #expect(d.engine.state.exitsLeft == 0)
+        d.work(minutes: 16)
+        d.climb(to: 3)
+        while d.engine.state.episode?.stage ?? 0 < 3 { d.work(minutes: 1.0 / 60) }
+        #expect(throws: BalanceRefusal.holdRequired) { try d.engine.emergencyExit(reason: "дедлайн", minutes: 30, now: d.now) }
+        #expect(try d.engine.emergencyExit(reason: "дедлайн", minutes: 30, held: true, now: d.now) == [.released(.stretch, minutes: 30)])
+        #expect(d.engine.state.day.exits.map(\.held) == [false, true])
+        #expect(d.engine.state.exitsLeft == 0)
+
+        d.away(minutes: 15.1)                                               // a walk
+        #expect(d.engine.state.exitsLeft == 1)
+    }
+
+    @Test func olderStateFilesLoadWithDefaultsAndFinishedDaysAreKept() throws {
+        let d = Day(only(.stretch))
+        d.work(minutes: 10)
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(d.engine.state)) as! [String: Any]
+        for key in ["mode", "exitsLeft", "releasedUntil", "history"] { json.removeValue(forKey: key) }
+        var day = json["day"] as! [String: Any]
+        day.removeValue(forKey: "exits")
+        json["day"] = day
+        let old = try JSONDecoder().decode(BalanceState.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(old.mode == .soft && old.exitsLeft == 3 && old.history.isEmpty)
+        #expect(old.day.active == d.engine.state.day.active)
+        #expect(old.needs == d.engine.state.needs)
+        let tiny = try JSONDecoder().decode(BalanceState.self, from: Data(#"{"mode":"strict"}"#.utf8))
+        #expect(tiny.mode == .strict)
+        let restored = BalanceEngine(restoring: tiny, rng: SeededRandom(seed: 1), calendar: utc)
+        #expect(Set(restored.state.needs.keys) == Set(Need.allCases))          // missing needs get fresh tracks
+
+        let late = Day(start: date("2026-10-05T23:30:00Z"), only(.stretch))
+        late.work(minutes: 10)
+        late.away(minutes: 6 * 60)                                          // past 05:00 — a new day
+        late.work(minutes: 1)
+        #expect(late.engine.state.history.map(\.key) == ["2026-10-05"])
+    }
+}

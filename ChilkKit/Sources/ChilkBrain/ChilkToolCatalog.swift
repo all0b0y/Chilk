@@ -1,4 +1,5 @@
 import Foundation
+import ChilkCore
 
 public enum ChilkFileScope: String, Codable, Sendable { case files, obsidian }
 
@@ -12,6 +13,7 @@ public enum ChilkAction: Equatable, Sendable {
     case appendNote(path: String, text: String)
     case reminder(title: String, at: Date)
     case reminders
+    case mode(BalanceMode)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -44,6 +46,8 @@ public enum ChilkToolCatalog {
             tool("chilk_reminder", "Create an Apple Reminders reminder for the user in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Explicit future ISO-8601 timestamp with timezone. Creates only: no editing, completing or deleting.",
                  ["at": ["type": "string", "maxLength": 64], "title": ["type": "string", "minLength": 1, "maxLength": 120]]),
             tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (title, due). Other lists are never read.", [:]),
+            tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
+                 ["mode": ["type": "string", "enum": ["strict", "soft", "silent"]]]),
         ]
     }()
 
@@ -123,6 +127,10 @@ public enum ChilkToolCatalog {
         case "chilk_reminders":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .reminders
+        case "chilk_mode":
+            guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
+                  let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }
+            return .mode(mode)
         case "chilk_timer":
             guard Set(fields.keys) == ["seconds", "title"],
                   case .number(let seconds) = fields["seconds"], seconds.isFinite, seconds.rounded(.towardZero) == seconds,

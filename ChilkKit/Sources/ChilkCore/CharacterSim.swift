@@ -8,6 +8,8 @@ public struct Mood: Sendable, Equatable {
     public var yawning = false
     public var sleeping = false
     public var carried = false
+    /// The emergency exit with no exits left: half-closed eyes, a frown, the sprout droops.
+    public var sad = false
     public init() {}
 }
 
@@ -27,9 +29,10 @@ public enum Antic: CaseIterable, Sendable {
     }
 }
 
-/// How far out from behind the screen edge he stands (ladder stages, activities).
+/// How far out from behind the screen edge he stands (ladder stages, activities). `center`: stage 3–4, he has
+/// left the edge and stands in the middle of the screen (the app moves the window; he is centred in it).
 public enum StandOut: Sendable, Equatable {
-    case docked, peek, out
+    case docked, peek, out, center
 }
 
 /// Things he can hold or wear. Order = drawing order (behind → front).
@@ -130,6 +133,8 @@ public final class CharacterSim {
     public var standOut: StandOut = .docked
     /// Eye gymnastics: «следи за мной».
     public var eyesWide = false
+    /// Emergency exit with none left: he is sad while the button is held.
+    public var isSad = false
     public var hoveredButton: Int?
     /// Listening to the user: little ears pop up; `hearing` (0…1, voice level) makes them twitch.
     public var listening = false
@@ -238,6 +243,7 @@ public final class CharacterSim {
         m.yawning = currentAntic == .yawn && time < anticUntil
         m.sleeping = sleepLevel > 0.6
         m.carried = isCarried
+        m.sad = isSad
         return m
     }
 
@@ -409,8 +415,10 @@ public final class CharacterSim {
         case .docked: metrics.dockX
         case .peek: metrics.peekX
         case .out: metrics.outX
+        case .center: metrics.carryX
         }
-        x.target = m.carried ? metrics.carryX : (m.called ? metrics.outX : (isHovering ? min(metrics.peekX, stand) : stand))
+        x.target = m.carried || standOut == .center ? metrics.carryX
+            : (m.called ? metrics.outX : (isHovering ? min(metrics.peekX, stand) : stand))
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
@@ -470,7 +478,7 @@ public final class CharacterSim {
         tilt.target = min(Self.maxTilt, max(-Self.maxTilt, tilt.target))
 
         // Leaf: droops with fatigue and sleep, sways in a breeze, lags behind body motion (follow-through).
-        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22
+        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (isSad ? 0.3 : 0)
             + sin(t * 0.9 + phase) * 0.07 * (1 - sleepLevel * 0.6) + sin(t * 2.3) * 0.025
         if case .think = act { leaf.target += sin((t - actStart) * 2.4) * 0.3 }
         leaf.velocity += -x.velocity * 0.0022 - hop.velocity * 0.0009 - carry * 0.0012

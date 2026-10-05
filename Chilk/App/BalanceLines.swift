@@ -122,6 +122,75 @@ extension Lines {
         }
     }
 
+    // MARK: Strict mode: stage 3 «мешает», stage 4 the pause, the emergency exit (slice 4, 2026-10-05)
+
+    /// Stage 3: he has walked to the middle of the screen and the light is going down.
+    static func disturb(_ n: Need) -> String {
+        let lines: [String] = switch n {
+        case .stretch: [String(localized: "Я вышел на середину. Свет гаснет, пока ты не встанешь"),
+                        String(localized: "Встаёшь сам или мне погасить свет совсем?")]
+        case .walk: [String(localized: "Я встал посреди экрана. Прогулка, пока свет не погас"),
+                     String(localized: "Темнеет. Самое время выйти на улицу")]
+        case .endOfDay: [String(localized: "Темнеет не только за окном. Закругляйся"),
+                         String(localized: "Я выключаю свет. Рабочий день закончился")]
+        case .water, .eyes: [String(localized: "Ну правда, пора")]
+        }
+        return lines.randomElement()!
+    }
+
+    /// Stage 4: the pause is up; the countdown and the emergency exit are under him.
+    static func pause(_ n: Need) -> String {
+        switch n {
+        case .stretch: String(localized: "Пауза. Встань, потянись, отойди от Mac")
+        case .walk: String(localized: "Пауза. Иди гулять, я посторожу экран")
+        case .endOfDay: String(localized: "Пауза. На сегодня всё, правда")
+        case .water, .eyes: String(localized: "Пауза")
+        }
+    }
+
+    static let exitMinutes = [15, 30, 60]
+    static func minutesLabel(_ m: Int) -> String { String(localized: "\(m) мин") }
+    static let exitReasonPlaceholder = String(localized: "Причина выхода (обязательно)")
+    static let exitBack = String(localized: "Назад")
+    static let exitConfirm = String(localized: "Отпусти меня")
+    static let exitHold = String(localized: "Удерживай 10 секунд")
+    static let exitsSpent = String(localized: "Выходы закончились, они вернутся после прогулки. Удерживай кнопку, я подожду")
+
+    static func exitButton(left: Int) -> String {
+        left > 0 ? String(localized: "Экстренный выход · осталось \(left)") : String(localized: "Экстренный выход · выходов не осталось")
+    }
+
+    static func pauseStart(minutes: Int) -> String {
+        String(localized: "Отойди от Mac на \(minutes) мин, и я засчитаю отдых")
+    }
+
+    static func pauseCountdown(seconds: Int) -> String {
+        let time = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        return String(localized: "Засчитаю через \(time). Клавиатура и мышь начинают отсчёт заново")
+    }
+
+    static func released(_ minutes: Int) -> String {
+        String(localized: "Ладно, отпускаю на \(minutes) мин. Потом вернусь")
+    }
+
+    static func modeName(_ m: BalanceMode) -> String {
+        switch m {
+        case .strict: String(localized: "Строгий")
+        case .soft: String(localized: "Мягкий")
+        case .silent: String(localized: "Тишина")
+        }
+    }
+
+    static func modeSet(_ m: BalanceMode) -> String {
+        switch m {
+        case .strict: String(localized: "Строгий режим. Если не послушаешь, затемню экран, а потом поставлю на паузу")
+        case .soft: String(localized: "Мягкий режим. Буду только просить")
+        case .silent: String(localized: "Тишина. Только намекаю, без слов")
+        }
+    }
+
+    static let modeRefused = String(localized: "Сейчас смягчить нельзя: мы договорились. Выйти можно только экстренным выходом")
+
     static let snoozed: [String] = [
         String(localized: "Ладно, через 10 минут напомню ⏰"),
         String(localized: "Договорились. Но я засёк время"),
