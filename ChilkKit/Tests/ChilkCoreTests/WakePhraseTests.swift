@@ -11,4 +11,14 @@ struct WakePhraseTests {
             #expect(!WakePhrase.matches(text), "false wake: \(text)")
         }
     }
+
+    /// Bench 3c (2026-10-05): Whisper sometimes glues or doubles letters. Spelling only — no new sounds become names.
+    @Test func gluedOrDoubledSpellingsOfTheNameStillWake() {
+        for text in ["Эйчилк, поставь таймер", "Чиллк, найди файл", "Эй, Чиилк!", "И эйчилк, привет"] {
+            #expect(WakePhrase.matches(text), "miss: \(text)")
+        }
+        for text in ["Чилл, отстань", "Эйчел, привет", "Короче, Чилк опять тупит", "Скажи Чилку, что я ушёл", "Чиллить дома"] {
+            #expect(!WakePhrase.matches(text), "false wake: \(text)")
+        }
+    }
 }
