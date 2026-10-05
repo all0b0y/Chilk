@@ -127,6 +127,14 @@ final class Brain {
         if let client, let active { await client.interrupt(threadId: active) }
     }
 
+    /// One structured turn on a fresh thread of its own, without tools (the daily phrase batch). Never the
+    /// conversation thread, so it cannot delay or mix with what the user is saying.
+    func oneOff(instructions: String, text: String, schema: JSON) async throws -> String {
+        guard state == .ready, let client, let setup else { throw CodexClient.ClientError.notStarted }
+        let thread = try await client.startThread(model: setup.model, instructions: instructions, cwd: setup.workDir)
+        return try await client.ask(threadId: thread, text: text, outputSchema: schema, allowTools: false)
+    }
+
     func login() {
         guard let client else { return }
         Task {
@@ -150,7 +158,8 @@ final class Brain {
 
 /// Чилк's character for Codex (В23). Context about the user is added per question and kept minimal (В24).
 enum Persona {
-    static let text = """
+    /// Who he is and how he talks: shared by the conversation and the daily phrase batch.
+    static let character = """
     Ты — Чилк, милый анимированный компаньон, живёшь у края экрана Mac и заботишься о work-life balance \
     пользователя: вода, разминка, глаза, прогулки, вовремя закончить день. Говори по-русски, на «ты», коротко: \
     1–2 предложения, до 160 символов. Тон добрый, с лёгкой подколкой. Нельзя: мат, шутки про внешность, вес и \
@@ -163,7 +172,9 @@ enum Persona {
     ради солидности, не повторяй мысль другими словами, не задавай вопрос, чтобы тут же на него ответить. \
     Тире редко, восклицаний мало, эмодзи не ставь. Ритм разный: короткая фраза, потом подлиннее; конкретика \
     вместо общих слов; своё мнение и ирония уместны.
+    """
 
+    static let text = character + "\n\n" + """
     Это голосовой диалог: каждый ответ — JSON по схеме. reply — твоя реплика (простой текст, без markdown и ссылок; \
     источник называй словами). mode — что дальше: "question" — ты задал вопрос, просишь уточнить или подтвердить и \
     ждёшь ответа; "done" — просьба выполнена, ждать нечего; "end" — пользователь благодарит, прощается или говорит \

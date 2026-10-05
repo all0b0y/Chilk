@@ -2,8 +2,11 @@ import ChilkCore
 import Foundation
 
 /// Phrases for the balance ladder and breaks (В21, В23): kind, teasing, cheekier on stage 2. No shaming,
-/// nothing about looks, weight or health problems. Hand-written fallback — slice 3 adds Codex batches.
+/// nothing about looks, weight or health problems. Hand-written library + the day's Codex batch (2026-10-05).
 extension Lines {
+    /// Today's Codex lines (`PhraseBatches`); `nil` = the hand-written library alone.
+    @MainActor static var batch: PhraseBatch?
+
     static func name(_ n: Need) -> String {
         switch n {
         case .water: String(localized: "Вода")
@@ -14,9 +17,10 @@ extension Lines {
         }
     }
 
-    static func ask(_ n: Need, stage: Int, again: Bool) -> String {
+    @MainActor static func ask(_ n: Need, stage: Int, again: Bool) -> String {
         if again { return againLines[n]!.randomElement()! }
-        return (stage >= 2 ? insist[n]! : polite[n]!).randomElement()!
+        let library = stage >= 2 ? insist[n]! : polite[n]!
+        return (library + (batch?.lines(for: n, stage: stage) ?? [])).randomElement()!
     }
 
     static func button(_ r: Reaction, for n: Need) -> String {
@@ -139,8 +143,8 @@ extension Lines {
         String(localized: "Сделаем вид, что это не я съел последнюю печеньку"),
     ]
 
-    /// «Чем заняться вне экрана» (В18) by time of day; Codex batches with weather come in slice 3.
-    static func idea(hour: Int) -> String {
+    /// «Чем заняться вне экрана» (В18) by time of day: the library + today's Codex ideas (no weather, 2026-10-05).
+    @MainActor static func idea(hour: Int) -> String {
         let morning = [
             String(localized: "Идея: выйди за кофе в ближайшую кофейню ☕️"),
             String(localized: "Идея: пять минут на солнце — и мозг включится"),
@@ -166,7 +170,7 @@ extension Lines {
         case 17..<23: evening
         default: night
         }
-        return list.randomElement()!
+        return (list + (batch?.ideas(hour: hour) ?? [])).randomElement()!
     }
 
     static let gymFollow = String(localized: "Следи за мной глазами 👀")

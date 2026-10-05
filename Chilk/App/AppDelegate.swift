@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var conversation: Conversation?
     private var ears: Ears?
     private var hotkey: Hotkey?
+    private var phrases: PhraseBatches?
 
     static func main() {
         let app = NSApplication.shared
@@ -44,6 +45,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let conversation = Conversation(sim: edge.sim, brain: brain, ears: ears)
         self.brain = brain
         self.conversation = conversation
+        let phrases = PhraseBatches(brain: brain)
+        phrases.busy = { [weak conversation] in conversation?.isActive ?? false }
+        phrases.log = { [weak balance] in balance?.log($0) }
+        self.phrases = phrases
         conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
@@ -66,7 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (conversation?.isActive ?? false) || (actions?.ownsStage ?? false)
         }
         actions.conversationActive = { [weak conversation] in conversation?.isActive ?? false }
-        brain.onChange = { [weak balance, weak brain] in balance?.log("brain \(brain?.statusLine ?? "?")") }
+        brain.onChange = { [weak balance, weak brain, weak phrases] in
+            balance?.log("brain \(brain?.statusLine ?? "?")")
+            phrases?.refreshIfNeeded()                     // the day's batch as soon as Codex is ready
+        }
         // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; otherwise the balance poke.
         edge.onPoke = { [weak conversation, weak actions, weak balance] in
             if conversation?.clicked() == true { return }
@@ -92,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
         actions?.shutdown()
+        phrases?.shutdown()
         brain?.shutdown()
         ears?.shutdown()
     }
