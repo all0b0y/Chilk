@@ -75,7 +75,10 @@ public actor ChilkFileToolExecutor {
         do {
             for (index, component) in components.enumerated() {
                 try Task.checkCancellation()
-                let next = Darwin.openat(fd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                // Container components are host configuration (the app uses /, so none): a system link there, such
+                // as /var → /private/var for a test container, may be followed. Inside the grant, never.
+                let follow = index < trustedCount ? 0 : O_NOFOLLOW
+                let next = Darwin.openat(fd, component, O_RDONLY | O_DIRECTORY | follow | O_CLOEXEC)
                 guard next >= 0 else { throw FileError.blocked }
                 var ancestor = stat()
                 guard index < trustedCount || (fstat(next, &ancestor) == 0 && ancestor.st_flags & UInt32(UF_HIDDEN) == 0) else {

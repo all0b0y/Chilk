@@ -26,7 +26,11 @@ struct SelectedFolderToolTests {
         let root = URL(fileURLWithPath: base).appendingPathComponent("chilk-files-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Учёба"), withIntermediateDirectories: true)
         try Data("Сети: TCP/IP\n".utf8).write(to: root.appendingPathComponent("Учёба/Сети.md"))
-        return root.resolvingSymlinksInPath()
+        // Granted roots are canonical in the app (FolderAccessStore: realpath). `resolvingSymlinksInPath` is not:
+        // it turns /private/var/folders/… back into /var/folders/…, and /var is a symlink the executor never follows.
+        guard let canonical = realpath(root.path, nil) else { throw CocoaError(.fileNoSuchFile) }
+        defer { free(canonical) }
+        return URL(fileURLWithPath: String(cString: canonical), isDirectory: true)
     }
 
     @Test func secretContentIsNeverReturnedEvenInAnOrdinaryTextFile() async throws {
@@ -61,6 +65,19 @@ struct SelectedFolderToolTests {
         #expect(result.success)
         if case .array(let files) = result.value["files"] { #expect(files.count == 1) }
         else { Issue.record("Expected a filtered file list") }
+    }
+
+    /// Links in the host container may be followed (tests: /var → /private/var); a grant reached via a link may not.
+    @Test func aGrantWhosePathIsALinkIsDenied() async throws {
+        let real = try fixture()
+        let link = real.deletingLastPathComponent().appendingPathComponent("chilk-link-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: real); try? FileManager.default.removeItem(at: link) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let e = ChilkFileToolExecutor(allowedContainer: real.deletingLastPathComponent())
+        await e.configure([.files: link])
+        let read = await e.execute(name: "chilk_read_file", arguments: ["scope": "files", "path": "Учёба/Сети.md"])
+        #expect(!read.success)
+        #expect(!read.value.serialized().contains("TCP/IP"))
     }
 
     @Test func longUTF8ReadsAndSearchPagesHaveHonestBounds() async throws {
