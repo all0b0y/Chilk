@@ -66,4 +66,16 @@ struct DialogueTests {
         #expect(Dialogue.partialReply(#"{"mode":"answer","reply":"Ок"#) == "Ок")
         #expect(Dialogue.partialReply("Просто текст") == "Просто текст")
     }
+
+    /// Decision 2026-10-05: a long reply shows its start in the bubble, the rest in the «Подробнее» panel.
+    @Test func aLongReplyShowsItsStartCutAtAWord() {
+        let short = String(repeating: "слово ", count: 40).trimmingCharacters(in: .whitespaces)   // 239 chars
+        #expect(Dialogue.preview(short) == (short, false))
+        let long = "Первое предложение. " + String(repeating: "длинноеслово, ", count: 30)
+        let p = Dialogue.preview(long)
+        #expect(p.isCut)
+        #expect(p.text.hasSuffix("длинноеслово…"))
+        #expect(p.text.count <= Dialogue.bubbleLimit)
+        #expect(long.hasPrefix(String(p.text.dropLast())))
+    }
 }

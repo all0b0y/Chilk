@@ -55,6 +55,8 @@ final class EdgeController: NSObject {
     }
 
     var edge: Edge { placement.edge }
+    /// His window on screen (the long-answer panel opens beside it).
+    var windowFrame: NSRect { panel.frame }
 
     override init() {
         sim = CharacterSim(metrics: metrics)

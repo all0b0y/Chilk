@@ -46,6 +46,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.conversation = conversation
         conversation.context = { [weak balance] in Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0) }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
+        conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
+        // «Подробнее» under a long answer belongs to the conversation; every other bubble button to the balance.
+        let balanceButton = edge.onButton
+        edge.onButton = { [weak conversation] i in
+            if conversation?.pressedButton(i) == true { return }
+            balanceButton?(i)
+        }
         ears.onWake = { [weak conversation] in conversation?.wake() }
         ears.onDisabled = { [weak conversation] in conversation?.muteEars() }
         ears.onError = { [weak conversation] in conversation?.muteEars() }

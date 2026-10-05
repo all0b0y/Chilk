@@ -105,6 +105,10 @@ struct ActTests {
         run(sim, seconds: 0.1)
         #expect(sim.pose.bubble == "Ну попей же")
         #expect(sim.pose.bubbleAge > 80)                  // replaced in place, no new pop
+        sim.setBubbleButtons(["Подробнее"])
+        run(sim, seconds: 0.1)
+        #expect(sim.pose.buttons == ["Подробнее"])
+        #expect(sim.pose.bubbleAge > 80)                  // buttons added in place too
         sim.clearBubble()
         run(sim, seconds: 0.5)
         #expect(sim.pose.bubble == nil)

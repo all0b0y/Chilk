@@ -17,10 +17,15 @@ final class Conversation {
     var context: () -> String = { "" }
     /// Local debug log (CHILK_BALANCE_LOG), never sent anywhere.
     var log: (String) -> Void = { _ in }
+    /// His window on screen and whether he lives on the left edge: the long-answer panel opens beside him.
+    var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
 
     private let sim: CharacterSim
     private let brain: Brain
     private let ears: Ears
+    private let answerPanel = AnswerPanel()
+    /// The whole reply while the bubble shows only its start with «Подробнее» (decision 2026-10-05).
+    private var longAnswer: String?
     private var listeningGeneration = 0
     private var stripWakeAddress = false
     /// Whisper's text after «Чилк» from the wake check (decision 2026-10-05, MVP); nil = the hotkey / a follow-up.
@@ -72,6 +77,7 @@ final class Conversation {
     func wake() {
         guard phase == .idle, !closing else { return }
         suppressFollowUps = false
+        closeLongAnswer()
         if let problem = brain.problem { return leave(saying: problem, after: 4) }
         turns = 0
         sim.call(line: Lines.listening)
@@ -91,6 +97,34 @@ final class Conversation {
         return true
     }
 
+    /// A button under his bubble. `false` = not ours (the balance gets it).
+    func pressedButton(_ index: Int) -> Bool {
+        guard index == 0, let longAnswer else { return false }
+        let place = chilkFrame()
+        log("long answer opened")
+        answerPanel.show(longAnswer, beside: place.frame, onLeftEdge: place.onLeftEdge)
+        return true
+    }
+
+    /// The bubble shows what fits; a longer reply gets «Подробнее» → the panel with all of it.
+    private func showReply(_ text: String) {
+        let preview = Dialogue.preview(text)
+        sim.updateBubble(preview.text)
+        longAnswer = preview.isCut ? text : nil
+        sim.setBubbleButtons(preview.isCut ? [Lines.more] : [])
+        // Acceptance helper (like CHILK_DEMO_TALK): «press» Подробнее after 2 s.
+        if preview.isCut, ProcessInfo.processInfo.environment["CHILK_DEMO_MORE"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { _ = self?.pressedButton(0) }
+            }
+        }
+    }
+
+    private func closeLongAnswer() {
+        longAnswer = nil
+        answerPanel.close()
+    }
+
     private func perform(_ command: DialogueCommand) {
         log("\(phase) → \(command)")
         switch command {
@@ -99,6 +133,7 @@ final class Conversation {
             endTimer?.invalidate()
             closing = false
             turns = 0
+            closeLongAnswer()
             sim.call(line: Lines.listening)
             listen(window: nil)
         case .doneTalking:
@@ -211,7 +246,11 @@ final class Conversation {
                 let text = request(h.text)
                 detector.heard(text, isFinal: h.final, at: now)
                 if !text.isEmpty {
-                    if phase == .waiting { phase = .listening }                  // the follow-up has begun
+                    if phase == .waiting {                                       // the follow-up has begun
+                        phase = .listening
+                        longAnswer = nil
+                        sim.setBubbleButtons([])
+                    }
                     sim.earsDroop = 0
                     sim.updateBubble(text)
                 }
@@ -237,7 +276,7 @@ final class Conversation {
             if a.version != lastAnswerVersion {
                 lastAnswerVersion = a.version
                 let text = Dialogue.plain(Dialogue.partialReply(a.text))
-                if !text.isEmpty { sim.updateBubble(text) }
+                if !text.isEmpty { sim.updateBubble(Dialogue.preview(text).text) }
             }
         case .idle:
             poll?.invalidate()
@@ -284,7 +323,7 @@ final class Conversation {
                 log(String(format: "turn %d in %.1f s: [%@] «%@»", turns, now - asked, reply.mode.rawValue, text))
                 phase = .answering
                 sim.stopAct()
-                sim.updateBubble(text)
+                showReply(text)
                 if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
@@ -323,6 +362,7 @@ final class Conversation {
             MainActor.assumeIsolated {
                 guard let self, self.phase == .idle else { return }
                 self.closing = false
+                self.closeLongAnswer()
                 self.sim.clearBubble()
                 self.sim.standOut = .docked
                 self.log("conversation over after \(self.turns) turn(s)")

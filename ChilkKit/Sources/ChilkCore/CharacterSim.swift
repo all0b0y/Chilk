@@ -313,6 +313,13 @@ public final class CharacterSim {
         bubbleText = text
     }
 
+    /// Buttons under the bubble that is already showing (a long answer gets «Подробнее»), without popping it again.
+    public func setBubbleButtons(_ buttons: [String]) {
+        guard time < bubbleUntil else { return }
+        bubbleButtons = buttons
+        hoveredButton = nil
+    }
+
     public var isTalking: Bool { time < bubbleUntil }
 
     /// The bubble shrinks away.

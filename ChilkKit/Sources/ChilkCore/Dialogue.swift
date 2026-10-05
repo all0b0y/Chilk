@@ -73,6 +73,18 @@ public enum Dialogue {
     /// Time to read a reply before he goes back to the edge.
     public static func readingTime(_ replyLength: Int) -> TimeInterval { 2.5 + Double(replyLength) / 14 }
 
+    /// Longer replies do not fit a bubble (decision 2026-10-05): the bubble shows the start + «Подробнее».
+    public static let bubbleLimit = 240
+
+    /// What the bubble shows of a reply: all of it, or its start cut at a word with «…».
+    public static func preview(_ text: String) -> (text: String, isCut: Bool) {
+        guard text.count > bubbleLimit else { return (text, false) }
+        let head = text.prefix(bubbleLimit - 40)
+        let cut = head.lastIndex(where: \.isWhitespace).map { head[..<$0] } ?? head
+        let tidy = cut.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        return (tidy + "…", true)
+    }
+
     /// A new call continues the previous conversation if it ended less than this ago.
     public static let continueWithin: TimeInterval = 15 * 60
 

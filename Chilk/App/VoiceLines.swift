@@ -6,6 +6,8 @@ extension Lines {
     static let listening = String(localized: "Слушаю… 👂")
     static let didntHear = String(localized: "Не расслышал 🙈 Позови ещё раз")
     static let okNevermind = String(localized: "Ладно, проехали 🙂")
+    /// Under a long answer's bubble (decision 2026-10-05): opens the panel with all of it.
+    static let more = String(localized: "Подробнее")
     static let noMicrophone = String(localized: "Мне нужен микрофон: Настройки → Конфиденциальность → Микрофон → Чилк")
     static let earsFailed = String(localized: "Уши барахлят 😕 Не получилось включить распознавание речи")
     static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Меню Dock → «Войти в Codex»")
