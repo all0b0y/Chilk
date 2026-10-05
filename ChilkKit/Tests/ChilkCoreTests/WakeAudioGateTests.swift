@@ -67,4 +67,17 @@ struct WakeAudioGateTests {
         gate.reject()
         #expect(feed(&gate, Array(repeating: 0, count: 50), speech: false).isEmpty)  // silence costs nothing
     }
+
+    /// Decision 2026-10-05 (MVP): a wake from a window that continued someone else's speech is «noisy». Its request
+    /// must not be re-dictated from the window start (seconds of background before the name).
+    @Test func aContinuationClipIsMarkedAndItsReplayStartsAfterTheCheckedWindow() throws {
+        var (gate, _) = phraseThenSpeechDuringCheck(continuous: true)
+        #expect(!gate.lastClipContinuedSpeech)                                         // first phrase came after silence
+        gate.reject()
+        _ = try #require(feed(&gate, [4, 4, 4, 4, 4, 4], speech: true).first)
+        #expect(gate.lastClipContinuedSpeech)
+        _ = feed(&gate, [7, 7], speech: true)                                          // spoken during this check
+        #expect(gate.replayAfterClip() == [7, 7])
+        #expect(gate.replay()?.prefix(2) == [2, 2])                                    // the full replay still exists
+    }
 }

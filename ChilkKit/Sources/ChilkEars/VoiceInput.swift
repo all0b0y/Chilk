@@ -2,6 +2,18 @@ import CFvad
 import ChilkCore
 import Foundation
 
+/// What the wake check already heard (decision 2026-10-05, MVP).
+public struct WakeHeard: Sendable, Equatable {
+    /// Whisper's text after the name; empty = he was only called.
+    public let request: String
+    /// Someone else was talking around the call (a TV, a podcast): a follow-up window would hear them too.
+    public let amidSpeech: Bool
+    public init(request: String, amidSpeech: Bool) {
+        self.request = request
+        self.amidSpeech = amidSpeech
+    }
+}
+
 /// Main-actor audio router. The microphone has ONE owner; wake recognition runs off-actor, while this
 /// router keeps recording in a bounded RAM buffer. Attaching dictation replays that buffer atomically.
 @MainActor
@@ -26,6 +38,8 @@ public final class VoiceInput {
     private var overrun = false
     private var dictationCutoff: TimeInterval?
     private var frame: [Float] = []
+    private var heardInCheck: WakeHeard?
+    private var lastAmbientAt: TimeInterval = -.infinity
     private let pendingLimit = 16_000 * 12
 
     public init(recognize: @escaping Recognize, gate: WakeAudioGate = WakeAudioGate()) {
@@ -50,12 +64,19 @@ public final class VoiceInput {
         frame.removeAll(keepingCapacity: false)
         overrun = false
         dictationCutoff = nil
+        heardInCheck = nil
+        lastAmbientAt = -.infinity
         gate.reset()
         vad.reset()
     }
 
-    public func prepareDictation(replayWake: Bool, at: TimeInterval = ProcessInfo.processInfo.systemUptime) throws {
-        let audio = replayWake ? gate.replay() : []
+    /// After a voice wake returns what Whisper already heard, and replays only the audio AFTER the checked clip:
+    /// the clip may start with someone else's speech before the name, which Apple would dictate as the request
+    /// (bench 3c, 2026-10-05). nil = the hotkey (nothing ambient is replayed at all).
+    @discardableResult
+    public func prepareDictation(replayWake: Bool, at: TimeInterval = ProcessInfo.processInfo.systemUptime) throws -> WakeHeard? {
+        let heard = replayWake ? heardInCheck : nil
+        let audio = !replayWake ? [] : heard != nil ? gate.replayAfterClip() : gate.replay()
         guard let audio else { throw InputError.bufferOverrun }
         generation += 1             // invalidates any wake check still in flight
         task?.cancel()
@@ -65,6 +86,8 @@ public final class VoiceInput {
         frame.removeAll(keepingCapacity: true)
         overrun = false
         sink = nil
+        heardInCheck = nil
+        return heard
     }
 
     public func attach(_ feed: @escaping ([Float]) -> Void) throws {
@@ -115,10 +138,18 @@ public final class VoiceInput {
                 let padding = Array(repeating: Float(0), count: 8_000)
                 let text = try await recognize(clip + padding)
                 guard let self, self.generation == id, self.mode == .wake, !Task.isCancelled else { return }
-                let hit = WakePhrase.matches(text)
-                self.onCheck(text, hit, ProcessInfo.processInfo.systemUptime - start)
-                if hit { self.onWake() }
-                else { self.gate.reject() }
+                let request = WakePhrase.request(in: text)
+                let hit = request != nil
+                let end = ProcessInfo.processInfo.systemUptime
+                self.onCheck(text, hit, end - start)
+                if let request {
+                    let amid = self.gate.lastClipContinuedSpeech || end - self.lastAmbientAt < 10
+                    self.heardInCheck = WakeHeard(request: request, amidSpeech: amid)
+                    self.onWake()
+                } else {
+                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.lastAmbientAt = end }
+                    self.gate.reject()
+                }
             } catch {
                 guard let self, self.generation == id, !Task.isCancelled else { return }
                 self.suspend()

@@ -23,6 +23,8 @@ final class Conversation {
     private let ears: Ears
     private var listeningGeneration = 0
     private var stripWakeAddress = false
+    /// Whisper's text after «Чилк» from the wake check (decision 2026-10-05, MVP); nil = the hotkey / a follow-up.
+    private var heardInCheck: String?
     private var suppressFollowUps = false
     private var dictation: Dictation?
     private var detector = EndOfSpeech(start: 0)
@@ -128,21 +130,33 @@ final class Conversation {
         listeningGeneration += 1
         let generation = listeningGeneration
         stripWakeAddress = replayWake
-        do { try ears.prepareListening(replayWake: replayWake) }
+        let wake: WakeHeard?
+        do { wake = try ears.prepareListening(replayWake: replayWake) }
         catch { return leave(saying: Lines.didntHear, after: 3) }
+        heardInCheck = wake?.request
+        if wake?.amidSpeech == true {
+            // A follow-up window would hear the same TV and send it to Codex: answer once; «Чилк» again for more.
+            suppressFollowUps = true
+            log("wake amid speech: no follow-up")
+        }
         phase = window == nil ? .listening : .waiting
         self.window = window
         heard = Latest()
         lastHeardVersion = 0
+        if let wake, wake.amidSpeech, !wake.request.isEmpty {
+            // Bench 3c part 3: amid other speech Apple keeps dictating the TV after the request (1/22 requests right
+            // at 15 dB). Whisper already heard the request: ask with it, without listening on.
+            dictation = nil
+            sim.standOut = .out
+            startPoll()
+            return finishListening()
+        }
         sim.standOut = .out
         sim.listening = true
         sim.earsDroop = 0
         if window == nil { sim.say(Lines.listening, duration: .infinity) }      // a follow-up keeps his answer visible
-        detector = EndOfSpeech(start: now)
-        if let window {
-            detector.nothingHeardAfter = window
-            detector.maxDuration = window + 25
-        }
+        if heardInCheck?.isEmpty == false { sim.updateBubble(request("")) }
+        detector = freshDetector()
         let dictation = Dictation()
         self.dictation = dictation
         let heard = self.heard
@@ -155,8 +169,7 @@ final class Conversation {
                 guard generation == listeningGeneration, !Task.isCancelled,
                       phase == .listening || phase == .waiting else { return await dictation.cancel() }
                 try ears.attach(dictation)
-                detector = EndOfSpeech(start: now)          // the clock starts when the microphone is really on
-                if let window { detector.nothingHeardAfter = window; detector.maxDuration = window + 25 }
+                detector = freshDetector()                  // the clock starts when the microphone is really on
                 if let file {
                     try await dictation.play(file: file, realtime: true)
                 } else if silentDemo { log("follow-up demo silence") }
@@ -166,11 +179,27 @@ final class Conversation {
                 else { leave(saying: Lines.earsFailed, after: 3) }
             }
         }
-        if poll == nil {
-            poll = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.tick() }
-            }
+        startPoll()
+    }
+
+    private func startPoll() {
+        guard poll == nil else { return }
+        poll = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
+    }
+
+    /// What he will be asked: after a voice wake, without the address (and starting with what Whisper heard).
+    private func request(_ dictated: String) -> String {
+        stripWakeAddress ? WakePhrase.request(heardInCheck: heardInCheck, dictated: dictated) : dictated
+    }
+
+    /// A request Whisper already heard counts as speech: silence after it means he can answer.
+    private func freshDetector() -> EndOfSpeech {
+        var d = EndOfSpeech(start: now)
+        if let window { d.nothingHeardAfter = window; d.maxDuration = window + 25 }
+        if heardInCheck?.isEmpty == false { d.heard(request(""), isFinal: false, at: now) }
+        return d
     }
 
     private func tick() {
@@ -179,7 +208,7 @@ final class Conversation {
             let h = heard.get()
             if h.version != lastHeardVersion {
                 lastHeardVersion = h.version
-                let text = stripWakeAddress ? EndOfSpeech.stripAddress(h.text, allowNameOnly: true) : h.text
+                let text = request(h.text)
                 detector.heard(text, isFinal: h.final, at: now)
                 if !text.isEmpty {
                     if phase == .waiting { phase = .listening }                  // the follow-up has begun
@@ -233,12 +262,14 @@ final class Conversation {
         let dictation = self.dictation
         let heard = self.heard
         let stripWake = stripWakeAddress
+        let heardInCheck = self.heardInCheck
         ears.stopListening()
         earsTask?.cancel()
         answerTask = Task {
             await dictation?.finish()
             guard !Task.isCancelled else { return }
-            let question = EndOfSpeech.stripAddress(heard.get().text, allowNameOnly: stripWake)
+            let question = stripWake ? WakePhrase.request(heardInCheck: heardInCheck, dictated: heard.get().text)
+                                     : EndOfSpeech.stripAddress(heard.get().text)
             log("heard «\(question)»")
             guard !question.isEmpty else {
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)

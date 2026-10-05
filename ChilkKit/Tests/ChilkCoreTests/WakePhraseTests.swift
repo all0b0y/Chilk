@@ -21,4 +21,22 @@ struct WakePhraseTests {
             #expect(!WakePhrase.matches(text), "false wake: \(text)")
         }
     }
+
+    /// Decision 2026-10-05 (MVP): in noise the request is what Whisper heard after the name.
+    @Test func theRequestIsTheTextAfterTheAddress() {
+        #expect(WakePhrase.request(in: "Чилк, поставь таймер на 10 минут") == "поставь таймер на 10 минут")
+        #expect(WakePhrase.request(in: "Эй, Чилк! Какая погода завтра?") == "Какая погода завтра?")
+        #expect(WakePhrase.request(in: "И эйчилк, найди файл с отчётом.") == "найди файл с отчётом.")
+        #expect(WakePhrase.request(in: "Чиллк — напомни позвонить маме") == "напомни позвонить маме")
+        #expect(WakePhrase.request(in: "Чилк.") == "")
+        #expect(WakePhrase.request(in: "Короче, Чилк опять тупит") == nil)
+    }
+
+    @Test func aWakeRequestJoinsWhatWhisperHeardWithWhatFollowed() {
+        #expect(WakePhrase.request(heardInCheck: nil, dictated: "Чилк, найди файл") == "Найди файл")
+        #expect(WakePhrase.request(heardInCheck: "поставь таймер", dictated: "") == "Поставь таймер")
+        #expect(WakePhrase.request(heardInCheck: "поставь таймер", dictated: " на 10 минут") == "Поставь таймер на 10 минут")
+        #expect(WakePhrase.request(heardInCheck: "", dictated: "Чел, какая погода?") == "Какая погода?")
+        #expect(WakePhrase.request(heardInCheck: "", dictated: "") == "")
+    }
 }

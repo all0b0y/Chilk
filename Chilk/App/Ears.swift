@@ -34,7 +34,9 @@ final class Ears {
     init() {
         enabled = UserDefaults.standard.bool(forKey: "wakeEarsEnabled") || demo != nil
         let model = self.model
-        input = VoiceInput(recognize: { try await model.recognize($0) })
+        // Bench 3c (2026-10-05): speech that arrives while a phrase is being checked is checked next, so a TV or a
+        // podcast that never pauses no longer leaves him deaf after the first phrase.
+        input = VoiceInput(recognize: { try await model.recognize($0) }, gate: WakeAudioGate(continuous: true))
         input.onCheck = { [weak self] _, hit, seconds in
             guard let self else { return }
             self.checkCount += 1
@@ -114,11 +116,13 @@ final class Ears {
     }
 
     /// Called synchronously before Apple prepares its model, so speech during setup is also buffered.
-    func prepareListening(replayWake: Bool) throws {
+    /// After a voice wake: what Whisper already heard (the request after the name, and whether others were talking).
+    @discardableResult
+    func prepareListening(replayWake: Bool) throws -> WakeHeard? {
         passiveStart?.cancel()
         passive.pause()
         dictating = true
-        try input.prepareDictation(replayWake: replayWake, at: AVAudioTime.seconds(forHostTime: mach_absolute_time()))
+        return try input.prepareDictation(replayWake: replayWake, at: AVAudioTime.seconds(forHostTime: mach_absolute_time()))
     }
 
     func captureForDictation() async throws { try await startCapture() }

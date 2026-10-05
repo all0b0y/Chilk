@@ -10,28 +10,34 @@ import Speech
 ///   chilk-voice bench whisper-v1 <model-folder> <list.txt> <out.jsonl>  — the shipped VoiceInput (VAD gate)
 ///   chilk-voice bench whisper-v2 <model-folder> <list.txt> <out.jsonl>  — prototype: no skipped phrases + sliding windows
 ///   chilk-voice bench apple - <list.txt> <out.jsonl>                     — Apple dictation, continuous, word timings
+///   chilk-voice bench request <model-folder> <list.tsv> <out.jsonl>      — the shipped wake → request path in noise;
+///       list lines are «path<TAB>seconds where pure background starts»; that background then loops (a TV that
+///       never stops). Apple's words after the wake are written with timings; analyze_request.py applies the pause rule.
 /// Real time is simulated honestly: while a recognition runs, the audio that would have arrived in that wall time is
 /// fed afterwards (the detector cannot see it earlier). One JSON line per file; rules are applied by analyze.py.
 @MainActor
 enum Bench {
     static func run(_ args: [String]) async throws {
         guard args.count == 4 else { print("usage: chilk-voice bench whisper-v1|whisper-v2|apple <model|-> <list.txt> <out.jsonl>"); exit(2) }
-        let files = try String(contentsOfFile: args[2], encoding: .utf8).split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let lines = try String(contentsOfFile: args[2], encoding: .utf8).split(separator: "\n").map(String.init).filter { !$0.isEmpty }
         let out = URL(fileURLWithPath: args[3])
         try? FileManager.default.removeItem(at: out)
         FileManager.default.createFile(atPath: out.path, contents: nil)
         let handle = try FileHandle(forWritingTo: out)
         var model: WakeModel?
-        if args[0].hasPrefix("whisper") {
+        if args[0].hasPrefix("whisper") || args[0] == "request" {
             let folder = URL(fileURLWithPath: args[1])
             let base = folder.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             let m = WakeModel()
             try await m.prepare(folder: folder, base: base)
             model = m
         }
-        for (n, path) in files.enumerated() {
+        for (n, line) in lines.enumerated() {
+            let fields = line.split(separator: "\t").map(String.init)
+            let path = fields[0]
             // 1 s of trailing silence closes the last phrase (same for every variant).
-            let samples = try AudioSamples.load(file: URL(fileURLWithPath: path)) + [Float](repeating: 0, count: 16_000)
+            let file = try AudioSamples.load(file: URL(fileURLWithPath: path))
+            let samples = file + [Float](repeating: 0, count: 16_000)
             let cpu0 = cpuSeconds(), wall0 = now()
             var row: [String: Any]
             switch args[0] {
@@ -39,6 +45,7 @@ enum Bench {
             case "whisper-v1c": row = try await whisperV1(samples, model: model!, continuous: true)
             case "whisper-v2": row = try await whisperV2(samples, model: model!)
             case "apple": row = try await apple(path)
+            case "request": row = try await request(file, background: Int((Double(fields[1]) ?? 0) * 16_000), model: model!)
             default: print("unknown variant"); exit(2)
             }
             row["file"] = path
@@ -47,9 +54,72 @@ enum Bench {
             row["wall_s"] = now() - wall0
             handle.write(try JSONSerialization.data(withJSONObject: row, options: [.sortedKeys]))
             handle.write(Data("\n".utf8))
-            print("\(n + 1)/\(files.count) \(URL(fileURLWithPath: path).lastPathComponent) checks/segments=\((row["checks"] as? [Any])?.count ?? (row["segments"] as? [Any])?.count ?? 0)")
+            print("\(n + 1)/\(lines.count) \(URL(fileURLWithPath: path).lastPathComponent) checks/segments=\((row["checks"] as? [Any])?.count ?? (row["segments"] as? [Any])?.count ?? 0)")
         }
         try handle.close()
+    }
+
+    // MARK: Request — the shipped wake → request path (decision 2026-10-05, MVP)
+
+    /// The background (pure, after the call) also plays for 8 s BEFORE the file, as a TV does before you call him.
+    /// Runs the shipped continuous detector until the first wake, then takes what the app dictates: only the audio
+    /// after the checked clip (Whisper's text after the name is the start of the request). That audio + 25 s of what
+    /// follows (the background looped) goes through Apple dictation with word timings.
+    @MainActor
+    static func request(_ file: [Float], background: Int, model: WakeModel) async throws -> [String: Any] {
+        let tail = background < file.count - 16_000 ? Array(file[background...]) : [Float](repeating: 0, count: 16_000)
+        var before: [Float] = []
+        while before.count < 16_000 * 8 { before += tail }
+        var samples = before + file
+        let callEnds = samples.count + 16_000
+        while samples.count < callEnds + 16_000 * 40 { samples += tail }
+        let clock = SimClock()
+        let input = VoiceInput(recognize: { audio in
+            let t = now()
+            let text = try await model.recognize(audio)
+            await clock.finished(after: now() - t)
+            return text
+        }, gate: WakeAudioGate(continuous: true))
+        var lastText = "", woke = false
+        input.onCheck = { text, _, _ in lastText = text }
+        input.arm { woke = true }
+        var i = 0
+        func feedChunk() { let end = min(i + 320, samples.count); input.feed(Array(samples[i..<end])); i = end }
+        while i < callEnds, !woke {
+            feedChunk()
+            guard input.isChecking else { continue }
+            let dt = await clock.waitComputed()
+            var extra = Int(dt * 16_000)
+            while extra > 0, i < samples.count { let before = i; feedChunk(); extra -= i - before }
+            await clock.go()
+            for _ in 0..<100_000 { if !input.isChecking || woke { break }; await Task.yield() }
+        }
+        guard woke else { input.suspend(); return ["woke": false] }
+        let wakeAt = Double(i) / 16_000
+        let heard = try input.prepareDictation(replayWake: true)
+        var dictated: [Float] = []
+        try input.attach { dictated += $0 }
+        let replayed = dictated.count
+        let end = min(samples.count, i + 16_000 * 25)
+        while i < end { feedChunk() }
+        input.suspend()
+        let url = FileManager.default.temporaryDirectory.appending(path: "chilk-request-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let buffer = AudioSamples.buffer(dictated) else { throw EarsError.noAudioFormat }
+        do {                                                  // the header is complete only once the file is closed
+            let out = try AVAudioFile(forWriting: url, settings: buffer.format.settings)
+            try out.write(from: buffer)
+            out.close()
+        }
+        FileHandle.standardError.write(Data("woke at \(wakeAt) s, dictating \(dictated.count / 16_000) s\n".utf8))
+        var row = try await apple(url.path)
+        row["woke"] = true
+        row["wake_at"] = wakeAt
+        row["wake_text"] = lastText
+        row["heard"] = heard?.request ?? NSNull()
+        row["amid_speech"] = heard?.amidSpeech ?? false
+        row["replayed_s"] = Double(replayed) / 16_000
+        return row
     }
 
     static func cpuSeconds() -> Double {

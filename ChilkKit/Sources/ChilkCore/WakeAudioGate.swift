@@ -3,9 +3,11 @@ import Foundation
 /// Bounded in-memory audio only. Check the first phrase after a pause; keep everything spoken while the
 /// recognizer runs so Apple dictation can replay it, then join the live microphone without a gap.
 ///
-/// `continuous` (bench candidate, 2026-10-04): speech that arrives while a check is running is checked next,
+/// `continuous` (bench 3c, chosen 2026-10-05): speech that arrives while a check is running is checked next,
 /// overlapping the previous clip by the pre-roll, instead of waiting for a ≥ pause silence. Without it a TV
 /// that never pauses leaves only the first phrase checked.
+/// A wake's request is never replayed from the clip start, which may be someone else's speech before the name
+/// (`replayAfterClip()`); `lastClipContinuedSpeech` tells that the call came amid continuous speech.
 public struct WakeAudioGate: Sendable {
     private enum Phase: Sendable { case armed, collecting, checking, waitingForSilence }
     private var phase: Phase = .armed
@@ -16,6 +18,9 @@ public struct WakeAudioGate: Sendable {
     private var start = 0, onset = 0, silence = 0
     private var clipEnd = 0
     private var speechSinceClip = false
+    private var continuing = false
+    /// The last clip continued speech without a pause (background, or the user talking straight on).
+    public private(set) var lastClipContinuedSpeech = false
 
     public init(sampleRate: Int = 16_000, preRoll: Double = 0.7, pause: Double = 0.6,
                 maxPhrase: Double = 5, capacity: Double = 12, continuous: Bool = false) {
@@ -47,6 +52,7 @@ public struct WakeAudioGate: Sendable {
             guard speech else { return nil }
             start = max(0, before - preRollSamples)
             onset = before
+            continuing = false
             phase = .collecting
         case .collecting: break
         }
@@ -54,6 +60,7 @@ public struct WakeAudioGate: Sendable {
             phase = .checking
             clipEnd = written
             speechSinceClip = false
+            lastClipContinuedSpeech = continuing
             return snapshot(from: start)
         }
         return nil
@@ -63,11 +70,15 @@ public struct WakeAudioGate: Sendable {
     /// the beginning was overwritten: never execute a request with its first words silently missing.
     public func replay() -> [Float]? { snapshot(from: start) }
 
+    /// Only what arrived after the checked clip (its text is already known from the check).
+    public func replayAfterClip() -> [Float]? { snapshot(from: clipEnd) }
+
     public mutating func reject() {
         if continuous, speechSinceClip {
             // Never reach back further than half the ring: a very slow check must not make the next clip unreadable.
             start = max(clipEnd - preRollSamples, written - ring.count / 2, 0)
             onset = clipEnd
+            continuing = true
             phase = .collecting
         } else {
             phase = silence >= pauseSamples ? .armed : .waitingForSilence
@@ -83,6 +94,8 @@ public struct WakeAudioGate: Sendable {
         silence = 0
         clipEnd = 0
         speechSinceClip = false
+        continuing = false
+        lastClipContinuedSpeech = false
     }
 
     private func snapshot(from first: Int) -> [Float]? {

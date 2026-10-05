@@ -5,11 +5,42 @@ public enum WakePhrase {
     private static let names: Set<String> = ["чилк", "чилка", "чилку", "чилки"]
 
     public static func matches(_ text: String) -> Bool {
-        let words = text.lowercased().split { !$0.isLetter }.prefix(4).flatMap { spelled(String($0)) }.prefix(3).map { $0 }
-        guard let first = words.first else { return false }
-        if names.contains(first) { return true }
-        if first == "эй", words.count > 1 { return names.contains(words[1]) }
-        return words.count == 3 && words[0] == "и" && words[1] == "эй" && names.contains(words[2])
+        request(in: text) != nil
+    }
+
+    /// The text after the address («Чилк, …», «Эй, Чилк! …», «И эйчилк, …»); nil = not addressed to him.
+    /// Decision 2026-10-05 (MVP): after a wake in background speech this is the request (Whisper heard it right,
+    /// Apple dictation replayed from the clip start hears the background before the name).
+    public static func request(in text: String) -> String? {
+        var tokens: [String] = []
+        var cursor = text.startIndex
+        while tokens.count < 3, let start = text[cursor...].firstIndex(where: \.isLetter) {
+            let end = text[start...].firstIndex { !$0.isLetter } ?? text.endIndex
+            tokens += spelled(text[start..<end].lowercased())
+            cursor = end
+            if isAddress(tokens) { return String(text[end...].drop { !$0.isLetter && !$0.isNumber }) }
+        }
+        return nil
+    }
+
+    private static func isAddress(_ t: [String]) -> Bool {
+        switch t.count {
+        case 1: names.contains(t[0])
+        case 2: t[0] == "эй" && names.contains(t[1])
+        case 3: t[0] == "и" && t[1] == "эй" && names.contains(t[2])
+        default: false
+        }
+    }
+
+    /// The request of a voice wake: `heardInCheck` (Whisper's text after the name, continuous speech only) + what
+    /// Apple dictated afterwards. Without it Apple replayed the whole phrase, so the address is stripped from it.
+    public static func request(heardInCheck: String?, dictated: String) -> String {
+        let heard = heardInCheck?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let rest = heard.isEmpty ? EndOfSpeech.stripAddress(dictated, allowNameOnly: true)
+                                 : dictated.trimmingCharacters(in: .whitespacesAndNewlines)
+        let joined = [heard, rest].filter { !$0.isEmpty }.joined(separator: " ")
+        guard let first = joined.first else { return "" }
+        return first.uppercased() + joined.dropFirst()
     }
 
     /// Spelling only, never a new sound (bench 3c): Whisper sometimes doubles a letter («Чиллк») or glues the
