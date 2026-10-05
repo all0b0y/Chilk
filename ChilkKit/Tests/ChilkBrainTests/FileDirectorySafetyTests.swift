@@ -58,23 +58,4 @@ struct FileDirectorySafetyTests {
         errno = EIO
         #expect(try ChilkFileToolExecutor.readDirectoryEntry(stream, using: { _ in nil }) == nil)
     }
-
-    @Test func cancellationAfterCommitWarnsThatTheNoteMayHaveChanged() async throws {
-        let root = try SelectedFolderToolTests().fixture()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let note = root.appendingPathComponent("committed.md")
-        try Data("ALREADY COMMITTED\n".utf8).write(to: note)
-        let uncertain = await Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            do {
-                try ChilkFileToolExecutor.verifyCommittedAppend { try Task.checkCancellation(); return true }
-                return false
-            } catch let error as ChilkFileToolExecutor.FileError {
-                if case .writeIncomplete = error { return true }
-                return false
-            } catch { return false }
-        }.value
-        #expect(uncertain)
-        #expect(try Data(contentsOf: note) == Data("ALREADY COMMITTED\n".utf8))
-    }
 }

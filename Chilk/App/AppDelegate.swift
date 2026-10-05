@@ -59,6 +59,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             balanceButton?(i)
         }
         ears.onWake = { [weak conversation] in conversation?.wake() }
+        // «Можно я загляну…?» (decision 2026-10-05): buttons only, 60 s, no answer = no for now.
+        actions.files.askUser = { [weak conversation] text in
+            guard let index = await conversation?.ask(text, buttons: [Lines.yes, Lines.no], timeout: 60) else { return nil }
+            return index == 0
+        }
         ears.onDisabled = { [weak conversation] in conversation?.muteEars() }
         ears.onError = { [weak conversation] in conversation?.muteEars() }
         ears.notice = { [weak edge, weak conversation] line in

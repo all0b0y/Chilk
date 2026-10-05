@@ -25,7 +25,8 @@ public final class ChilkToolExecutor {
         do {
             let action = try ChilkToolCatalog.parse(name: name, arguments: arguments)
             switch action {
-            case .findFiles, .readFile, .appendNote: return .failure("File access is handled by the selected-folder tools")
+            case .findFiles, .readFile, .listFolders, .requestFolder:
+                return .failure("File access is handled by the shared-folder tools")
             case .reminder, .reminders: return .failure("Apple Reminders are handled by the reminders tools")
             case .status: return .ok(status())
             case .water: return .ok(try water())

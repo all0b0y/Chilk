@@ -99,6 +99,7 @@ final class Conversation {
 
     /// A button under his bubble. `false` = not ours (the balance gets it).
     func pressedButton(_ index: Int) -> Bool {
+        if question != nil { settleQuestion(index); return true }
         guard index == 0, let longAnswer else { return false }
         let place = chilkFrame()
         log("long answer opened")
@@ -142,17 +143,59 @@ final class Conversation {
             stopEars()
             leave(saying: nil, after: 0.2)
         case .interruptAndListen:
+            settleQuestion(nil)
             answerTask?.cancel()
             Task { await brain.interrupt() }
             sim.stopAct()
             sim.updateBubble(Lines.listening)
             listen(window: Dialogue.followUpWindow(mode: .question, replyLength: 0))
         case .cancel:
+            settleQuestion(nil)
             answerTask?.cancel()
             stopEars()
             Task { await brain.interrupt() }
             leave(saying: Lines.okNevermind, after: 2.5)
         }
+    }
+
+    // MARK: A question from a tool («Можно я загляну…?», decision 2026-10-05)
+
+    private var question: CheckedContinuation<Int?, Never>?
+    private var questionTimer: Timer?
+
+    /// While Codex is thinking, a tool asks the user: the bubble shows `text` with `buttons` until one is pressed
+    /// (its index), `timeout` passes or the conversation ends (`nil`). Buttons only — a spoken «да» is not an answer.
+    func ask(_ text: String, buttons: [String], timeout: TimeInterval) async -> Int? {
+        guard phase == .thinking, question == nil else { return nil }
+        sim.stopAct()
+        sim.say(text, duration: .infinity, buttons: buttons)
+        log("asked the user «\(text)» (\(buttons.count) buttons)")
+        // Acceptance helper (like CHILK_DEMO_MORE): «press» button N after 2 s through the same path as a click.
+        if let demo = ProcessInfo.processInfo.environment["CHILK_DEMO_ANSWER"].flatMap(Int.init) {
+            Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { _ = self?.pressedButton(demo) }
+            }
+        }
+        return await withCheckedContinuation { continuation in
+            question = continuation
+            questionTimer = Timer.scheduledTimer(withTimeInterval: timeout, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.settleQuestion(nil) }
+            }
+        }
+    }
+
+    private func settleQuestion(_ index: Int?) {
+        guard let pending = question else { return }
+        question = nil
+        questionTimer?.invalidate()
+        questionTimer = nil
+        log("question answered: \(index.map(String.init) ?? "none")")
+        if phase == .thinking {
+            sim.setBubbleButtons([])
+            sim.perform(.think(seconds: 120))
+            sim.updateBubble("·")
+        }
+        pending.resume(returning: index)
     }
 
     // MARK: Listening
@@ -264,6 +307,7 @@ final class Conversation {
             case .done, .tooLong: finishListening()
             }
         case .thinking:
+            if question != nil { return }                          // the question stays until answered
             if !Dialogue.partialReply(answer.get().text).isEmpty {
                 phase = .answering
                 sim.stopAct()
@@ -307,8 +351,10 @@ final class Conversation {
         answerTask = Task {
             await dictation?.finish()
             guard !Task.isCancelled else { return }
-            let question = stripWake ? WakePhrase.request(heardInCheck: heardInCheck, dictated: heard.get().text)
+            var question = stripWake ? WakePhrase.request(heardInCheck: heardInCheck, dictated: heard.get().text)
                                      : EndOfSpeech.stripAddress(heard.get().text)
+            // Acceptance helper for tool flows (with CHILK_EARS_FILE): the words, without dictation's guesses.
+            if let demo = ProcessInfo.processInfo.environment["CHILK_DEMO_HEARD"], !demo.isEmpty { question = demo }
             log("heard «\(question)»")
             guard !question.isEmpty else {
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)
@@ -347,6 +393,7 @@ final class Conversation {
 
     /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
     private func leave(saying line: String?, after seconds: Double) {
+        settleQuestion(nil)
         phase = .idle
         closing = true
         poll?.invalidate()

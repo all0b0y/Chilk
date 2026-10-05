@@ -1,20 +1,29 @@
 import AppKit
 import ChilkBrain
 
-/// Folder choice is a local user interaction. All bookmarks and filesystem work stay on dedicated actors.
+/// Shared folders: read-only (decision 2026-10-05), any number of them, each chosen by the user — in the open panel
+/// or with «Да» to Chilk's own «Можно я загляну…?». Bookmarks and filesystem work stay on dedicated actors.
+///
+/// Entry points for the tray popup (slice 5a): `grants`, `choose(_:)`, `remove(name:)`, `onChange`.
 @MainActor
 final class Files {
     typealias Runner = @Sendable (ChilkFileToolExecutor, String, JSON) async -> CodexToolResult
     enum AccessError: Error { case unavailable, busy }
     let executor: ChilkFileToolExecutor
     private var store: FolderAccessStore?
-    private var loading: Task<(FolderAccessStore, [ChilkFileScope: URL]), Error>?
+    private var loading: Task<(FolderAccessStore, [FolderGrant]), Error>?
     private var operations: [UUID: Task<CodexToolResult, Never>] = [:]
-    private(set) var roots: [ChilkFileScope: URL] = [:]
+    private(set) var grants: [FolderGrant] = []
     private(set) var generation: UInt64 = 0
     private var selecting = false
     private var changing = false
     private let run: Runner
+    private let requests = FolderRequests()
+    private let home = FileManager.default.homeDirectoryForCurrentUser
+    /// The «Да / Нет» bubble: `true` / `false`, `nil` = no answer in time or the conversation ended.
+    var askUser: ((String) async -> Bool?)?
+    /// The list changed (added, removed, loaded) — for whoever shows it.
+    var onChange: (() -> Void)?
 
     init(file: URL, allowedContainer: URL = URL(fileURLWithPath: "/"),
          run: @escaping Runner = { executor, name, arguments in
@@ -24,7 +33,7 @@ final class Files {
         self.run = run
         loading = Task {
             let store = try await FolderAccessStore(file: file, allowedContainer: allowedContainer)
-            return (store, await store.roots)
+            return (store, await store.grants)
         }
         Task { [weak self] in _ = await self?.waitUntilReady() }
     }
@@ -41,15 +50,17 @@ final class Files {
             let loaded = try await pending.value
             guard store == nil else { return true }
             store = loaded.0
-            roots = loaded.1
+            grants = loaded.1
             loading = nil
+            onChange?()
             return true
         } catch { loading = nil; return false }
     }
 
     func execute(_ call: CodexToolCall) async -> CodexToolResult {
         guard await waitUntilReady(), !changing else { return .failure("Folder access unavailable or changing") }
-        let snapshot = roots, version = generation, id = UUID()
+        if call.name == "chilk_request_folder" { return await request(call) }
+        let snapshot = grants, version = generation, id = UUID()
         let operation = Task {
             await executor.configure(snapshot)
             guard !Task.isCancelled, !changing, generation == version else {
@@ -60,46 +71,65 @@ final class Files {
         operations[id] = operation
         let result = await withTaskCancellationHandler(operation: { await operation.value }, onCancel: { operation.cancel() })
         operations.removeValue(forKey: id)
-        guard !Task.isCancelled, !changing, generation == version else {
-            let message = call.name == "chilk_append_note"
-                ? "Cancelled or folder access changed. A started note write may have changed the note; check before retrying"
-                : "Cancelled or folder access changed"
-            return .failure(message)
-        }
+        guard !Task.isCancelled, !changing, generation == version else { return .failure("Cancelled or folder access changed") }
         return result
     }
 
-    func select(_ scope: ChilkFileScope, url: URL) async throws {
-        guard await waitUntilReady(), !changing else { throw AccessError.busy }
-        beginChange()
-        try await finishChange(scope, url: url)
+    /// «Можно я загляну в „Документы/Работа“? Ищу там договор» — «Да» shares the folder for reading at once.
+    private func request(_ call: CodexToolCall) async -> CodexToolResult {
+        guard case .requestFolder(let path, let reason)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
+        else { return .failure("Invalid arguments: path is a full folder path, absolute or starting with ~/, without . or .. "
+                                + "(see locations in chilk_list_folders); reason is 1–120 characters") }
+        guard let store, let askUser else { return .failure("Chilk cannot ask right now") }
+        let home = self.home
+        let outcome = await requests.run(path: path, grants: grants,
+            check: { url in try await store.check(.files, url: url) },
+            ask: { url in await askUser(Lines.mayILook(FolderRequests.display(url, home: home), reason: reason)) },
+            add: { [weak self] url in
+                guard let self, !self.changing, !self.selecting else { throw AccessError.busy }
+                self.beginChange()
+                return try await self.finishChange { try await store.add(Self.kind(of: url), url: url) }
+            })
+        return .ok(FolderRequests.result(outcome))
     }
 
-    func revoke(_ scope: ChilkFileScope) async throws {
-        guard await waitUntilReady(), !changing else { throw AccessError.busy }
+    /// A folder with .obsidian is a vault (Markdown only); anything else is a files folder.
+    nonisolated private static func kind(of url: URL) -> ChilkFileScope {
+        var isDirectory: ObjCBool = false
+        let marker = url.appendingPathComponent(".obsidian").path
+        return FileManager.default.fileExists(atPath: marker, isDirectory: &isDirectory) && isDirectory.boolValue ? .obsidian : .files
+    }
+
+    func add(_ kind: ChilkFileScope, url: URL) async throws {
+        guard await waitUntilReady(), canChange, let store else { throw AccessError.busy }
         beginChange()
-        try await finishChange(scope, url: nil)
+        _ = try await finishChange { try await store.add(kind, url: url) }
+    }
+
+    func remove(name: String) async throws {
+        guard await waitUntilReady(), canChange, let store else { throw AccessError.busy }
+        beginChange()
+        _ = try await finishChange { try await store.remove(name: name) }
     }
 
     private func beginChange() {
         changing = true
         generation &+= 1
-        for operation in operations.values { operation.cancel() }
+        for operation in Array(operations.values) { operation.cancel() }
     }
 
-    private func finishChange(_ scope: ChilkFileScope, url: URL?) async throws {
-        defer { changing = false }
+    private func finishChange<T>(_ change: () async throws -> T) async throws -> T {
+        defer { changing = false; onChange?() }
         guard let store else { throw AccessError.unavailable }
-        // Do not report revocation complete while an old write could still be settling.
         for operation in Array(operations.values) { _ = await operation.value }
         do {
-            if let url { try await store.select(scope, url: url) }
-            else { try await store.revoke(scope) }
-            roots = await store.roots
-            await executor.configure(roots)
+            let value = try await change()
+            grants = await store.grants
+            await executor.configure(grants)
+            return value
         } catch {
-            roots = await store.roots
-            await executor.configure(roots)
+            grants = await store.grants
+            await executor.configure(grants)
             throw error
         }
     }
@@ -108,23 +138,21 @@ final class Files {
         let item = NSMenuItem(title: String(localized: "Файлы и Obsidian"), action: nil, keyEquivalent: "")
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let files = roots[.files]?.lastPathComponent ?? String(localized: "не выбраны")
-        let vault = roots[.obsidian]?.lastPathComponent ?? String(localized: "не выбран")
-        let fileStatus = NSMenuItem(title: String(localized: "Файлы: \(files)"), action: nil, keyEquivalent: "")
-        fileStatus.isEnabled = false
-        menu.addItem(fileStatus)
-        menu.addItem(action(String(localized: "Выбрать папку файлов…"), #selector(chooseFiles)))
-        let revokeFiles = action(String(localized: "Отозвать доступ к файлам"), #selector(revokeFiles))
-        revokeFiles.isEnabled = canChange && roots[.files] != nil
-        menu.addItem(revokeFiles)
+        let header = NSMenuItem(title: grants.isEmpty ? String(localized: "Папок нет — только чтение")
+                                                      : String(localized: "Только чтение:"), action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        for grant in grants {
+            let where_ = FolderRequests.display(grant.root, home: home)
+            let title = grant.kind == .obsidian ? String(localized: "Убрать «\(where_)» (Obsidian)")
+                                                : String(localized: "Убрать «\(where_)»")
+            let remove = action(title, #selector(removeFolder(_:)))
+            remove.representedObject = grant.name
+            menu.addItem(remove)
+        }
         menu.addItem(.separator())
-        let vaultStatus = NSMenuItem(title: String(localized: "Obsidian: \(vault)"), action: nil, keyEquivalent: "")
-        vaultStatus.isEnabled = false
-        menu.addItem(vaultStatus)
-        menu.addItem(action(String(localized: "Выбрать хранилище Obsidian…"), #selector(chooseVault)))
-        let revokeVault = action(String(localized: "Отозвать доступ к Obsidian"), #selector(revokeVault))
-        revokeVault.isEnabled = canChange && roots[.obsidian] != nil
-        menu.addItem(revokeVault)
+        menu.addItem(action(String(localized: "Добавить папку…"), #selector(chooseFiles)))
+        menu.addItem(action(String(localized: "Добавить хранилище Obsidian…"), #selector(chooseVault)))
         if changing || store == nil {
             let title = changing ? String(localized: "Изменяю доступ…")
                 : (loading != nil ? String(localized: "Загружаю доступ…") : String(localized: "Хранилище доступа недоступно"))
@@ -136,7 +164,7 @@ final class Files {
         return item
     }
 
-    private var canChange: Bool { store != nil && !selecting && !changing }
+    var canChange: Bool { store != nil && !selecting && !changing }
     private func action(_ title: String, _ selector: Selector) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
         item.target = self
@@ -146,16 +174,13 @@ final class Files {
 
     @objc private func chooseFiles() { choose(.files) }
     @objc private func chooseVault() { choose(.obsidian) }
-    @objc private func revokeFiles() { startRevoking(.files) }
-    @objc private func revokeVault() { startRevoking(.obsidian) }
-
-    private func startRevoking(_ scope: ChilkFileScope) {
-        guard canChange else { return }
-        beginChange()
-        Task { do { try await finishChange(scope, url: nil) } catch { report(error) } }
+    @objc private func removeFolder(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        Task { do { try await remove(name: name) } catch { report(error) } }
     }
 
-    private func choose(_ scope: ChilkFileScope) {
+    /// The system folder panel; the chosen folder is added for reading.
+    func choose(_ kind: ChilkFileScope) {
         guard canChange else { return }
         selecting = true
         let panel = NSOpenPanel()
@@ -164,18 +189,16 @@ final class Files {
         panel.allowsMultipleSelection = false
         panel.resolvesAliases = true
         panel.prompt = String(localized: "Разрешить")
-        panel.title = scope == .files ? String(localized: "Папка файлов Чилка") : String(localized: "Хранилище Obsidian")
-        panel.message = scope == .files
-            ? String(localized: "Только поиск имён и чтение .md, .txt и .csv по твоей просьбе. Найденные имена и прочитанный текст отправляются Codex/OpenAI. Доступ можно отозвать в Dock.")
-            : String(localized: "Выбери корень хранилища с папкой .obsidian. Чилк сможет читать, создавать и дописывать .md по твоей просьбе, без удаления и перезаписи. Найденные имена и прочитанный текст отправляются Codex/OpenAI.")
-        panel.directoryURL = roots[scope]
+        panel.title = kind == .files ? String(localized: "Папка для Чилка") : String(localized: "Хранилище Obsidian")
+        panel.message = kind == .files
+            ? String(localized: "Только чтение: поиск имён и чтение .md, .txt и .csv по твоей просьбе. Чилк ничего не меняет, не перемещает и не удаляет. Найденные имена и прочитанный текст отправляются Codex/OpenAI. Папку можно убрать.")
+            : String(localized: "Выбери корень хранилища с папкой .obsidian. Только чтение .md по твоей просьбе: Чилк ничего не создаёт и не меняет. Найденные имена и прочитанный текст отправляются Codex/OpenAI.")
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { [weak self] response in
             guard let self else { return }
             self.selecting = false
             guard response == .OK, let url = panel.url else { return }
-            self.beginChange()
-            Task { do { try await self.finishChange(scope, url: url) } catch { self.report(error) } }
+            Task { do { try await self.add(kind, url: url) } catch { self.report(error) } }
         }
     }
 
@@ -183,9 +206,12 @@ final class Files {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Не получилось изменить доступ")
-        if case FolderAccessStore.AccessError.invalidVault = error {
+        switch error {
+        case FolderAccessStore.AccessError.invalidVault:
             alert.informativeText = String(localized: "Выбери корневую папку хранилища Obsidian: внутри должна быть папка .obsidian.")
-        } else {
+        case FolderAccessStore.AccessError.tooBroad:
+            alert.informativeText = String(localized: "Целиком домашнюю папку или диск дать нельзя — выбери папку внутри.")
+        default:
             alert.informativeText = String(localized: "Папка недоступна или выбор не удалось сохранить. Прежний доступ не изменён. Скрытые и системные папки выбирать нельзя.")
         }
         alert.addButton(withTitle: String(localized: "Понятно"))

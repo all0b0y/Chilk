@@ -75,7 +75,8 @@ final class Actions {
         } else {
             result = .failure("Chilk actions unavailable: timer storage could not be loaded")
         }
-        balance?.log("tool \(call.name) success=\(result.success)")
+        balance?.log("tool \(call.name) success=\(result.success)"
+                     + (result.success ? "" : " \(result.value["error"]?.string ?? "")"))
         return result
     }
 

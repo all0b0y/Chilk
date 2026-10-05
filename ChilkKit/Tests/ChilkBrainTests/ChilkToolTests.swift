@@ -14,25 +14,31 @@ struct ChilkToolTests {
         #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_cancel_timer", arguments: ["id": ""]) }
     }
 
-    @Test func fileActionsRequireAnExactScopeRelativePathAndBoundedPage() throws {
+    @Test func fileActionsRequireAFolderNameRelativePathAndBoundedPage() throws {
         #expect(throws: Never.self) {
-            _ = try ChilkToolCatalog.parse(name: "chilk_find_files", arguments: ["scope": "files", "query": "отчёт", "offset": 0])
-            _ = try ChilkToolCatalog.parse(name: "chilk_read_file", arguments: ["scope": "obsidian", "path": "Учёба/Сети.md"])
-            _ = try ChilkToolCatalog.parse(name: "chilk_append_note", arguments: ["path": "Идеи.md", "text": "Мысль"])
+            _ = try ChilkToolCatalog.parse(name: "chilk_find_files", arguments: ["folder": "all", "query": "отчёт", "offset": 0])
+            _ = try ChilkToolCatalog.parse(name: "chilk_read_file", arguments: ["folder": "Хранилище", "path": "Учёба/Сети.md"])
+            _ = try ChilkToolCatalog.parse(name: "chilk_list_folders", arguments: [:])
+            _ = try ChilkToolCatalog.parse(name: "chilk_request_folder", arguments: ["path": "~/Documents/Работа", "reason": "ищу договор"])
         }
         let invalidSearches: [JSON] = [
-            ["scope": "home", "query": "отчёт", "offset": 0],
-            ["scope": "files", "query": "отчёт", "offset": "0"],
-            ["scope": "files", "query": " ", "offset": 0],
-            ["scope": "files", "query": "отчёт", "offset": .number(0.5)],
-            ["scope": "files", "query": "отчёт", "offset": 10001],
-            ["scope": "files", "query": "отчёт", "offset": 0, "root": "/"],
+            ["scope": "files", "query": "отчёт", "offset": 0],
+            ["folder": "", "query": "отчёт", "offset": 0],
+            ["folder": "all", "query": "отчёт", "offset": "0"],
+            ["folder": "all", "query": " ", "offset": 0],
+            ["folder": "all", "query": "отчёт", "offset": .number(0.5)],
+            ["folder": "all", "query": "отчёт", "offset": 10001],
+            ["folder": "all", "query": "отчёт", "offset": 0, "root": "/"],
         ]
         for bad in invalidSearches { #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_find_files", arguments: bad) } }
         for path in ["/etc/passwd", "../note.md", "notes/../note.md", "notes//a.md", "~/note.md", "notes/./a.md", "a\u{0}.md"] {
-            #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_read_file", arguments: ["scope": "files", "path": .string(path)]) }
+            #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_read_file", arguments: ["folder": "Папка", "path": .string(path)]) }
         }
-        #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_append_note", arguments: ["path": "a.md", "text": " "]) }
+        for path in ["Documents", "~", "~/", "../x", "/Users/../etc", "~/a/../b", "/a\u{0}b"] {
+            #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_request_folder", arguments: ["path": .string(path), "reason": "ищу"]) }
+        }
+        #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_request_folder", arguments: ["path": "~/Documents", "reason": " "]) }
+        #expect(throws: (any Error).self) { try ChilkToolCatalog.parse(name: "chilk_append_note", arguments: ["path": "a.md", "text": "Мысль"]) }
     }
 
     @Test func absoluteTimesNeedAnExplicitTimezoneAndAShortMessage() throws {

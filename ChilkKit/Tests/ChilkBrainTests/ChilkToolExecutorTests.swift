@@ -40,7 +40,7 @@ struct ChilkToolExecutorTests {
     }
 
     @Test func theRegisteredCatalogMatchesTheSupportedActions() {
-        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_append_note", "chilk_reminder", "chilk_reminders", "chilk_mode"])
+        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_mode"])
         #expect(ChilkToolCatalog.tools.allSatisfy { $0.inputSchema["additionalProperties"]?.bool == false })
     }
 

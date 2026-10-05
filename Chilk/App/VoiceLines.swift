@@ -20,6 +20,17 @@ extension Lines {
     /// A due local timer (slice 3c.2): Chilk's own line, so the alarm clock is allowed.
     static func timerDue(_ title: String) -> String { String(localized: "⏰ Время: \(title)") }
 
+    /// Chilk asks for a folder the user named (decision 2026-10-05). The folder is the real, resolved one; the
+    /// reason is model-written, so it is cleaned and shortened.
+    static func mayILook(_ folder: String, reason: String) -> String {
+        var why = Dialogue.plain(reason)
+        if why.count > 100 { why = String(why.prefix(100)) + "…" }
+        if let first = why.first { why = first.uppercased() + why.dropFirst() }
+        return String(localized: "Можно я загляну в «\(folder)»? \(why)")
+    }
+    static let yes = String(localized: "Да")
+    static let no = String(localized: "Нет")
+
     /// [контекст] for Codex: only time and sitting time (В24), nothing about apps or windows.
     static func context(sittingMinutes: Int, now: Date = Date()) -> String {
         VoiceContext.text(sittingMinutes: sittingMinutes, now: now)
