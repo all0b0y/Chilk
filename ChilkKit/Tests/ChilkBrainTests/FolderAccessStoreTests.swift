@@ -113,4 +113,35 @@ struct FolderAccessStoreTests {
         #expect(await store.grants.map(\.kind) == [.files])
         #expect(await store.grants.first?.root.path == root.path)
     }
+
+    /// Bug 2026-10-05: an Obsidian vault in iCloud (~/Library/Mobile Documents/iCloud~md~obsidian/Documents/…)
+    /// was refused — ~/Library is hidden and «library» a blocked name. Cloud folders pass; the rest of ~/Library
+    /// does not, nor the cloud roots themselves, nor hidden folders inside a container.
+    @Test func cloudFoldersUnderTheHiddenLibraryCanBeSharedButNothingElseThere() async throws {
+        let root = try SelectedFolderToolTests().fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let library = home.appendingPathComponent("Library")
+        let vault = library.appendingPathComponent("Mobile Documents/iCloud~md~obsidian/Documents/MYMIND")
+        let drive = library.appendingPathComponent("CloudStorage/GoogleDrive-me/Мой диск/Работа")
+        let prefs = library.appendingPathComponent("Preferences/Some")
+        let secretInCloud = library.appendingPathComponent("Mobile Documents/com~apple~CloudDocs/.private/x")
+        for dir in [vault.appendingPathComponent(".obsidian"), drive, prefs, secretInCloud] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        try Data("# Мысли\n".utf8).write(to: vault.appendingPathComponent("Идеи.md"))
+        #expect(chflags(library.path, UInt32(UF_HIDDEN)) == 0)               // like the real ~/Library
+        let store = try await FolderAccessStore(file: root.appendingPathComponent("grants.json"),
+                                                allowedContainer: root.deletingLastPathComponent(), home: home)
+        let shared = try await store.add(.obsidian, url: vault)
+        _ = try await store.add(.files, url: drive)
+        for bad in [prefs, library, library.appendingPathComponent("Mobile Documents"),
+                    library.appendingPathComponent("CloudStorage"), secretInCloud] {
+            await #expect(throws: (any Error).self) { try await store.add(.files, url: bad) }
+        }
+        let e = ChilkFileToolExecutor(allowedContainer: root.deletingLastPathComponent(), home: home)
+        await e.configure(await store.grants)
+        let read = await e.execute(name: "chilk_read_file", arguments: ["folder": .string(shared.name), "path": "Идеи.md"])
+        #expect(read.value["content"]?.string == "# Мысли\n")
+    }
 }

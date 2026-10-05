@@ -123,16 +123,17 @@ public actor FolderAccessStore {
 
     private func validate(_ scope: ChilkFileScope, url: URL) throws -> URL {
         guard url.isFileURL, let root = Self.canonical(url) else { throw AccessError.invalidFolder }
-        guard ChilkFileToolExecutor.allowedRoot(root, within: allowedContainer) else { throw AccessError.invalidFolder }
+        guard ChilkFileToolExecutor.allowedRoot(root, within: allowedContainer, home: home) else { throw AccessError.invalidFolder }
         // Never the whole home folder, anything above it, or a top-level folder of the disk (decision 2026-10-05).
         let parts = root.pathComponents.filter { $0 != "/" }
         let homeParts = home.pathComponents.filter { $0 != "/" }
         guard parts.count >= 2, !homeParts.starts(with: parts) else { throw AccessError.tooBroad }
         var info = stat(), current = "/"
         let trustedCount = allowedContainer.pathComponents.filter { $0 != "/" }.count
+        let cloud = ChilkFileToolExecutor.cloudPassage(parts, home: home)       // iCloud / CloudStorage under ~/Library
         for (index, component) in parts.enumerated() {
             current = (current as NSString).appendingPathComponent(component)
-            if index < trustedCount { continue }
+            if index < trustedCount || cloud.contains(index) { continue }
             guard lstat(current, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
                   info.st_flags & UInt32(UF_HIDDEN) == 0 else { throw AccessError.invalidFolder }
         }

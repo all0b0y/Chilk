@@ -13,7 +13,27 @@ public actor ChilkFileToolExecutor {
     public init(allowedContainer: URL = URL(fileURLWithPath: "/"),
                 home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.allowedContainer = allowedContainer.standardizedFileURL
-        self.home = home.standardizedFileURL
+        self.home = Self.canonical(home)
+    }
+
+    static func canonical(_ url: URL) -> URL {
+        guard let path = realpath(url.path, nil) else { return url.standardizedFileURL }
+        defer { free(path) }
+        return URL(fileURLWithPath: String(cString: path), isDirectory: true)
+    }
+
+    /// Cloud folders live under the hidden ~/Library: iCloud Drive and app containers such as Obsidian's in
+    /// `~/Library/Mobile Documents/<container>/…`, File Provider drives (Google Drive, Dropbox, OneDrive) in
+    /// `~/Library/CloudStorage/<provider>/…`. Only those two components are let through, only below a container;
+    /// everything else in ~/Library stays blocked. Indices are into the path's components without "/".
+    static func cloudPassage(_ components: [String], home: URL) -> Set<Int> {
+        // Canonical (/private/var/…) and standardized (/var/…) spellings of the same home both count.
+        guard let homeParts = [home.pathComponents, home.standardizedFileURL.pathComponents]
+                .map({ $0.filter { $0 != "/" } }).first(where: { components.starts(with: $0) }) else { return [] }
+        let h = homeParts.count
+        guard components.count > h + 2, components[h] == "Library",
+              ["Mobile Documents", "CloudStorage"].contains(components[h + 1]) else { return [] }
+        return [h, h + 1]
     }
     public func configure(_ grants: [FolderGrant]) {
         self.grants = Dictionary(grants.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -78,19 +98,23 @@ public actor ChilkFileToolExecutor {
             && !["password", "secret", "credential", "token", "private-key", "private_key"].contains { lower.contains($0) }
     }
 
-    static func allowedRoot(_ root: URL, within container: URL = URL(fileURLWithPath: "/")) -> Bool {
+    static func allowedRoot(_ root: URL, within container: URL = URL(fileURLWithPath: "/"),
+                            home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
         let parts = root.standardizedFileURL.pathComponents.filter { $0 != "/" }
         let prefix = container.standardizedFileURL.pathComponents.filter { $0 != "/" }
+        let cloud = cloudPassage(parts, home: canonical(home))
         return root.isFileURL && container.isFileURL && root.path != "/" && parts.starts(with: prefix)
-            && parts.count > prefix.count && parts.dropFirst(prefix.count).allSatisfy(allowedComponent)
+            && parts.count > prefix.count
+            && parts.indices.dropFirst(prefix.count).allSatisfy { cloud.contains($0) || allowedComponent(parts[$0]) }
     }
 
     /// Opens every component relative to an already-open directory with O_NOFOLLOW: path swaps cannot escape it.
     private func rootFD(_ grant: FolderGrant) throws -> Int32 {
         let root = grant.root
         let components = root.standardizedFileURL.pathComponents.filter { $0 != "/" }
-        guard Self.allowedRoot(root, within: allowedContainer) else { throw FileError.blocked }
+        guard Self.allowedRoot(root, within: allowedContainer, home: home) else { throw FileError.blocked }
         let trustedCount = allowedContainer.pathComponents.filter { $0 != "/" }.count
+        let cloud = Self.cloudPassage(components, home: home)
         var fd = Darwin.open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard fd >= 0 else { throw FileError.unreadable }
         do {
@@ -102,7 +126,8 @@ public actor ChilkFileToolExecutor {
                 let next = Darwin.openat(fd, component, O_RDONLY | O_DIRECTORY | follow | O_CLOEXEC)
                 guard next >= 0 else { throw FileError.blocked }
                 var ancestor = stat()
-                guard index < trustedCount || (fstat(next, &ancestor) == 0 && ancestor.st_flags & UInt32(UF_HIDDEN) == 0) else {
+                guard index < trustedCount || cloud.contains(index)
+                        || (fstat(next, &ancestor) == 0 && ancestor.st_flags & UInt32(UF_HIDDEN) == 0) else {
                     Darwin.close(next); throw FileError.blocked
                 }
                 Darwin.close(fd); fd = next
