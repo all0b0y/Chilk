@@ -15,6 +15,11 @@ final class BalanceController {
     private var timer: Timer?
     private var activityTimer: Timer?
     private var settleTimer: Timer?
+    /// Slice 6a (decision 33): the pantomime plays first, the bubble comes when it ends; a click shows it at once.
+    private var introTimer: Timer?
+    private var introShow: (() -> Void)?
+    /// He cheers when the user is back from a walk that counted (decision 6).
+    private var cheerOnReturn = false
     /// What each button of the current bubble does.
     private var buttonActions: [() -> Void] = []
     private var lastPantomime = Date.distantPast
@@ -164,10 +169,10 @@ final class BalanceController {
         let events = engine.tick(s)
         if logURL != nil {
             if ticks % 10 == 0 {
-                log(String(format: "signals idle=%.0fs locked=%d front=%@ %@ fullscreen=%d call=%d video=%d | water %.0f%% stretch %.0f%% eyes %.0f%% walk %.0f%% day %.0f%%",
+                log(String(format: "signals idle=%.0fs locked=%d front=%@ %@ fullscreen=%d call=%d video=%d | water %.0f%% stretch %.0f%% eyes %.0f%% walk %.0f%% day %.0f%% | eyes strain %.2f",
                            s.idle, s.locked ? 1 : 0, s.frontApp ?? "-", s.category.rawValue, s.fullscreen ? 1 : 0, s.inCall ? 1 : 0, s.video ? 1 : 0,
                            engine.pressure(.water) * 100, engine.pressure(.stretch) * 100, engine.pressure(.eyes) * 100,
-                           engine.pressure(.walk) * 100, engine.pressure(.endOfDay) * 100))
+                           engine.pressure(.walk) * 100, engine.pressure(.endOfDay) * 100, engine.eyeStrain))
             }
             for e in events { log("event \(e)") }
         }
@@ -175,6 +180,7 @@ final class BalanceController {
         apply(events)
         syncEscalation()
         sim.fatigue = engine.leafFatigue
+        sim.eyeStrain = engine.eyeStrain
         if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(),
            Date().timeIntervalSince(lastPantomime) > 25 {
             pantomime(e.need)
@@ -209,6 +215,7 @@ final class BalanceController {
             if event == .focusEnded { focusEndedUnsaid = true }     // said after the conversation
             return
         }
+        if event != .nudge { cancelIntro() }
         switch event {
         case .hint(let n):
             hideBubble()
@@ -217,6 +224,31 @@ final class BalanceController {
 
         case .ask(let n, let stage, let buttons, let again):
             guard activity == nil else { return }
+            if stage == 1, !again {
+                // Soft / Strict start on the bubble; the need's pantomime is its intro (6a, decision 33).
+                hideBubble()
+                sim.standOut = .docked
+                if n == .walk { sim.wear(.hat) }
+                let length = pantomime(n)
+                log("intro \(n.rawValue) \(String(format: "%.1f", min(length, 4.2)))s")
+                introShow = { [weak self] in self?.showAsk(n, stage: stage, buttons: buttons, again: again) }
+                introTimer = Timer.scheduledTimer(withTimeInterval: min(length, 4.2), repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.finishIntro() }
+                }
+                return
+            }
+            showAsk(n, stage: stage, buttons: buttons, again: again)
+
+        case .nudge:
+            onNudge()
+
+        default:
+            applyOther(event)
+        }
+    }
+
+    /// The bubble of a request (stage ≥ 1).
+    private func showAsk(_ n: Need, stage: Int, buttons: [Reaction], again: Bool) {
             sim.standOut = stage >= 3 ? .center : (stage >= 2 ? .out : .peek)
             if n == .walk { sim.wear(.hat) }
             if n == .endOfDay && stage >= 2 { sim.wear(.backpack) }
@@ -251,9 +283,27 @@ final class BalanceController {
                 sim.say(Lines.ask(n, stage: stage, again: again), buttons: buttons.map { Lines.button($0, for: n) })
                 buttonActions = buttons.map { action(for: $0, need: n) }
             }
+    }
 
-        case .nudge:
-            onNudge()
+    /// The intro ended (or the user clicked him): the bubble — if the same request is still on screen and free.
+    private func finishIntro() {
+        guard let show = introShow else { return }
+        cancelIntro()
+        guard activity == nil, !isBusy(), let e = engine.state.episode, e.phase == .showing, e.stage >= 1 else { return }
+        log("intro done: bubble \(e.need.rawValue)")
+        show()
+    }
+
+    private func cancelIntro() {
+        introTimer?.invalidate()
+        introTimer = nil
+        introShow = nil
+    }
+
+    private func applyOther(_ event: BalanceEvent) {
+        switch event {
+        case .hint, .ask, .nudge:
+            break
 
         case .withdraw:
             guard activity == nil else { return }
@@ -293,6 +343,7 @@ final class BalanceController {
             if byRest {
                 // The user is away right now: say it when they are back.
                 returnLine = Lines.thanks(n)
+                if n == .walk { cheerOnReturn = true }
                 sim.clearBubble()
                 sim.standOut = .docked
             } else {
@@ -335,15 +386,20 @@ final class BalanceController {
         }
     }
 
-    private func pantomime(_ n: Need) {
+    /// Plays the need's own pantomime; returns how long it lasts.
+    @discardableResult
+    private func pantomime(_ n: Need) -> Double {
+        let act: Act
         switch n {
-        case .water: sim.perform(.drink)
-        case .stretch: sim.perform(.stretches)
-        case .eyes: sim.perform(.lookAway)
-        case .walk: sim.wear(.hat); sim.perform(.wave)
-        case .endOfDay: sim.perform(.pack)
+        case .water: act = .drink
+        case .stretch: act = .hops                                  // 6a, decision 5: chaotic hops, not stretches
+        case .eyes: act = .lookAway
+        case .walk: sim.wear(.hat); act = .wave
+        case .endOfDay: act = .pack
         }
+        sim.perform(act)
         lastPantomime = Date()
+        return act.duration
     }
 
     private func react(_ r: Reaction) {
@@ -600,15 +656,30 @@ final class BalanceController {
 
     func poked() {
         guard activity == nil else { return }
+        if introShow != nil { return finishIntro() }               // a click skips the intro
         apply(engine.pokedDuringHint())
     }
 
     private func backFromAway() {
         if walking || engine.state.episode == nil {
+            if walking { cheerOnReturn = true }
             walking = false
             tidyProps()
             sim.standOut = .docked
         }
+        if cheerOnReturn {
+            cheerOnReturn = false
+            cheer()
+        }
+    }
+
+    /// «Ликует» (6a, decision 6): he steps out from behind the edge to jump, then goes back.
+    func cheer() {
+        guard activity == nil, !isBusy() else { return }
+        log("cheer")
+        if engine.state.episode?.phase != .showing { sim.standOut = .peek }
+        sim.perform(.cheer)
+        settle(after: Act.cheer.duration + 0.4)
     }
 
     private func takeReturnLine() -> String? {
@@ -812,6 +883,7 @@ final class BalanceController {
         if run.kind == .warmup { warmups?.prepareIfNeeded() }          // the next one, written ahead
         endGuideScreen(walk: run.kind == .walk)
         sim.say(run.kind == .warmup ? Lines.warmupDone : Lines.walkDone, duration: 4)
+        if run.kind == .walk { sim.perform(.cheer) }                  // a walk that counted (6a, decision 6)
         syncEscalation()
         settle(after: 4, takeOffProps: true)
         Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { [weak self] _ in

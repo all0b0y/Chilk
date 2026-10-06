@@ -286,6 +286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Уснуть"), #selector(sleepNow)))
         sub.addItem(item(String(localized: "Проснуться: «с возвращением»"), #selector(wakeWelcome)))
         sub.addItem(item(String(localized: "Проснуться: «доброе утро»"), #selector(wakeMorning)))
+        sub.addItem(.separator())
+        sub.addItem(item(String(localized: "Выходка: чешет листик"), #selector(anticScratch)))
+        sub.addItem(item(String(localized: "Выходка: ловит пылинку"), #selector(anticSpeck)))
+        sub.addItem(item(String(localized: "Ликует"), #selector(cheerNow)))
         check.submenu = sub
         menu.addItem(check)
         menu.addItem(.separator())
@@ -310,6 +314,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func sleepNow() { edge?.sim.fallAsleep() }
     @objc private func wakeWelcome() { presence?.wake(after: 30 * 60, hour: 15) }
     @objc private func wakeMorning() { presence?.wake(after: 8 * 3600, hour: 8) }
+    @objc private func anticScratch() { edge?.sim.startAntic(.scratchLeaf) }
+    @objc private func anticSpeck() { edge?.sim.startAntic(.catchSpeck) }
+    @objc private func cheerNow() { balance?.cheer() }
 
     /// Registers the call hotkey (replacing the current one). `false` = the system refused it; nothing is registered.
     @discardableResult

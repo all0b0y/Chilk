@@ -38,6 +38,10 @@ public enum BalanceMode: String, CaseIterable, Codable, Sendable {
         case .silent: 0
         }
     }
+
+    /// Where a request starts (slice 6, decision 33): Soft and Strict say it at once — a bubble on stage 1, the
+    /// pantomime only as its intro; only Silence keeps the wordless stage 0.
+    public var floor: Int { self == .silent ? 0 : 1 }
 }
 
 /// Why the engine refused a request from the user.
@@ -392,6 +396,13 @@ public final class BalanceEngine {
         Need.body.map { min(1, max(0, (pressure($0) - 0.5) / 0.7)) }.max() ?? 0
     }
 
+    /// The eyes mirror (slice 6a, decision 4): from half-way to the eyes need it grows, 1 at the threshold.
+    /// Smaller eyes and bags under them are the eyes' own signal; the general tiredness no longer touches the eyes.
+    public var eyeStrain: Double {
+        guard !config.needsOff.contains(.eyes) else { return 0 }
+        return min(1, max(0, (pressure(.eyes) - 0.5) / 0.5))
+    }
+
     /// «Договор с собой» (decision 20): while a request is on stage 3–4 nothing may soften care.
     public var settingsLocked: Bool { (state.episode?.stage ?? 0) >= 3 }
 
@@ -729,15 +740,17 @@ public final class BalanceEngine {
     // MARK: Modes and the emergency exit
 
     /// «Договор с собой» (В16): stricter at once; softer only outside stages 3–4. A stage above the new
-    /// ceiling comes down to it right away.
+    /// ceiling comes down to it right away; a pantomime under a stricter mode's floor becomes its bubble (6a).
     public func setMode(_ mode: BalanceMode) throws -> [BalanceEvent] {
         guard mode != state.mode else { return [] }
         if mode.cap < state.mode.cap, let e = state.episode, e.stage >= 3 {
             throw BalanceRefusal.softeningDuringEscalation
         }
         state.mode = mode
-        guard var e = state.episode, e.stage > cap(e.need) else { return [] }
-        e.stage = cap(e.need)
+        guard var e = state.episode else { return [] }
+        let stage = min(max(e.stage, mode.floor), cap(e.need))
+        guard stage != e.stage else { return [] }
+        e.stage = stage
         e.workOnStage = 0
         state.episode = e
         return e.phase == .showing ? [stageEvent(e, again: false)] : []
@@ -905,7 +918,7 @@ public final class BalanceEngine {
 
     private func start(_ n: Need, into out: inout [BalanceEvent]) {
         guard let t = state.needs[n] else { return }
-        let stage = min(max(t.resumeStage, t.debt ? 2 : 0), cap(n))
+        let stage = min(max(t.resumeStage, t.debt ? 2 : state.mode.floor), cap(n))
         let e = Episode(need: n, stage: stage, phase: .showing, nextAfter: nextStageDelay())
         state.episode = e
         state.needs[n]?.pendingSince = nil

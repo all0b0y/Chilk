@@ -23,6 +23,8 @@ final class HeroView: NSView {
     private var comeOut: Timer?
     /// Read every frame: the sprout mirrors the user like the one at the edge.
     var fatigue: () -> Double = { 0 }
+    /// The eyes mirror (slice 6a), shown at once when the popover opens.
+    var eyeStrain: () -> Double = { 0 }
 
     init() {
         sim = CharacterSim(metrics: metrics)
@@ -56,6 +58,8 @@ final class HeroView: NSView {
         sim.reframe(x: metrics.awayX)
         sim.standOut = .away
         sim.fatigue = fatigue()
+        sim.eyeStrain = eyeStrain()
+        sim.snapEyeStrain()
         sim.hourOfDay = Calendar.current.component(.hour, from: Date())
         comeOut?.invalidate()
         comeOut = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
@@ -91,6 +95,7 @@ final class HeroView: NSView {
         let dt = min(1.0 / 30, max(0, now - (last ?? now)))
         last = now
         sim.fatigue = fatigue()
+        sim.eyeStrain = eyeStrain()
         sim.step(dt: dt, pointer: pointer())
         CATransaction.begin()
         CATransaction.setDisableActions(true)

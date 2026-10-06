@@ -10,21 +10,30 @@ public struct Mood: Sendable, Equatable {
     public var carried = false
     /// The emergency exit with no exits left: half-closed eyes, a frown, the sprout droops.
     public var sad = false
+    /// «Ликует» (slice 6a): ^ ^ eyes and a wide-open mouth while he jumps with his hands up.
+    public var cheering = false
+    /// The stretch hint's hops: a straight, busy face — no smile, so it never reads as joy.
+    public var focused = false
+    /// «Хап!» — the speck is caught; then chewing.
+    public var chomping = false
+    public var chewing = false
     public init() {}
 }
 
 /// Little things Чилк does on his own, "по настроению", not on a timer the user can predict.
+/// Slice 6a (decision 1): none of them may look like a need's hint — «потягивание» (= «размяться») and «взгляд в
+/// сторону» (= «глаза») are gone, «чешет листик» and «ловит пылинку» took their place.
 public enum Antic: CaseIterable, Sendable {
-    case hop, leafFlick, glance, yawn, stretch, wiggle
+    case hop, leafFlick, yawn, wiggle, scratchLeaf, catchSpeck
 
-    var duration: Double {
+    public var duration: Double {
         switch self {
         case .hop: 0.6
         case .leafFlick: 0.8
-        case .glance: 1.4
         case .yawn: 1.6
-        case .stretch: 1.1
         case .wiggle: 1.0
+        case .scratchLeaf: 1.8
+        case .catchSpeck: 2.8
         }
     }
 }
@@ -57,6 +66,10 @@ public enum Act: Sendable, Equatable {
     case breathe(seconds: Double)
     /// Waits for Codex: looks up, the sprout twirls, a little «хм» bob.
     case think(seconds: Double)
+    /// The stretch hint (slice 6a, decision 5): 5–6 chaotic hops near the edge with a straight face, then back.
+    case hops
+    /// «Ликует» (decision 6): vertical jumps on the spot, hands up, ^ ^, the leaves spin, confetti on the last jump.
+    case cheer
 
     public var duration: Double {
         switch self {
@@ -67,7 +80,23 @@ public enum Act: Sendable, Equatable {
         case .pack: 2.4
         case .breathe(let s): s
         case .think(let s): s
+        case .hops: 4.2
+        case .cheer: 2.2
         }
+    }
+}
+
+/// A little hand, only when he needs one. Figure space: `x` in body half-widths (+ = towards the screen edge),
+/// `y` in body half-heights from the body centre (− = up), `angle` in radians.
+public struct Hand: Sendable, Equatable {
+    public var x: Double
+    public var y: Double
+    public var angle: Double
+    /// `true`: a short arm growing out from behind the body (its base at x, y; `angle` 0 = straight up), not a
+    /// floating mitten — raised arms must read as arms, not as ears or balls.
+    public var arm: Bool
+    public init(x: Double, y: Double, angle: Double, arm: Bool = false) {
+        self.x = x; self.y = y; self.angle = angle; self.arm = arm
     }
 }
 
@@ -92,6 +121,20 @@ public struct CharacterPose: Sendable, Equatable {
     public var fatigue: Double = 0
     /// 0 = awake, 1 = fast asleep (drives "z z z").
     public var sleep: Double = 0
+    /// Tiredness shown by posture (slice 6a, decision 3): 0 = upright, 1 = sagging. Never by the eyes.
+    public var sag: Double = 0
+    /// The eyes mirror (decision 4): 0 = fine, 1 = eyes at ¾ with clear lavender bags under them.
+    public var eyeStrain: Double = 0
+    public var hands: [Hand] = []
+    /// The speck he is about to catch (scene coordinates).
+    public var speck: CGPoint?
+    /// Extra spin of the two leaves around the stem tip (propeller while cheering).
+    public var leafSpin: Double = 0
+    /// Seconds since the confetti burst, while it is still in the air; `confettiOrigin` in scene coordinates.
+    public var confettiAge: Double?
+    public var confettiOrigin: CGPoint = .zero
+    /// Clicks go through him (the hops hint must never catch a click meant for the window under him).
+    public var passThrough = false
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -121,6 +164,8 @@ public final class CharacterSim {
     public private(set) var time: Double = 0
     /// 0 = fresh, 1 = sat way too long. Driven by `BalanceEngine.leafFatigue`.
     public var fatigue: Double = 0 { didSet { fatigue = min(1, max(0, fatigue)) } }
+    /// 0…1, driven by `BalanceEngine.eyeStrain` (slice 6a). Shown gradually; a big drop (rested eyes) blinks twice.
+    public var eyeStrain: Double = 0 { didSet { eyeStrain = min(1, max(0, eyeStrain)) } }
     /// Local hour (0–23). At night he yawns a lot more.
     public var hourOfDay = 12
     /// The user is holding him (dragging the panel).
@@ -183,6 +228,18 @@ public final class CharacterSim {
     private var actStart = 0.0
     private var actBeats = 0
     private var actProps: Set<Prop> = []
+    private var anticBeats = 0
+    // Slice 6a: a real jump is a ballistic arc (a spring impulse only bobs ~10 pt), optionally from x to x.
+    private var jump: (start: Double, duration: Double, height: Double, fromX: Double, toX: Double?)?
+    private var jumpY = 0.0
+    private var jumpVelocity = 0.0
+    private var hopTilt = 0.0
+    /// Where the hops hint keeps him after the last landing (nil = his usual place).
+    private var hopX: Double?
+    private var confettiAt: Double?
+    private var confettiOrigin = CGPoint.zero
+    private var strainShown = 0.0
+    private var strainBlinked = false
 
     public static let calledDuration = 4.4
     public static let dizzyDuration = 2.6
@@ -200,6 +257,11 @@ public final class CharacterSim {
     public static let maxTilt = 0.55
     /// One breath: in for 4 s, out for 6 s.
     public static let inhale = 4.0, exhale = 6.0
+    /// The hops hint stays within this distance of the screen edge (body centre; ~300 pt with the body).
+    public static let hopsZone = 230.0
+    /// The eyes mirror: slow to show (minutes of strain), quick to clear (~1 s after a rest).
+    public static let strainRise = 0.25, strainFall = 1.2
+    nonisolated public static let confettiLife = 1.4
 
     public init(metrics: Metrics = .standard, rng: any RandomSource = SystemRandom()) {
         self.metrics = metrics
@@ -214,7 +276,7 @@ public final class CharacterSim {
     // MARK: Queries
 
     public var bodyCenter: CGPoint {
-        CGPoint(x: x.value, y: metrics.ground + hop.value - metrics.radiusY * (1 - squash.value * 0.22))
+        CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - metrics.radiusY * (1 - squash.value * 0.22))
     }
 
     /// Horizontal position inside the panel (scene points, docked-right orientation).
@@ -245,6 +307,16 @@ public final class CharacterSim {
         m.sleeping = sleepLevel > 0.6
         m.carried = isCarried
         m.sad = isSad
+        if let a = act {
+            let k = time - actStart
+            m.cheering = a == .cheer && k < 1.7
+            m.focused = a == .hops
+        }
+        if currentAntic == .catchSpeck, time < anticUntil {
+            let k = time - anticStart
+            m.chomping = k >= 1.45 && k < 1.62
+            m.chewing = k >= 1.62 && k < 2.6
+        }
         return m
     }
 
@@ -276,6 +348,8 @@ public final class CharacterSim {
         if isHovering { return "hover" }
         if let a = act, a != .breathe(seconds: a.duration) { return "act" }
         if let a = currentAntic { return "antic \(a)" }
+        if jump != nil { return "jump" }
+        if let c = confettiAt, time - c < Self.confettiLife { return "confetti" }
         if blinkStart != nil { return "blink" }
         // A bubble needs 60 fps while it pops in (words arrive one by one) or out — not while it just stays.
         if time < bubbleUntil && (time - bubbleAt < 2 || bubbleUntil - time < 0.4) { return "bubble" }
@@ -329,6 +403,15 @@ public final class CharacterSim {
 
     public var isTalking: Bool { time < bubbleUntil }
 
+    /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
+    public var passesClicks: Bool { act == .hops }
+
+    /// Shows the eyes mirror at once (the popover hero is a fresh Чилк every time it opens).
+    public func snapEyeStrain() {
+        strainShown = eyeStrain
+        strainBlinked = true
+    }
+
     /// The bubble shrinks away.
     public func clearBubble() {
         guard time < bubbleUntil else { return }
@@ -381,6 +464,16 @@ public final class CharacterSim {
         actProps = []
         act = nil
         mug.target = 0
+        hopX = nil
+        hopTilt = 0
+        if jump?.toX != nil { jump = nil; jumpY = 0 }          // a hop across lands where it is, not mid-air later
+    }
+
+    /// Starts an antic now (the tray's «Проверка ▸ Выходка», tests). Not while asleep, carried or in an act.
+    public func startAntic(_ a: Antic) {
+        guard !isAsleep, !isCarried, act == nil else { return }
+        beginAntic(a, at: time)
+        nextAntic = max(nextAntic, time + a.duration + 6)
     }
 
     public func wear(_ p: Prop) {
@@ -423,8 +516,10 @@ public final class CharacterSim {
         x.target = m.carried || standOut == .center ? metrics.carryX
             : (m.called ? metrics.outX
                : (standOut == .away ? stand : (isHovering ? min(metrics.peekX, stand) : stand)))
+        if let h = hopX, !m.carried { x.target = h }              // between the hops he stays where he landed
+        let sag = sagLevel
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
-            + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08
+            + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08 - sag * 0.07
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
         ears.target = listening ? 1 : 0
 
@@ -453,39 +548,30 @@ public final class CharacterSim {
                 nextSaccade = t + rng.uniform(1.4, 3.8)
             }
             lookX.target = idleLook.x
-            lookY.target = idleLook.y
+            lookY.target = idleLook.y + sag * 0.3                       // tired: the gaze drops a little (6a)
             if m.called || listening { lookX.target = -0.2; lookY.target = 0.05 }
         }
 
         stepAct(t: t)
 
-        // Antics "по настроению". At night (and when tired) yawns win far more often. Not during acts.
+        // Antics "по настроению". At night (and when tired) yawns win far more often. Not during acts; fewer when tired.
         if t >= anticUntil { currentAntic = nil }
         if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && t > nextAntic {
-            let a = pickAntic()
-            currentAntic = a
-            anticStart = t
-            anticUntil = t + a.duration
-            switch a {
-            case .hop: hop.impulse(-170); leaf.impulse(3)
-            case .leafFlick: leaf.impulse(10)
-            case .stretch: squash.impulse(-6); leaf.impulse(4)   // tall & thin, then settle
-            case .glance, .yawn, .wiggle: break
-            }
-            nextAntic = t + rng.uniform(8, 15)
+            beginAntic(pickAntic(), at: t)
+            nextAntic = t + rng.uniform(8, 15) * (1 + sag * 0.8)
         }
-        if currentAntic == .glance && !tracking { lookX.target = -0.85; lookY.target = -0.2 }
         if currentAntic == .wiggle {
             let k = t - anticStart
             tilt.target += sin(k * 14) * 0.13 * max(0, 1 - k / Antic.wiggle.duration)
         }
+        stepAntic(t: t)
         tilt.target = min(Self.maxTilt, max(-Self.maxTilt, tilt.target))
 
         // Leaf: droops with fatigue and sleep, sways in a breeze, lags behind body motion (follow-through).
         leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (isSad ? 0.3 : 0)
             + sin(t * 0.9 + phase) * 0.07 * (1 - sleepLevel * 0.6) + sin(t * 2.3) * 0.025
         if case .think = act { leaf.target += sin((t - actStart) * 2.4) * 0.3 }
-        leaf.velocity += -x.velocity * 0.0022 - hop.velocity * 0.0009 - carry * 0.0012
+        leaf.velocity += -x.velocity * 0.0022 - (hop.velocity + jumpVelocity) * 0.0009 - carry * 0.0012
 
         // Blink: random 2.2–5.8 s, 20 % double. Not while dozing.
         if blinkStart == nil && t > blinkAt && !drowsy {
@@ -501,6 +587,8 @@ public final class CharacterSim {
             x.step(half); hop.step(half); squash.step(half); tilt.step(half)
             lookX.step(half); lookY.step(half); eyeScale.step(half); leaf.step(half); mug.step(half); ears.step(half)
         }
+        stepJump(t: t)
+        stepStrain(dt: dt, t: t)
     }
 
     /// Choreography of the directed acts: beats at fixed times inside the act.
@@ -540,10 +628,160 @@ public final class CharacterSim {
             lookX.target = 0.55
             lookY.target = -0.65
             if k >= Double(actBeats) * 1.6 { hop.impulse(-45); actBeats += 1 }   // «хм…»
+        case .hops:
+            // 5 chaotic hops near the edge, the 6th back home; a straight face, eyes where he is going.
+            for (i, at) in [0.0, 0.65, 1.3, 1.95, 2.6].enumerated() {
+                beat(at) {
+                    let lo = metrics.width - Self.hopsZone, hi = metrics.peekX
+                    var to = rng.uniform(lo, hi)
+                    for _ in 0..<6 where abs(to - x.value) < 45 { to = rng.uniform(lo, hi) }
+                    startJump(height: rng.uniform(30, 58), duration: rng.uniform(0.44, 0.54), to: to)
+                    hopTilt = rng.uniform(-0.3, 0.3) * (i % 2 == 0 ? 1 : -1)
+                    leaf.impulse(rng.uniform(-10, 10))
+                }
+            }
+            beat(3.25) { startJump(height: 34, duration: 0.5, to: standX); hopTilt = 0 }
+            beat(3.8) { hopX = nil }
+            if let to = jump?.toX { lookX.target = to < x.value ? -0.7 : 0.5; lookY.target = 0.1 }
+            tilt.target += hopTilt * (jump == nil ? 0.3 : 1)
+        case .cheer:
+            // Vertical jumps on the spot (never sideways: that is the stretch hint), confetti at the top of the last.
+            beat(0) { startJump(height: 44, duration: 0.46); squash.impulse(4) }
+            beat(0.55) { startJump(height: 48, duration: 0.46) }
+            beat(1.1) { startJump(height: 54, duration: 0.48) }
+            beat(1.34) {
+                confettiAt = t
+                let c = bodyCenter
+                confettiOrigin = CGPoint(x: Double(c.x), y: Double(c.y) - metrics.radiusY * 1.05)
+            }
+            lookX.target = -0.15
+            lookY.target = -0.2
         }
     }
 
     private var beatIndex = 0
+
+    /// His usual place for the current `standOut` (where the hops end).
+    private var standX: Double {
+        switch standOut {
+        case .docked: metrics.dockX
+        case .peek: metrics.peekX
+        case .out: metrics.outX
+        case .center: metrics.carryX
+        case .away: metrics.awayX
+        }
+    }
+
+    /// Tiredness as posture (6a, decision 3): nothing until ~half-way, full sag when the sprout is wilted.
+    private var sagLevel: Double { min(1, max(0, (fatigue - 0.45) / 0.55)) }
+
+    private func startJump(height: Double, duration: Double, to toX: Double? = nil) {
+        jump = (time, duration, height, x.value, toX)
+        if let toX { hopX = toX }
+    }
+
+    /// The ballistic arc on top of the springs; a hop across also carries x (the spring alone lags behind).
+    private func stepJump(t: Double) {
+        guard let j = jump else { jumpY = 0; jumpVelocity = 0; return }
+        let u = (t - j.start) / j.duration
+        if u >= 1 {
+            jump = nil
+            jumpY = 0
+            jumpVelocity = 0
+            if let to = j.toX { x.value = to; x.velocity = 0; x.target = to }
+            squash.impulse(4.5)
+            leaf.impulse(4)
+            return
+        }
+        jumpY = -4 * j.height * u * (1 - u)
+        jumpVelocity = -4 * j.height * (1 - 2 * u) / j.duration
+        if let to = j.toX {
+            x.value = j.fromX + (to - j.fromX) * u
+            x.velocity = (to - j.fromX) / j.duration
+        }
+    }
+
+    private func beginAntic(_ a: Antic, at t: Double) {
+        currentAntic = a
+        anticStart = t
+        anticUntil = t + a.duration
+        anticBeats = 0
+        switch a {
+        case .hop: hop.impulse(-170); leaf.impulse(3)
+        case .leafFlick: leaf.impulse(10)
+        case .yawn, .wiggle, .scratchLeaf, .catchSpeck: break
+        }
+    }
+
+    /// «Чешет листик» and «ловит пылинку» (6a, decision 2): the two neutral antics.
+    private func stepAntic(t: Double) {
+        guard let a = currentAntic, t < anticUntil else { return }
+        let k = t - anticStart
+        switch a {
+        case .scratchLeaf:
+            lookX.target = -0.1
+            lookY.target = -0.6
+            if k >= 0.35 && k < 1.45 && k >= 0.35 + Double(anticBeats) * 0.14 {    // scratch-scratch: the leaf twitches
+                leaf.impulse(anticBeats % 2 == 0 ? 2.2 : -2.2)
+                anticBeats += 1
+            }
+        case .catchSpeck:
+            if let s = speckPoint(k: k) {
+                let c = bodyCenter
+                lookX.target = max(-1, min(1, (Double(s.x) - Double(c.x)) / 60))
+                lookY.target = max(-1, min(1, (Double(s.y) - Double(c.y) + 6) / 60))
+            }
+            if k >= 1.45 && anticBeats == 0 { hop.impulse(-150); squash.impulse(-3); anticBeats = 1 }   // «хап!»
+        default:
+            break
+        }
+    }
+
+    /// The speck drifts lazily from up-left towards his mouth over 1.45 s, then he has it.
+    private func speckPoint(k: Double) -> CGPoint? {
+        guard k < 1.45 else { return nil }
+        let c = bodyCenter
+        let e = 0.5 - 0.5 * cos(min(1, k / 1.45) * .pi)
+        let from = (x: -84.0, y: -78.0), to = (x: -10.0, y: 12.0)
+        let wobble = sin(k * 5.5) * 12 * (1 - e)
+        return CGPoint(x: Double(c.x) + from.x + (to.x - from.x) * e + wobble * 0.4,
+                       y: Double(c.y) + from.y + (to.y - from.y) * e + wobble)
+    }
+
+    /// Hands only when he needs them: both up while cheering, one rubbing the stem while he scratches the leaf.
+    private var hands: [Hand] {
+        let t = time
+        if act == .cheer, t - actStart < 1.7 {
+            let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
+            return [Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true), Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]   // ＼(^o^)／
+        }
+        guard currentAntic == .scratchLeaf, t < anticUntil else { return [] }
+        let k = t - anticStart
+        let side = Hand(x: -1.0, y: 0.3, angle: 0.2), stem = Hand(x: -0.3, y: -0.98, angle: -0.9)
+        func mix(_ a: Hand, _ b: Hand, _ u: Double) -> Hand {
+            let c = min(1, max(0, u)), e = c * c * (3 - 2 * c)
+            return Hand(x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, angle: a.angle + (b.angle - a.angle) * e)
+        }
+        if k < 0.35 { return [mix(side, stem, k / 0.35)] }
+        if k < 1.45 {
+            let rub = sin(k * 34)
+            return [Hand(x: stem.x + rub * 0.07, y: stem.y, angle: stem.angle + rub * 0.15)]
+        }
+        return [mix(stem, side, min(1, (k - 1.45) / 0.35))]
+    }
+
+    /// The eyes mirror follows `eyeStrain` slowly up and quickly down; a rest (a big drop) blinks twice.
+    private func stepStrain(dt: Double, t: Double) {
+        if eyeStrain + 0.25 < strainShown, !strainBlinked {
+            blinkStart = t
+            doubleBlink = true
+            strainBlinked = true
+        }
+        if strainShown <= eyeStrain + 0.05 { strainBlinked = false }
+        strainShown = eyeStrain > strainShown
+            ? min(eyeStrain, strainShown + Self.strainRise * dt)
+            : max(eyeStrain, strainShown - Self.strainFall * dt)
+    }
 
     /// Enter: cursor on the visible part of the body → he hops fully out from behind the edge.
     /// Stay: while the cursor is anywhere between his left side and the screen edge (he moved away from
@@ -594,8 +832,9 @@ public final class CharacterSim {
         let t = time
         let period = 3.6 + fatigue * 1.8 + sleepLevel * 1.6
         let breathing = sin(t * .pi * 2 / period + phase) * (1 + sleepLevel * 0.6)
-        let tired = min(1, max(0, (fatigue - 0.45) / 0.55))
-        var open = lid * (1 - tired * 0.55) * (1 - sleepLevel)
+        let sag = sagLevel
+        // Slice 6a: tiredness no longer closes the eyes — only sleep, blinks and yawns do.
+        var open = lid * (1 - sleepLevel)
         let m = mood
         if m.yawning { open = min(open, 0.1) }
 
@@ -612,9 +851,9 @@ public final class CharacterSim {
         p.time = t
         p.phase = phase
         p.x = x.value
-        p.hop = hop.value
-        p.scaleY = (1 - squash.value * 0.22) * (1 + breathing * 0.024) * (1 + inflate * 0.12)
-        p.scaleX = (1 + squash.value * 0.16) * (1 - breathing * 0.012) * (1 + inflate * 0.1)
+        p.hop = hop.value + jumpY
+        p.scaleY = (1 - squash.value * 0.22) * (1 + breathing * 0.024) * (1 + inflate * 0.12) * (1 - sag * 0.07)
+        p.scaleX = (1 + squash.value * 0.16) * (1 - breathing * 0.012) * (1 + inflate * 0.1) * (1 + sag * 0.06)
         p.tilt = tilt.value
         p.lookX = lookX.value
         p.lookY = lookY.value
@@ -623,6 +862,19 @@ public final class CharacterSim {
         p.leafAngle = leaf.value - inflate * 0.15
         p.fatigue = fatigue
         p.sleep = sleepLevel
+        p.sag = sag
+        p.eyeStrain = strainShown
+        p.hands = hands
+        p.speck = currentAntic == .catchSpeck && t < anticUntil ? speckPoint(k: t - anticStart) : nil
+        if act == .cheer, t - actStart < 1.7 {
+            let u = (t - actStart) / 1.7
+            p.leafSpin = 6 * .pi * (1 - (1 - u) * (1 - u))           // a propeller, slowing to whole turns
+        }
+        if let c = confettiAt, t - c < Self.confettiLife {
+            p.confettiAge = t - c
+            p.confettiOrigin = confettiOrigin
+        }
+        p.passThrough = act == .hops
         p.mood = m
         p.calledAge = t - calledAt
         p.props = props

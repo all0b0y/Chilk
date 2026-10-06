@@ -27,6 +27,11 @@ public enum ChilkRenderer {
             .scaledBy(x: p.scaleX, y: p.scaleY).translatedBy(x: 0, y: -m.radiusY)
         figurePlacements(into: &out, pose: p, metrics: m, lineScale: 1, base: figure)
 
+        // Slice 6a: the speck he is about to catch and the confetti of «ликует» live in scene space.
+        if let s = p.speck {
+            out.append(Placement(slot: Slot.speck, part: .speck, transform: mirror.translatedBy(x: s.x, y: s.y), alpha: 1))
+        }
+        if let age = p.confettiAge { confettiPlacements(into: &out, age: age, origin: p.confettiOrigin, mirror: mirror) }
         if p.sleep > 0.3 { zPlacements(into: &out, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let text = p.bubble, !text.isEmpty { bubblePlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: text) }
         return out
@@ -75,7 +80,7 @@ public enum ChilkRenderer {
         let flutter = sin(p.time * 3.1 + p.phase) * 0.06
         for (i, side) in [-1.0, 1.0].enumerated() {
             let angle = side * 0.85 * (1 - f) + f * (2.55 + side * 0.3) + flutter * (i == 1 ? -1 : 1) * (1 - f * 0.7)
-            let t = root.translatedBy(x: tip.x, y: tip.y).rotated(by: angle).scaledBy(x: 1 - f * 0.3, y: 1 - f * 0.12)
+            let t = root.translatedBy(x: tip.x, y: tip.y).rotated(by: angle + p.leafSpin).scaledBy(x: 1 - f * 0.3, y: 1 - f * 0.12)
             out.append(Placement(slot: Slot.leaf + i, part: .leaf(index: i, f: fp, lw: lw), transform: t, alpha: 1))
         }
 
@@ -87,6 +92,15 @@ public enum ChilkRenderer {
 
         let mood = p.mood
         let ex = m.radiusX * 0.33, ey = -m.radiusY * 0.06
+        // The eyes mirror (6a, decision 4): smaller eyes and lavender bags — only from the eyes need.
+        let strain = p.eyeStrain
+        let strainScale = 1 - strain * 0.25
+        if strain > 0.02 {
+            for (i, s) in [-1.0, 1.0].enumerated() {
+                let t = base.translatedBy(x: s * ex + ox, y: ey + oy)
+                out.append(Placement(slot: Slot.eyeBag + i, part: .eyeBag(lw: lw), transform: t, alpha: 0.35 + 0.65 * strain))
+            }
+        }
         for (i, s) in [-1.0, 1.0].enumerated() {
             let eye = base.translatedBy(x: s * ex + ox, y: ey + oy)
             let part: Part
@@ -98,14 +112,15 @@ public enum ChilkRenderer {
                 part = .eyeAnnoyed(side: Int(s), lw: lw)
             } else if p.sleep > 0.5 {
                 part = .eyeSleep(lw: lw)
-            } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) {
+            } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) || mood.cheering || mood.chomping {
                 part = .eyeHappy(lw: lw)
             } else if mood.sad {
                 part = .eyeOpen                                    // half-closed, looking down
-                t = eye.translatedBy(x: 0, y: 2).scaledBy(x: 1, y: 0.5 * p.eyeOpen)
+                t = eye.translatedBy(x: 0, y: 2).scaledBy(x: strainScale, y: 0.5 * p.eyeOpen * strainScale)
             } else {
                 part = .eyeOpen
-                t = eye.scaledBy(x: 1 - abs(p.lookX) * 0.2, y: p.eyeOpen).scaledBy(x: p.eyeScale, y: p.eyeScale)
+                t = eye.scaledBy(x: 1 - abs(p.lookX) * 0.2, y: p.eyeOpen)
+                    .scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
             }
             out.append(Placement(slot: Slot.eye + i, part: part, transform: t, alpha: 1))
         }
@@ -121,8 +136,14 @@ public enum ChilkRenderer {
             let r = mood.carried ? 4.2 : 2.6 + sin(p.time * .pi * 2 / 5.2 + p.phase) * 0.6
             mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: r / 4.2, y: r / 4.2).translatedBy(x: 0, y: -1)
             mouthPart = .mouthO
-        } else if mood.called || mood.yawning {
+        } else if mood.called || mood.yawning || mood.cheering || mood.chomping {
             mouthPart = .mouthOpen(yawn: mood.yawning)
+        } else if mood.chewing {
+            let r = 0.55 + 0.35 * abs(sin(p.time * 11))                // nom-nom
+            mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: 0.8, y: r).translatedBy(x: 0, y: -1)
+            mouthPart = .mouthO
+        } else if mood.focused {
+            mouthPart = .mouthSmile(tired: 91, lw: lw)                  // a straight, busy line — not a smile
         } else if mood.annoyed || mood.sad {
             mouthPart = .mouthFrown(lw: lw)
         } else {
@@ -130,6 +151,28 @@ public enum ChilkRenderer {
             mouthPart = .mouthSmile(tired: Int((tired * 100).rounded()), lw: lw)
         }
         out.append(Placement(slot: Slot.mouth, part: mouthPart, transform: mouthT, alpha: 1))
+
+        for (i, h) in p.hands.prefix(2).enumerated() {
+            let t = base.translatedBy(x: h.x * m.radiusX, y: h.y * m.radiusY).rotated(by: h.angle)
+            out.append(h.arm ? Placement(slot: Slot.arm + i, part: .arm(lw: lw), transform: t, alpha: 1)
+                             : Placement(slot: Slot.hand + i, part: .hand(lw: lw), transform: t, alpha: 1))
+        }
+    }
+
+    /// «Ликует»: a fan of confetti bursting up from his head, falling and fading (slice 6a).
+    static func confettiPlacements(into out: inout [Placement], age: Double, origin o: CGPoint, mirror: CGAffineTransform) {
+        let life = CharacterSim.confettiLife, gravity = 430.0
+        let alpha = clamp((life - age) / 0.45)
+        guard alpha > 0.002 else { return }
+        for i in 0..<Part.confettiPieces {
+            let angle = -Double.pi / 2 + (Double(i) - 3.5) * 0.3
+            let speed = 150 + Double((i * 37) % 60)
+            let x = Double(o.x) + cos(angle) * speed * age
+            let y = Double(o.y) + sin(angle) * speed * age + 0.5 * gravity * age * age
+            let spin = age * Double(6 + i) * (i % 2 == 0 ? 1 : -1)
+            out.append(Placement(slot: Slot.confetti + i, part: .confetti(index: i),
+                                 transform: mirror.translatedBy(x: x, y: y).rotated(by: spin), alpha: alpha))
+        }
     }
 
     /// "z z z" drifting up from the sprout: offset + delay + fade (Zajno), each z a little bigger.

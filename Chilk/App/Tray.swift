@@ -67,6 +67,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         host.sizingOptions = .preferredContentSize
         popover.contentViewController = host
         hero.fatigue = { [weak balance] in balance?.engine.leafFatigue ?? 0 }
+        hero.eyeStrain = { [weak balance] in balance?.engine.eyeStrain ?? 0 }
         wire()
         refreshIcon()
         iconTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in

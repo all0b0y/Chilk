@@ -86,29 +86,37 @@ private extension BalanceEvent {
     var askAgain: Bool { if case .ask(_, _, _, let again) = self { return again } else { return false } }
     var askButtons: [Reaction]? { if case .ask(_, _, let b, _) = self { return b } else { return nil } }
     var isCredit: Bool { if case .credited = self { return true } else { return false } }
+    /// A request starting: the bubble on stage 1 in Soft and Strict (slice 6, decision 33), the pantomime in Silence.
+    func isStart(_ n: Need) -> Bool {
+        switch self {
+        case .hint(let m): m == n
+        case .ask(let m, 1, _, false): m == n
+        default: false
+        }
+    }
 }
 
 @Suite("Balance: needs, ladder, director")
 @MainActor
 struct BalanceTests {
 
-    @Test func waterIsDueAfter40To70MinutesOfSittingAndStartsAsASilentHint() {
+    @Test func waterIsDueAfter40To70MinutesOfSittingAndStartsWithTheBubble() {
         let d = Day(only(.water))
         #expect(d.work(minutes: 39).isEmpty)
         d.work(minutes: 33)
-        let hints = d.times { $0 == .hint(.water) }
+        let hints = d.times { $0.isStart(.water) }
         #expect(hints.count == 1)
         #expect((40 * 60...71 * 60).contains(hints[0]))
+        #expect(d.timeline.first?.e == .ask(.water, stage: 1, buttons: [.done, .snooze, .busy], again: false))
     }
 
     @Test func ladderClimbsAfter5To10MinutesOfWorkAndStopsAtInsistInSlice2() {
         let d = Day(only(.water))
         d.work(minutes: 71)
-        let hint = d.times { $0 == .hint(.water) }[0]
         d.work(minutes: 60)
         let asks = d.timeline.filter { $0.e.askStage != nil }
         #expect(asks.map { $0.e.askStage! } == [1, 2])
-        #expect((hint + 300...hint + 601).contains(asks[0].t))
+        #expect((40 * 60...71 * 60).contains(asks[0].t))
         #expect((asks[0].t + 300...asks[0].t + 601).contains(asks[1].t))
         let bounces = d.times { $0 == .nudge }
         #expect(bounces.first == asks[1].t)
@@ -120,8 +128,7 @@ struct BalanceTests {
         let d = Day(only(.water))
         d.work(minutes: 71) { $0.fullscreen = true }
         #expect(d.timeline.isEmpty)                                   // due, but fullscreen
-        #expect(d.work(minutes: 1) == [.hint(.water)])
-        _ = d.engine.pokedDuringHint()
+        #expect(d.work(minutes: 1) == [.ask(.water, stage: 1, buttons: [.done, .snooze, .busy], again: false)])
         let inCall = d.work(minutes: 30) { $0.inCall = true }
         #expect(inCall == [.withdraw])                                 // no climbing during the call
         let after = d.work(minutes: 1)
@@ -149,7 +156,7 @@ struct BalanceTests {
         let d = Day(only(.water))
         d.work(minutes: 5)
         d.engine.makeDue(.stretch)
-        #expect(d.work(minutes: 1.0 / 60, idle: 0.3) == [.hint(.stretch)])
+        #expect(d.work(minutes: 1.0 / 60, idle: 0.3) == [.ask(.stretch, stage: 1, buttons: [.going, .snooze, .busy], again: false)])
     }
 
     @Test func stretchCountsOnlyAfterThreeMinutesAwayFromTheKeyboard() {
@@ -175,9 +182,8 @@ struct BalanceTests {
 
     @Test func twoDeferralsPerRequestBothButtonsTogetherAndTheLadderKeepsItsStage() {
         let d = Day(only(.water))
-        d.work(until: .hint(.water))
-        let ask = d.engine.pokedDuringHint()
-        #expect(ask.first?.askButtons == [.done, .snooze, .busy])
+        d.work(until: .ask(.water, stage: 1, buttons: [.done, .snooze, .busy], again: false))
+        #expect(d.timeline.last?.e.askButtons == [.done, .snooze, .busy])
         #expect(d.react(.snooze) == [.snoozed(.water)])
         #expect(d.work(minutes: 9.5).isEmpty)                          // quiet for 10 minutes
         let second = d.work(minutes: 1.5)
@@ -250,9 +256,9 @@ struct BalanceTests {
             c.waterMinGap = 0                                          // this test is about the budget only
         }
         for _ in 0..<120 {
-            if d.work(minutes: 1).contains(where: { $0 == .hint(.water) }) { d.react(.done) }
+            if d.work(minutes: 1).contains(where: { $0.isStart(.water) }) { d.react(.done) }
         }
-        let hints = d.times { $0 == .hint(.water) }
+        let hints = d.times { $0.isStart(.water) }
         for h in hints {
             #expect(hints.filter { $0 >= h && $0 < h + 3600 }.count <= 4)
         }
@@ -274,7 +280,7 @@ struct BalanceTests {
     @Test func waitsForAConvenientMomentButNotForever() {
         let d = Day(only(.water))
         d.work(minutes: 75, idle: 0.3)                                 // typing without pauses
-        let hint = d.times { $0 == .hint(.water) }[0]
+        let hint = d.times { $0.isStart(.water) }[0]
         let due = d.engine.state.needs[.water]!.threshold              // re-rolled only after rest
         _ = due
         let thresholdMoment = hint - 180
@@ -286,7 +292,7 @@ struct BalanceTests {
             if Int(s.now.timeIntervalSince1970) % 120 == 0 { app = app == "a" ? "b" : "a" }
             s.frontApp = app
         }
-        let early = switching.times { $0 == .hint(.water) }[0]
+        let early = switching.times { $0.isStart(.water) }[0]
         #expect(early < hint)                                          // an app switch is used right away
     }
 
@@ -296,13 +302,13 @@ struct BalanceTests {
         #expect(d.timeline.isEmpty)
         d.work(minutes: 5) { $0.category = .leisure }
         #expect(d.timeline.isEmpty)                                     // games and films are fine
-        #expect(d.work(minutes: 1).first == .hint(.endOfDay))
+        #expect(d.work(minutes: 1).first?.isStart(.endOfDay) == true)
     }
 
     @Test func endOfDayAfterFourHoursOnWeekends() {
         let d = Day(start: date("2026-10-03T10:00:00Z"), only(.endOfDay))
         d.work(minutes: 4 * 60 + 2)
-        let hints = d.times { $0 == .hint(.endOfDay) }
+        let hints = d.times { $0.isStart(.endOfDay) }
         #expect(hints.count == 1)
         #expect(hints[0] >= 4 * 3600)
     }
@@ -310,7 +316,7 @@ struct BalanceTests {
     @Test func workingPastMidnightIsEndOfDay() {
         let d = Day(start: date("2026-10-05T23:30:00Z"), only(.endOfDay))
         d.work(minutes: 40)
-        let hints = d.times { $0 == .hint(.endOfDay) }
+        let hints = d.times { $0.isStart(.endOfDay) }
         #expect(hints.count == 1)
         #expect((30 * 60...33 * 60).contains(hints[0]))
     }
@@ -351,7 +357,7 @@ struct BalanceTests {
             c.timeScale = 60
         }
         d.work(minutes: 1.2)                                           // 72 s real = 72 min
-        #expect(d.times { $0 == .hint(.water) }.count == 1)
+        #expect(d.times { $0.isStart(.water) }.count == 1)
     }
 }
 
@@ -420,7 +426,8 @@ struct BalanceStrictTests {
         s.climb(to: 2)
         #expect(try s.engine.setMode(.silent) == [.hint(.stretch)])        // down to the pantomime right away
         #expect(s.engine.state.episode?.stage == 0)
-        #expect(try s.engine.setMode(.strict).isEmpty)
+        // Stricter again: a pantomime under Strict's floor becomes its bubble at once (slice 6, decision 33).
+        #expect(try s.engine.setMode(.strict) == [.ask(.stretch, stage: 1, buttons: [.going, .snooze, .busy], again: false)])
     }
 
     @Test func theEmergencyExitNeedsAReasonAndLetsGoForTheChosenTime() throws {

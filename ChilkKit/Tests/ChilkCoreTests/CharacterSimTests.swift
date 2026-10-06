@@ -220,13 +220,14 @@ struct CharacterSimTests {
         #expect(sim.pose.lookY < 0)
     }
 
-    @Test func fatigueHalfClosesTheEyes() {
+    @Test func fatigueNoLongerClosesTheEyes() {
+        // Slice 6a, decision 3: tiredness is posture; half-closed eyes would read as the eyes need.
         let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 11))
         sim.fatigue = 1
         var maxOpen = 0.0
         run(sim, seconds: 10) { maxOpen = max(maxOpen, $0.pose.eyeOpen) }
-        #expect(maxOpen <= 0.46)
-        #expect(sim.pose.fatigue == 1)
+        #expect(maxOpen > 0.97)
+        #expect(sim.pose.fatigue == 1 && sim.pose.sag == 1)
     }
 
     @Test func hitTestUsesTheBody() {

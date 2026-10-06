@@ -330,7 +330,7 @@ private func refusal(_ body: () throws -> Void) -> BalanceRefusal? {
         run.workUntilRequest()
         _ = try run.engine.startFocus(seconds: 3600, now: date("2026-10-05T11:00:00Z"))
         let text = VoiceContext.text(sittingMinutes: 50, now: run.now, zone: zone, balance: run.engine.brief())
-        #expect(text.contains("на экране просьба «размяться», ступень 0 из 4, отсрочек осталось 2, уговором можно до 30 мин, "
+        #expect(text.contains("на экране просьба «размяться», ступень 1 из 4, отсрочек осталось 2, уговором можно до 30 мин, "   // starts on 1 (6a)
                               + "сегодня её уже откладывали уговором 1 раз; фокус до 12:00, на сегодня ещё 180 мин фокуса]"))
 
         _ = try run.engine.persuade(minutes: 15)

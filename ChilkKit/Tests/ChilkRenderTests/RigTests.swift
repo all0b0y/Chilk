@@ -103,6 +103,15 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.listening = true; sim.hearing = 0.6; sim.say("Слушаю…", duration: 3); run(1.5)
     sim.earsDroop = 0.7; run(0.5); sim.earsDroop = 0
     sim.listening = false; sim.perform(.think(seconds: 2)); run(2.2)
+    // Slice 6a: the eyes mirror, the stretch hint's hops, «ликует», the two new antics — on both edges.
+    sim.eyeStrain = 1; run(5)
+    sim.perform(.hops); run(4.4)
+    mirrored = true
+    sim.standOut = .peek; sim.perform(.cheer); run(2.8)
+    sim.startAntic(.scratchLeaf); run(2)
+    mirrored = false
+    sim.startAntic(.catchSpeck); run(3)
+    sim.eyeStrain = 0; sim.standOut = .docked; run(1.5)
     sim.fatigue = 0.37
     mirrored = false
     run(20)

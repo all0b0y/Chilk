@@ -34,8 +34,20 @@ public enum Part: Hashable, Sendable {
     case mug(lw: Double)
     case button(title: String, hovered: Bool)
     case ear(lw: Double)
+    // Slice 6a
+    /// A little sticker hand (cheering, scratching the leaf).
+    case hand(lw: Double)
+    /// A short raised arm growing from behind the body (cheering); base at the origin, pointing up.
+    case arm(lw: Double)
+    /// Lavender bag under one eye — the eyes need's own signal.
+    case eyeBag(lw: Double)
+    /// The speck he catches.
+    case speck
+    /// One confetti piece; `index` picks colour and shape.
+    case confetti(index: Int)
 
     public static let waveFrames = 24
+    public static let confettiPieces = 8
 
     /// Parts that exist only for one speech bubble (bounded cache eviction).
     public var isTransient: Bool {
@@ -60,22 +72,27 @@ public struct Placement: Equatable, @unchecked Sendable {
 public enum Slot {
     public static let contactShadow = 0
     public static let ear = 1           // +0, +1 — behind the head
-    public static let backpack = 3      // behind him
-    public static let body = 4
-    public static let strap = 5
-    public static let hat = 6           // the sprout grows through it
-    public static let stem = 7
-    public static let leaf = 8          // +0, +1
-    public static let blush = 10        // +0, +1
-    public static let eye = 12          // +0, +1
-    public static let mouth = 14
-    public static let mug = 15
-    public static let z = 16            // +0…+2
-    public static let bubbleBox = 19
-    public static let bubbleTail = 20
-    public static let bubbleStroke = 21
-    public static let button = 22       // +index
-    public static let word = 34         // +index
+    public static let arm = 3           // +0, +1 — raised arms grow from behind the body
+    public static let backpack = 5      // behind him
+    public static let body = 6
+    public static let strap = 7
+    public static let hat = 8           // the sprout grows through it
+    public static let stem = 9
+    public static let leaf = 10         // +0, +1
+    public static let blush = 12        // +0, +1
+    public static let eyeBag = 14       // +0, +1 — under the eyes
+    public static let eye = 16          // +0, +1
+    public static let mouth = 18
+    public static let hand = 19         // +0, +1 — a mitten in front of the body
+    public static let mug = 21
+    public static let speck = 22
+    public static let confetti = 23     // +0…+7
+    public static let z = 31            // +0…+2
+    public static let bubbleBox = 34
+    public static let bubbleTail = 35
+    public static let bubbleStroke = 36
+    public static let button = 37       // +index
+    public static let word = 49         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -147,6 +164,16 @@ extension Part {
             return box(0, 0, Props.buttonWidth(title), Props.buttonHeight, margin: 1.5)
         case .ear(let lw):
             return box(-9, -30, 18, 30, margin: max(5.5, 3.2 * lw / 2 + 1.5))
+        case .hand(let lw):
+            return box(-6, -4.6, 12, 9.2, margin: max(4.5, 2.6 * lw / 2) + 1.5)    // the sticker border is 9 wide
+        case .arm(let lw):
+            return box(-5, -30, 10, 32, margin: max(4.5, 2.6 * lw / 2) + 1.5)
+        case .eyeBag(let lw):
+            return box(-7, 7, 14, 5.5, margin: 3 * lw / 2 + 1.5)
+        case .speck:
+            return box(-3.2, -3.2, 6.4, 6.4, margin: 1)
+        case .confetti:
+            return box(-3.5, -2.2, 7, 4.4, margin: 1)
         }
     }
 
@@ -400,6 +427,33 @@ extension Part {
             ctx.translateBy(x: Props.buttonPadding, y: 16.5)
             TextKit.draw(title, font: TextKit.buttonFont, color: hovered ? RGBA.white.cgColor : RGBA.hex(0x1D1D1F).cgColor, in: ctx)
             ctx.restoreGState()
+
+        case .hand(let lw):                                 // a little sticker nub in the body colour
+            let hand = CGPath(ellipseIn: CGRect(x: -6, y: -4.6, width: 12, height: 9.2), transform: nil)
+            Props.sticker(ctx, hand, fill: p.body.cgColor, outline: outline, lw: 2.6 * lw)
+
+        case .arm(let lw):                                  // a capsule: hidden base under the body, mitten tip up
+            let arm = CGPath(roundedRect: CGRect(x: -5, y: -30, width: 10, height: 32), cornerWidth: 5, cornerHeight: 5, transform: nil)
+            Props.sticker(ctx, arm, fill: p.body.cgColor, outline: outline, lw: 2.6 * lw)
+
+        case .eyeBag(let lw):                               // a lavender crescent hugging the eye, above the blush
+            ctx.move(to: CGPoint(x: -7, y: 7.5))
+            ctx.addQuadCurve(to: CGPoint(x: 7, y: 7.5), control: CGPoint(x: 0, y: 12.5))
+            ctx.setStrokeColor(Props.bagLavender)
+            ctx.setLineWidth(3 * lw)
+            ctx.strokePath()
+
+        case .speck:                                        // dark dot with a light rim: visible on any wallpaper
+            ctx.setFillColor(RGBA(1, 1, 1, 0.9).cgColor)
+            ctx.fillEllipse(in: CGRect(x: -3.2, y: -3.2, width: 6.4, height: 6.4))
+            ctx.setFillColor(RGBA.hex(0x55505F).cgColor)
+            ctx.fillEllipse(in: CGRect(x: -2.2, y: -2.2, width: 4.4, height: 4.4))
+
+        case .confetti(let i):
+            ctx.setFillColor(Props.confetti[i % Props.confetti.count])
+            let r = i % 3 == 0 ? CGRect(x: -2.2, y: -2.2, width: 4.4, height: 4.4) : CGRect(x: -3.5, y: -1.6, width: 7, height: 3.2)
+            ctx.addPath(CGPath(roundedRect: r, cornerWidth: 1, cornerHeight: 1, transform: nil))
+            ctx.fillPath()
         }
     }
 }
@@ -417,6 +471,9 @@ enum Props {
     static let hatBand = RGBA.hex(0xE3953A).cgColor
     static let mugMint = RGBA.hex(0x8FD6C4).cgColor
     static let buttonFill = RGBA.hex(0xF3EEE6).cgColor
+    static let bagLavender = RGBA.hex(0x9580D4).cgColor
+    /// Peach, leaf, lavender, sun, mint, pink.
+    static let confetti = ([0xFF9A7A, 0x7FCB55, 0xA78BEA, 0xFFC93C, 0x5CCFB8, 0xFF7E95] as [UInt32]).map { RGBA.hex($0).cgColor }
 
     static func strapPath(_ m: Metrics) -> CGPath {
         let p = CGMutablePath()

@@ -155,7 +155,8 @@ final class EdgeController: NSObject {
         let hit = ChilkRenderer.buttonRects(pose: sim.pose, metrics: metrics, mirrored: mirrored)
             .first { $0.rect.insetBy(dx: -2, dy: -2).contains(raw) }?.index
         if sim.hoveredButton != hit { sim.hoveredButton = hit }
-        let interactive = drag != nil || pressedButton != nil || hit != nil || sim.contains(local)
+        // The stretch hint's hops let clicks through to the window under him (6a, decision 5).
+        let interactive = drag != nil || pressedButton != nil || hit != nil || (sim.contains(local) && !sim.passesClicks)
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
         present()

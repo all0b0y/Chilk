@@ -279,7 +279,7 @@ struct SettingsSliceTests {
         c.waterMinutes = 15...20
         r.engine.updateConfig(c)
         #expect(r.engine.state.needs[.water]!.threshold <= 20 * 60)
-        #expect(r.work(minutes: 4).contains(.hint(.water)))
+        #expect(r.work(minutes: 4).contains { if case .ask(.water, 1, _, false) = $0 { true } else { false } })   // starts with the bubble (6a)
     }
 
     @Test func aCallAppKeepsHimQuietAndIdleIsNotRestAnUntouchableAppOnlyKeepsHimQuiet() {

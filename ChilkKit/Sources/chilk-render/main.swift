@@ -77,9 +77,7 @@ func previews(into dir: URL) throws {
         ("07-asleep-left-edge", sim({ $0.fallAsleep() }, seconds: 4.2), true),
         ("08-greeting-left-edge", sim({ $0.say("Доброе утро! Как спалось? Начнём со стакана воды?") }, seconds: 1.6), true),
         ("09-carried", sim({ $0.isCarried = true }, seconds: 0.5, pointer: lookIn), false),
-        ("10-stretch", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 3)); var best = s.pose
-            for _ in 0..<(60 * 120) { s.step(dt: 1.0 / 60, pointer: lookIn); if s.currentAntic == .stretch, s.pose.scaleY > best.scaleY { best = s.pose } }
-            return best }(), false),
+        ("10-scratch-leaf", sim({ $0.startAntic(.scratchLeaf) }, seconds: 0.8, pointer: lookIn), false),
         ("11-stage1-buttons", sim({ $0.standOut = .peek; $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]); $0.hoveredButton = 0 }, seconds: 2), false),
         ("12-drink", sim({ $0.perform(.drink) }, seconds: 1.3), false),
         ("13-walk-out", sim({ $0.standOut = .out; $0.wear(.hat); $0.perform(.pack) }, seconds: 3), false),
@@ -88,6 +86,15 @@ func previews(into dir: URL) throws {
         ("16-lookaway", sim({ $0.perform(.lookAway) }, seconds: 1.2), false),
         ("17-listening", sim({ $0.standOut = .out; $0.listening = true; $0.hearing = 0.5; $0.say("Напомни позвонить маме вечером", duration: .infinity) }, seconds: 2), false),
         ("18-thinking", sim({ $0.standOut = .out; $0.perform(.think(seconds: 30)); $0.say("···", duration: .infinity) }, seconds: 1.5), false),
+        // Slice 6a
+        ("19-eyes-strained", sim({ $0.eyeStrain = 1 }, seconds: 5, pointer: lookIn), false),
+        ("20-tired-sag", sim({ $0.fatigue = 1; $0.standOut = .peek }, seconds: 3), false),
+        ("21-hops-midair", sim({ $0.perform(.hops) }, seconds: 0.9), false),
+        ("22-cheer-top", sim({ $0.standOut = .peek; $0.perform(.cheer) }, seconds: 1.36), false),
+        ("23-cheer-confetti", sim({ $0.standOut = .peek; $0.perform(.cheer) }, seconds: 1.75), false),
+        ("24-speck-watch", sim({ $0.startAntic(.catchSpeck) }, seconds: 0.9), false),
+        ("25-speck-chew", sim({ $0.startAntic(.catchSpeck) }, seconds: 1.9), false),
+        ("26-strain-left-edge", sim({ $0.eyeStrain = 1; $0.standOut = .peek }, seconds: 5), true),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in
