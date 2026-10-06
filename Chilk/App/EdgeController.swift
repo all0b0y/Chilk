@@ -48,6 +48,26 @@ final class EdgeController: NSObject {
         var completion: () -> Void
     }
     private var flight: Flight?
+    // Slice 6e: the monitor he lives on and the leap to another one.
+    /// A monitor he can live on: a real screen, or the acceptance demo's virtual one.
+    struct Display: Equatable {
+        let id: String
+        let frame: CGRect
+        let visibleFrame: CGRect
+    }
+    private var hop = ScreenHop()
+    private var homeDisplay: Display?
+    private var lastHopCheck: CFTimeInterval = 0
+    private struct Leap {
+        var start: CFTimeInterval
+        var arc: HopArc
+    }
+    private var leap: Leap?
+    /// Set by the app: Chilk is busy (a conversation, a notice, a request, the popover…) — a leap waits for the end.
+    var hopBusy: () -> Bool = { false }
+    var log: (String) -> Void = { _ in }
+    /// Acceptance only: CHILK_DEMO_HOP=<s> — a virtual monitor to the right becomes active after <s> for 8 s.
+    private lazy var demoHopAt: Double? = env["CHILK_DEMO_HOP"].flatMap(Double.init).map { CACurrentMediaTime() + $0 }
 
     private let env = ProcessInfo.processInfo.environment
     /// Measurement switch: behave as if the cursor were far away (no hover / gaze tracking).
@@ -129,7 +149,13 @@ final class EdgeController: NSObject {
         let dt = min(1.0 / 30, max(0, now - (lastTimestamp ?? now)))
         lastTimestamp = now
 
-        if let f = flight {
+        if now - lastHopCheck >= 0.1, drag == nil, flight == nil, leap == nil {
+            lastHopCheck = now
+            stepHop(now: now)
+        }
+        if let l = leap {
+            leapStep(l, now: now)
+        } else if let f = flight {
             flyStep(f, now: now)
         } else if drag == nil {
             if (sim.standOut == .center) != centered {
@@ -165,7 +191,8 @@ final class EdgeController: NSObject {
         present()
 
         // 60 fps only while something moves fast.
-        let busy = sim.isBusy || drag != nil || flight != nil || abs(originX.velocity) > 2 || abs(originY.velocity) > 2
+        let busy = sim.isBusy || drag != nil || flight != nil || leap != nil || abs(originX.velocity) > 2
+            || abs(originY.velocity) > 2
         if busy != lastBusy {
             let idle = Float(idleFPS)
             link?.preferredFrameRateRange = busy
@@ -236,7 +263,7 @@ final class EdgeController: NSObject {
             return
         }
         let m = NSEvent.mouseLocation
-        guard flight == nil else { return }
+        guard flight == nil, leap == nil else { return }
         drag = Drag(start: m, grabOffset: CGPoint(x: m.x - sceneOrigin.x, y: m.y - sceneOrigin.y), lastX: sceneOrigin.x)
     }
 
@@ -305,7 +332,7 @@ final class EdgeController: NSObject {
 
     /// A figure-eight over the screen, then back to exactly where he was.
     func fly(duration: Double, completion: @escaping () -> Void) {
-        guard drag == nil, flight == nil else { return completion() }
+        guard drag == nil, flight == nil, leap == nil else { return completion() }
         let mirrored = isMirrored
         // No one-off re-centering: the shared viewport already encloses every animated part.
         flight = Flight(start: CACurrentMediaTime(), duration: duration, from: sceneOrigin, mirrored: mirrored, completion: completion)
@@ -377,17 +404,17 @@ final class EdgeController: NSObject {
         let m = sim.pose.mood
         // 6d: also while he peeks from behind the edge, the «пф!» is in the air, or hidden he is out for a while.
         let hidingShown = sim.standOut == .lurk || sim.pose.puffAge != nil || (sim.hidden && !sim.isHiddenHome)
-        guard sim.isEmoting || m.petted || m.winking || hidingShown else { return }
+        guard sim.isEmoting || m.petted || m.winking || hidingShown || leap != nil else { return }
         let now = CACurrentMediaTime()
-        guard now - lastEdgeSnapshot >= 0.3 else { return }
+        guard now - lastEdgeSnapshot >= (leap != nil ? 0.1 : 0.3) else { return }
         lastEdgeSnapshot = now
         edgeSnapshotCount += 1
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         view.snapshot(to: dir.appending(path: String(format: "edge-%03d.png", edgeSnapshotCount)))
         // 6d: where he is — the layer snapshot has no screen edge in it.
-        let line = String(format: "%03d x=%.0f width=%.0f standOut=%@ hiddenHome=%d puff=%d act=%@\n", edgeSnapshotCount,
+        let line = String(format: "%03d x=%.0f width=%.0f standOut=%@ hiddenHome=%d puff=%d origin=%.0f,%.0f act=%@\n", edgeSnapshotCount,
                           sim.positionX, metrics.width, "\(sim.standOut)", sim.isHiddenHome ? 1 : 0,
-                          sim.pose.puffAge != nil ? 1 : 0, "\(sim.act.map { "\($0)" } ?? "-")")
+                          sim.pose.puffAge != nil ? 1 : 0, sceneOrigin.x, sceneOrigin.y, "\(sim.act.map { "\($0)" } ?? "-")")
         if let h = try? FileHandle(forWritingTo: dir.appending(path: "frames.txt")) {
             h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
         } else {
@@ -395,18 +422,78 @@ final class EdgeController: NSObject {
         }
     }
 
+    // MARK: Another monitor (slice 6e)
+
+    private func displays() -> [Display] {
+        var list = NSScreen.screens.compactMap { s in
+            Self.uuid(of: s).map { Display(id: $0, frame: s.frame, visibleFrame: s.visibleFrame) }
+        }
+        if demoHopAt != nil, let main = list.first {
+            let dx = main.frame.width
+            list.append(Display(id: "demo-virtual", frame: main.frame.offsetBy(dx: dx, dy: 0),
+                                visibleFrame: main.visibleFrame.offsetBy(dx: dx, dy: 0)))
+        }
+        return list
+    }
+
+    /// The monitor with the active window (the demo's virtual one during its 8 s).
+    private func activeDisplay(now: CFTimeInterval) -> String? {
+        if let at = demoHopAt, now >= at, now < at + 8 { return "demo-virtual" }
+        return (NSScreen.main).flatMap(Self.uuid)
+    }
+
+    private func stepHop(now: CFTimeInterval) {
+        let list = displays()
+        var pinned: String?
+        if case .pinned(let id, _) = screenChoice() { pinned = id }
+        // Hidden at home nobody sees him move, whatever else is going on.
+        let busy = !sim.isHiddenHome && (hopBusy() || centered || sim.act != nil || sim.isCarried)
+        let step = hop.step(active: activeDisplay(now: now), connected: list.map(\.id), now: now, busy: busy,
+                            hidden: sim.hidden, pinned: pinned)
+        homeDisplay = list.first { $0.id == hop.home } ?? homeDisplay      // also picks up a new resolution
+        switch step {
+        case .stay:
+            break
+        case .move(let id):
+            let o = targetOrigin()
+            sceneOrigin = o
+            originX.value = o.x; originX.velocity = 0
+            originY.value = o.y; originY.velocity = 0
+            present()
+            log("screen: on \(id.prefix(8))\(sim.hidden ? " (hidden, moved over)" : "")")
+        case .hop(let id):
+            let from = sceneOrigin, to = targetOrigin()
+            let arc = HopArc(from: from, to: to)
+            let dx = Double(to.x - from.x)
+            sim.perform(.leap(seconds: arc.total, dir: (isMirrored ? -dx : dx) >= 0 ? 1 : -1))
+            leap = Leap(start: now, arc: arc)
+            log(String(format: "screen: leap to %@, %.2f s in the air, %.0f pt", String(id.prefix(8)), arc.flight,
+                       hypot(dx, Double(to.y - from.y))))
+        }
+    }
+
+    private func leapStep(_ l: Leap, now: CFTimeInterval) {
+        let t = now - l.start
+        let p = t >= l.arc.total ? l.arc.to : l.arc.point(at: t)
+        sceneOrigin = CGPoint(x: p.x.rounded(), y: p.y.rounded())
+        originX.value = p.x; originX.velocity = 0
+        originY.value = p.y; originY.velocity = 0
+        carryVelocity = 0
+        if t >= l.arc.total {
+            leap = nil
+            log("screen: landed")
+        }
+    }
+
     // MARK: Geometry
 
     private var visibleFrame: CGRect { home.visibleFrame }
 
-    /// The screen he lives on: the active one, or the pinned one while it is connected (Settings, slice 5c).
-    var home: NSScreen {
-        let choice = screenChoice()
-        guard case .pinned = choice else { return NSScreen.main ?? NSScreen.screens[0] }   // per frame: keep it cheap
-        let screens = NSScreen.screens
-        let active = NSScreen.main ?? screens[0]
-        let ids = screens.map { Self.uuid(of: $0) ?? "" }
-        return screens[choice.pick(ids: ids, active: screens.firstIndex(of: active) ?? 0)]
+    /// The monitor he lives on (6e: `ScreenHop` — the active one after a leap, or the pinned one while connected).
+    private var home: Display {
+        if let d = homeDisplay { return d }
+        let s = NSScreen.main ?? NSScreen.screens[0]
+        return Display(id: Self.uuid(of: s) ?? "", frame: s.frame, visibleFrame: s.visibleFrame)
     }
 
     private static var uuids: [CGDirectDisplayID: String] = [:]

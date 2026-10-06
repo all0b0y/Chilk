@@ -123,6 +123,9 @@ public enum Act: Sendable, Equatable {
     case spin
     /// «Грустит»: the sad face, the sprout droops.
     case mope
+    /// Slice 6e: the leap to another monitor — the app flies the window along a `HopArc`; he crouches, flies with his
+    /// hands tucked and the sprout fluttering, lands squashed. `dir`: +1 towards the screen edge, −1 into the screen.
+    case leap(seconds: Double, dir: Double)
 
     public var duration: Double {
         switch self {
@@ -140,6 +143,7 @@ public enum Act: Sendable, Equatable {
         case .sulk: 2.2
         case .spin: 2.6
         case .mope: 2.8
+        case .leap(let s, _): s
         }
     }
 
@@ -221,6 +225,8 @@ public struct CharacterPose: Sendable, Equatable {
     /// Slice 6d: the «пф!» puff when he dives behind the edge — seconds since, and where (scene coordinates).
     public var puffAge: Double?
     public var puffOrigin: CGPoint = .zero
+    /// Slice 6e: 0…1 — the window is flying him to another monitor (no floor under him: the shadow fades).
+    public var airborne: Double = 0
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -557,7 +563,10 @@ public final class CharacterSim {
     public var isTalking: Bool { time < bubbleUntil }
 
     /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
-    public var passesClicks: Bool { act == .hops }
+    public var passesClicks: Bool {
+        if case .leap = act { return true }                              // 6e: clicks go through while he flies
+        return act == .hops
+    }
 
     /// Shows the eyes mirror at once (the popover hero is a fresh Чилк every time it opens).
     public func snapEyeStrain() {
@@ -878,6 +887,20 @@ public final class CharacterSim {
             beat(0.6) { squash.impulse(-3) }                                   // a sigh
             lookX.target = -0.1
             lookY.target = 0.35
+        case .leap(let s, let dir):
+            let landAt = s - HopArc.land
+            beat(0) { squash.impulse(6) }                                       // crouch
+            beat(HopArc.crouch) { squash.impulse(-7); leaf.impulse(9 * dir) }   // push off
+            if k >= HopArc.crouch && k < landAt {
+                tilt.target += 0.22 * dir                                      // leaning into the flight
+                lookX.target = dir > 0 ? 0.7 : -0.7
+                lookY.target = 0.1
+                if k >= HopArc.crouch + Double(actBeats - 2) * 0.11 + 0.11 {   // the sprout flutters in the wind
+                    leaf.impulse((actBeats % 2 == 0 ? 7 : -7) - 3 * dir)
+                    actBeats += 1
+                }
+            }
+            if k >= landAt, actBeats < 1000 { squash.impulse(8); leaf.impulse(-6 * dir); actBeats = 1000 }   // landing
         }
     }
 
@@ -991,6 +1014,11 @@ public final class CharacterSim {
     /// Hands only when he needs them: both up while cheering, one rubbing the stem while he scratches the leaf.
     private var hands: [Hand] {
         let t = time
+        if case .leap(let s, let dir) = act, t - actStart > HopArc.crouch, t - actStart < s - HopArc.land {
+            // 6e: short arms swept back against the flight (floating mittens read as balls).
+            let back = dir > 0 ? -2.25 : 2.25
+            return [Hand(x: -0.78, y: 0.12, angle: back, arm: true), Hand(x: 0.78, y: 0.12, angle: back, arm: true)]
+        }
         if act == .cheer, t - actStart < 1.7 {
             let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
             return [Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true), Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]   // ＼(^o^)／
@@ -1234,6 +1262,10 @@ public final class CharacterSim {
             p.confettiOrigin = confettiOrigin
         }
         p.passThrough = act == .hops
+        if case .leap(let s, _) = act {
+            p.passThrough = true
+            p.airborne = Self.envelope(t - actStart - HopArc.crouch, length: s - HopArc.crouch - HopArc.land, rise: 0.12, fall: 0.12)
+        }
         p.lying = lying
         if let a = puffAt, t - a < Self.puffLife {
             p.puffAge = t - a

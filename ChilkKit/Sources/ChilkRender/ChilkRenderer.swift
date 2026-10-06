@@ -20,12 +20,12 @@ public enum ChilkRenderer {
         // «Лежит» (6b) / on his back laughing (6c): turned about the feet and lifted back onto the floor.
         let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX * p.scaleX, ry: m.radiusY * p.scaleY, roll: p.roll)
         let turned = Lying.turned(lying: p.lying, roll: p.roll)
-        // Contact shadow: shrinks and fades while he is in the air.
+        // Contact shadow: shrinks and fades while he is in the air; gone while the window flies him (6e leap).
         let lift = clamp(-p.hop / 70)
         out.append(Placement(slot: Slot.contactShadow, part: .contactShadow,
                              transform: mirror.translatedBy(x: p.x + (turned ? lie.dx : 0), y: m.ground + 3)
                                 .scaledBy(x: p.scaleX * (1 - lift * 0.35), y: 1 - lift * 0.35),
-                             alpha: 1 - lift * 0.6))
+                             alpha: (1 - lift * 0.6) * (1 - p.airborne)))
 
         let figure = mirror.translatedBy(x: p.x, y: m.ground + p.hop + lie.lift).rotated(by: lie.angle)
             .scaledBy(x: p.scaleX, y: p.scaleY).translatedBy(x: 0, y: -m.radiusY)

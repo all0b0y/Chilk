@@ -30,6 +30,17 @@ func writePNG(_ image: CGImage, to url: URL) {
 }
 
 @MainActor
+/// Slice 6e: `at` seconds into a 1.6 s leap into the screen.
+func leapPose(at: Double) -> CharacterPose {
+    let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
+    s.standOut = .out                                      // in flight the window has left the edge: all of him shows
+    for _ in 0..<90 { s.step(dt: 1.0 / 60, pointer: nil) }
+    s.perform(.leap(seconds: 1.6, dir: -1))
+    for _ in 0..<Int(at * 60) { s.step(dt: 1.0 / 60, pointer: nil) }
+    return s.pose
+}
+
+@MainActor
 func sim(_ setup: (CharacterSim) -> Void = { _ in }, seconds: Double, pointer: CGPoint? = nil) -> CharacterPose {
     let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
     setup(s)
@@ -148,6 +159,11 @@ func previews(into dir: URL) throws {
             s.hidden = true
             for _ in 0..<27 { s.step(dt: 1.0 / 60, pointer: nil) }
             return s.pose }(), false),
+        // Slice 6e: the leap to another monitor (1.6 s act: crouch, flight, landing).
+        ("45-leap-crouch", leapPose(at: 0.08), false),
+        ("46-leap-flight", leapPose(at: 0.7), false),
+        ("47-leap-flight-left-edge", leapPose(at: 0.7), true),
+        ("48-leap-landing", leapPose(at: 1.45), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

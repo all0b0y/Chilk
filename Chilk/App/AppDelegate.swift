@@ -172,6 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
                 && !(greeting?.isActive ?? true) && !edge.sim.isTalking && edge.sim.standOut == .docked
         }
+        // Slice 6e: a leap to another monitor waits until Chilk is free.
+        edge.hopBusy = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak chat, weak edge] in
+            (conversation?.isActive ?? false) || (actions?.noticeWaiting ?? false) || (balance?.isOccupied ?? false)
+                || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false) || (chat?.thinking ?? false)
+                || (edge?.sim.isTalking ?? false)
+        }
+        edge.log = { [weak balance] in balance?.log($0) }
         hide.canPeek = { [weak tray, weak chat, weak edge] in
             (tray?.isFree() ?? false) && !(tray?.holdsChilk ?? true) && !(chat?.thinking ?? true) && edge?.sim.act == nil
         }

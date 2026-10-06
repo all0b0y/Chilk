@@ -144,6 +144,10 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.standOut = .docked; run(2)
     mirrored = false
     sim.hidden = false; run(1.5)
+    // Slice 6e: the leap to another monitor (arms swept back, the shadow fades in the air).
+    sim.perform(.leap(seconds: 1.6, dir: -1)); run(1.8)
+    mirrored = true; sim.perform(.leap(seconds: 1.6, dir: 1)); run(1.8)
+    mirrored = false
     sim.fatigue = 0.37
     mirrored = false
     run(20)
