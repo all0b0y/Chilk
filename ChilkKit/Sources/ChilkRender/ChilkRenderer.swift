@@ -201,8 +201,7 @@ public enum ChilkRenderer {
         } else if mood.annoyed || mood.sad || mood.slumped || mood.sulking {
             mouthPart = .mouthFrown(lw: lw)
         } else {
-            let tired = clamp((p.fatigue - 0.45) / 0.55)
-            mouthPart = .mouthSmile(tired: Int((tired * 100).rounded()), lw: lw)
+            mouthPart = .mouthSmile(tired: 0, lw: lw)                   // 6a: fatigue shows in the pose only
         }
         out.append(Placement(slot: Slot.mouth, part: mouthPart, transform: mouthT, alpha: 1))
         if p.clownNose > 0.01 {

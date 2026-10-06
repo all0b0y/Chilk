@@ -102,13 +102,33 @@ public struct ChatLog: Codable, Equatable, Sendable {
             sessions.append(ChatSession(id: id, started: at, lastActive: at, turns: []))
         }
         threads[thread] = id
-        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return id }
+        append(question: question, answer: answer, via: via, chips: chips, to: id, at: at)
+        return id
+    }
+
+    /// A pair that never went to Codex (6b: lying, he does not talk): into the chat the user picked, else a new one.
+    /// No thread is mapped — the next real turn picks its thread as usual (`plan`).
+    public mutating func recordLocal(question: String, answer: String, via: ChatTurn.Via, continuing: UUID?,
+                                     at: Date) -> UUID {
+        let id: UUID
+        if let continuing, session(continuing) != nil {
+            id = continuing
+        } else {
+            id = UUID()
+            sessions.append(ChatSession(id: id, started: at, lastActive: at, turns: []))
+        }
+        append(question: question, answer: answer, via: via, chips: [], to: id, at: at)
+        return id
+    }
+
+    private mutating func append(question: String, answer: String, via: ChatTurn.Via, chips: [ChatChip], to id: UUID,
+                                 at: Date) {
+        guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
         sessions[index].turns.append(ChatTurn(role: .user, via: via, text: Self.clean(question), at: at))
         sessions[index].turns.append(ChatTurn(role: .chilk, via: via, text: answer.trimmingCharacters(in: .whitespacesAndNewlines),
                                               at: at, chips: chips))
         sessions[index].lastActive = at
         sessions.sort { $0.lastActive > $1.lastActive }
-        return id
     }
 
     public mutating func delete(_ id: UUID) {

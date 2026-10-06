@@ -55,8 +55,16 @@ public enum ClockWords {
         return Int(text[r].dropFirst().prefix(2))
     }
 
+    /// The question back for an open hour (Т1): «В 3 ночи или в 15:00?», «В 8 утра или в 20:00?».
+    public static func askBack(hour h: Int) -> String {
+        let am = h % 12
+        if am == 0 { return "В 12 дня или в 00:00?" }
+        return "В \(am) \(am <= 4 ? "ночи" : "утра") или в \(am + 12):00?"
+    }
+
     /// A note for [контекст], or nil.
-    public static func hint(for question: String, now: Date, zone: TimeZone) -> String? {
+    /// `dayOpen: false` — the user is answering the «which date» question already (Т4): no day note again.
+    public static func hint(for question: String, now: Date, zone: TimeZone, dayOpen: Bool = true) -> String? {
         var notes: [String] = []
         let hours = ambiguousHours(in: question)
         if !hours.isEmpty {
@@ -65,7 +73,7 @@ public enum ClockWords {
         }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = zone
-        if cal.component(.hour, from: now) < 5, tokens(question).contains("завтра"),
+        if dayOpen, cal.component(.hour, from: now) < 5, tokens(question).contains("завтра"),
            let next = cal.date(byAdding: .day, value: 1, to: now) {
             let f = DateFormatter()
             f.locale = Locale(identifier: "ru_RU")
@@ -97,13 +105,18 @@ public enum ClockWords {
     /// A number followed by these is an amount, not a clock time («в 2 раза», «в 3 минуты»).
     private static let unitPrefixes = ["минут", "мин", "секунд", "сек", "раз", "дней", "день", "недел", "месяц", "год",
                                        "лет", "процент", "км", "метр", "кг", "штук", "человек", "серии", "серий",
-                                       "minute", "time", "day", "week"]
+                                       "minute", "time", "day", "week",
+                                       // a date, not a clock time («до 10 октября», «к 8-му числу»)
+                                       "январ", "феврал", "март", "апрел", "мая", "июн", "июл", "август", "сентябр",
+                                       "октябр", "ноябр", "декабр", "числ"]
+    /// «к 8-му», «в 5-й»: an ordinal ending split off by the hyphen.
+    private static let ordinalEnds: Set<String> = ["го", "му", "е", "ое", "ого", "ому", "м", "й", "ой", "ый", "я", "ая"]
 
     /// The open hour named right after the preposition at `i`, and the index of its last word.
     private static func hour(after i: Int, in t: [String]) -> (Int, Int)? {
         let w = t[i + 1]
         let next = i + 2 < t.count ? t[i + 2] : ""
-        if unitPrefixes.contains(where: { next.hasPrefix($0) }) { return nil }
+        if unitPrefixes.contains(where: { next.hasPrefix($0) }) || ordinalEnds.contains(next) { return nil }
         if let h = clockNumber(w) { return (1...12).contains(h) ? (h, i + 1) : nil }
         if let h = hourWords[w] { return (h, i + 1) }
         if w.hasPrefix("пол"), let h = halfOrdinals[String(w.dropFirst(3))] { return (h, i + 1) }

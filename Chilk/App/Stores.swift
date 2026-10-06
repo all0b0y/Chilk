@@ -124,6 +124,13 @@ final class ChatStore {
         return id
     }
 
+    /// 6b: a pair that never went to Codex (lying, he does not talk).
+    func recordLocal(question: String, answer: String, via: ChatTurn.Via, continuing: UUID?) -> UUID {
+        let id = log.recordLocal(question: question, answer: answer, via: via, continuing: continuing, at: Date())
+        changed()
+        return id
+    }
+
     func delete(_ id: UUID) {
         log.delete(id)
         changed()

@@ -54,7 +54,7 @@ final class HideController {
         guard !state.hidden else { return }
         state.hide(rng: &rng)
         if let every = demoPeekEvery { state.postpone(every) }
-        endLook()
+        endLook(goHome: true)                                       // a peek in progress does not stay half out
         sim.hidden = true
         save()
         log("hidden (\(why))")
@@ -65,7 +65,7 @@ final class HideController {
         pending = nil
         guard state.hidden else { return }
         state.show()
-        endLook()
+        endLook(goHome: true)                                       // out of a peek: docked, not stuck at the lurk line
         sim.hidden = false
         save()
         log("shown (\(why))")

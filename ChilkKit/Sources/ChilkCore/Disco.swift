@@ -30,10 +30,14 @@ public struct Disco: Equatable, Sendable {
     /// Seconds of music without a break.
     public private(set) var musicFor = 0.0
     private var silence = 0.0
-    private var nextRoll = Disco.after
+    /// After an unlucky roll the next one waits 20 min (wall clock: a pause in the music does not shorten it).
+    private var retryAt = -Double.infinity
     private var lastDance = -Double.infinity
 
     public init() {}
+
+    /// Within the hour after a dance: no roll, so the sound need not even be checked.
+    public func resting(now: Double) -> Bool { now - lastDance < Self.rest }
 
     /// One step of `seconds` at `now` (wall seconds): `music` — music is playing (not in a call, not a video);
     /// `free` — Chilk can dance. Returns true when he should dance now (`roll` in [0, 1) is taken only then).
@@ -43,11 +47,11 @@ public struct Disco: Equatable, Sendable {
             silence = 0
         } else {
             silence += seconds
-            if silence > Self.gap { musicFor = 0; nextRoll = Self.after }
+            if silence > Self.gap { musicFor = 0 }
             return false
         }
-        guard musicFor >= nextRoll, now - lastDance >= Self.rest, free else { return false }
-        nextRoll = musicFor + Self.retry
+        guard musicFor >= Self.after, now >= retryAt, !resting(now: now), free else { return false }
+        retryAt = now + Self.retry
         guard roll() < Self.chance else { return false }
         lastDance = now
         return true

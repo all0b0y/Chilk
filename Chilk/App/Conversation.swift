@@ -386,7 +386,8 @@ final class Conversation {
             }
             let asked = now
             do {
-                let raw = try await brain.ask(ClockCheck.question(question, context: context()) + question) { partial in
+                defer { ClockCheck.turnEnded(.voice) }
+                let raw = try await brain.ask(ClockCheck.question(question, context: context(), channel: .voice) + question) { partial in
                     answer.set(partial)
                 }
                 guard !Task.isCancelled else { return }

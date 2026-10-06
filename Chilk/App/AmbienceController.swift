@@ -61,9 +61,21 @@ final class AmbienceController {
         return get(builtin, &b) == 0 ? Double(b) : nil
     }
 
+    private func userHere() -> Bool {
+        if let fake = env["CHILK_FAKE_IDLE"].flatMap(Double.init) { return fake < 60 }
+        let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+        return idle < 60 && CGDisplayIsAsleep(CGMainDisplayID()) == 0
+    }
+
     private func tick() {
         // Hidden: no light play (6d, decision 18); on an external display the feature is off.
-        guard onBuiltin(), !sim.hidden, let level = brightness() else { return takeOff("not on the built-in display or hidden") }
+        guard onBuiltin(), !sim.hidden else {
+            watch = BrightnessWatch()                                   // back here: the first reading is only the place
+            return takeOff("not on the built-in display or hidden")
+        }
+        // Away, locked or the display asleep: no rolls (the system dims by itself); the place is read afresh after.
+        guard userHere() else { watch = BrightnessWatch(); return }
+        guard let level = brightness() else { return }
         if look == .nightcap, !sim.props.contains(.nightcap) { look = nil; log("ambience: woke up, nightcap off") }
         if let l = look {
             if Date() >= checkUntil, !l.keeps(level: level, eyesPressure: eyesPressure()) {

@@ -449,9 +449,11 @@ final class EdgeController: NSObject {
         var pinned: String?
         if case .pinned(let id, _) = screenChoice() { pinned = id }
         // Hidden at home nobody sees him move, whatever else is going on.
-        let busy = !sim.isHiddenHome && (hopBusy() || centered || sim.act != nil || sim.isCarried)
+        // A peek or the «пф!» is seen: wait for it (only hidden at home he moves over unseen).
+        let busy = !sim.isHiddenHome && (hopBusy() || centered || sim.act != nil || sim.isCarried
+                                         || sim.standOut == .lurk || sim.pose.puffAge != nil)
         let step = hop.step(active: activeDisplay(now: now), connected: list.map(\.id), now: now, busy: busy,
-                            hidden: sim.hidden, pinned: pinned)
+                            hidden: sim.isHiddenHome, pinned: pinned)
         homeDisplay = list.first { $0.id == hop.home } ?? homeDisplay      // also picks up a new resolution
         switch step {
         case .stay:
@@ -481,6 +483,10 @@ final class EdgeController: NSObject {
         originX.value = p.x; originX.velocity = 0
         originY.value = p.y; originY.velocity = 0
         carryVelocity = 0
+        // Decision 21: over a gap in the layout he is gone for a moment — the screens' real edge.
+        let body = bodyOnScreen
+        let over = displays().contains { $0.frame.insetBy(dx: -1, dy: -1).contains(body) }
+        panel.alphaValue = over || t >= l.arc.total ? 1 : 0
         if t >= l.arc.total {
             leap = nil
             log("screen: landed")

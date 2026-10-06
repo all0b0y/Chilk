@@ -349,7 +349,6 @@ public final class CharacterSim {
     private var confettiAt: Double?
     private var confettiOrigin = CGPoint.zero
     private var strainShown = 0.0
-    private var strainBlinked = false
     private var lieLevel = 0.0
     private var nextSigh = 0.0
     // Slice 6c: petting.
@@ -585,13 +584,21 @@ public final class CharacterSim {
     /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
     public var passesClicks: Bool {
         if case .leap = act { return true }                              // 6e: clicks go through while he flies
-        return act == .hops
+        return act == .hops && !hopsTakeClicks
+    }
+
+    /// The hops are the intro of a stretch request (6a): a click on him shows the bubble at once, so he takes clicks.
+    public var hopsTakeClicks = false
+
+    /// A credited eye rest (6a, decision 4): a double blink, and the mirror fades as `eyeStrain` drops.
+    public func eyesRested() {
+        blinkStart = time
+        doubleBlink = true
     }
 
     /// Shows the eyes mirror at once (the popover hero is a fresh Чилк every time it opens).
     public func snapEyeStrain() {
         strainShown = eyeStrain
-        strainBlinked = true
     }
 
     /// The bubble shrinks away.
@@ -697,6 +704,7 @@ public final class CharacterSim {
 
     public func wear(_ p: Prop) {
         guard !props.contains(p) else { return }
+        if p == .hat { props.remove(.nightcap) }                     // 6f: never two hats; off to the walk
         props.insert(p)
         hop.impulse(-120)
         squash.impulse(3)
@@ -1120,14 +1128,8 @@ public final class CharacterSim {
         return [mix(stem, side, min(1, (k - 1.45) / 0.35))]
     }
 
-    /// The eyes mirror follows `eyeStrain` slowly up and quickly down; a rest (a big drop) blinks twice.
+    /// The eyes mirror follows `eyeStrain` slowly up and quickly down (the rest's double blink — `eyesRested`).
     private func stepStrain(dt: Double, t: Double) {
-        if eyeStrain + 0.25 < strainShown, !strainBlinked {
-            blinkStart = t
-            doubleBlink = true
-            strainBlinked = true
-        }
-        if strainShown <= eyeStrain + 0.05 { strainBlinked = false }
         strainShown = eyeStrain > strainShown
             ? min(eyeStrain, strainShown + Self.strainRise * dt)
             : max(eyeStrain, strainShown - Self.strainFall * dt)

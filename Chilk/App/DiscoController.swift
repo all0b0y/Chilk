@@ -40,14 +40,17 @@ final class DiscoController {
     private func tick() {
         if dancing {
             if !(sim.act?.isDance ?? false) { return finish("done") }
-            if busy() { sim.stopAct(); return finish("interrupted") }      // a request, a call: the dance stops
+            // A request, a call, or hidden meanwhile (decision 18: no disco behind the edge): the dance stops.
+            if busy() || sim.hidden { sim.stopAct(); return finish("interrupted") }
             return
         }
-        let music = musicPlaying() && !callOrVideo()
+        // Within the hour after a dance, or hidden, the sound is not even looked at.
+        let wall = Date().timeIntervalSince1970
+        let music = !sim.hidden && !disco.resting(now: wall) && musicPlaying() && !callOrVideo()
         // The roll is drawn into a local: reading `disco` inside its own mutating call is an exclusivity trap.
         let r = env["CHILK_DEMO_DISCO_ROLL"].flatMap(Double.init) ?? rng.next()
         var rolled = false
-        let go = disco.tick(seconds: 1, music: music, free: free, now: Date().timeIntervalSince1970) { rolled = true; return r }
+        let go = disco.tick(seconds: 1, music: music, free: free, now: wall) { rolled = true; return r }
         if rolled { log(String(format: "disco: %.0f s of music, roll %.2f vs %.2f", disco.musicFor, r, Disco.chance)) }
         if go { dance(why: "music") }
     }
@@ -55,6 +58,7 @@ final class DiscoController {
     /// The dance under the ball (also «Проверка ▸ Диско», past the music and the roll).
     func dance(why: String) {
         guard !dancing else { return }
+        guard !sim.hidden else { return log("disco: hidden, no dance") }
         let seconds = env["CHILK_DEMO_DANCE_SECONDS"].flatMap(Double.init)
             ?? rng.uniform(Disco.dance.lowerBound, Disco.dance.upperBound)
         dancing = true

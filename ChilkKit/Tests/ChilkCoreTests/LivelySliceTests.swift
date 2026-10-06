@@ -179,6 +179,7 @@ struct LivelyCharacterTests {
         #expect(sim.pose.eyeStrain == 1)
 
         sim.eyeStrain = 0
+        sim.eyesRested()                                               // the app: a credited eye rest (not a switch-off)
         var closings = 0, wasClosed = false
         run(sim, seconds: 1.2) {
             let closed = $0.pose.eyeOpen < 0.15

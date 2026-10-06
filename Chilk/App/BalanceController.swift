@@ -20,6 +20,13 @@ final class BalanceController {
     private var introShow: (() -> Void)?
     /// He cheers when the user is back from a walk that counted (decision 6).
     private var cheerOnReturn = false
+    /// Back from a credited walk while the stage was busy: «ликует» once free (≤ 5 min).
+    private var cheerMissedAt: Date?
+    private var resumeAfterEmote: Timer?
+    /// The need whose pantomime is the running intro (6a): another need's outcome does not cut it.
+    private var introNeed: Need?
+    private var eyesCreditSeen = false
+    private var lastEyesCredit: TimeInterval?
     /// What each button of the current bubble does.
     private var buttonActions: [() -> Void] = []
     private var lastPantomime = Date.distantPast
@@ -101,6 +108,17 @@ final class BalanceController {
 
     /// After a conversation: show the current prompt again (if any).
     func resume() {
+        if sim.isEmoting {                                     // 6c: a Codex emotion plays to its end, then the prompt
+            resumeAfterEmote?.invalidate()
+            resumeAfterEmote = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resume() }
+            }
+            return
+        }
+        if let at = cheerMissedAt {
+            cheerMissedAt = nil
+            if Date().timeIntervalSince(at) < 300, cheer() { return }
+        }
         if let (b, at) = pendingBreak {
             pendingBreak = nil
             if Date().timeIntervalSince(at) < 300 { return startBreak(b) }
@@ -212,6 +230,11 @@ final class BalanceController {
         syncEscalation()
         sim.fatigue = engine.leafFatigue
         sim.eyeStrain = engine.eyeStrain
+        // A credited eye rest blinks twice (6a, decision 4) — a switched-off need only fades the mirror.
+        let eyesCredit = engine.state.needs[.eyes]?.lastCredit
+        if eyesCreditSeen, let c = eyesCredit, c != lastEyesCredit { sim.eyesRested() }
+        lastEyesCredit = eyesCredit
+        eyesCreditSeen = true
         // He gets up to lead an exercise; otherwise he lies while every need is empty (6b).
         sim.slumped = engine.slumped && activity == nil && guidedRun == nil
         if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(), !engine.slumped,
@@ -248,7 +271,8 @@ final class BalanceController {
             if event == .focusEnded { focusEndedUnsaid = true }     // said after the conversation
             return
         }
-        if event != .nudge { cancelIntro() }
+        if introTimer != nil, event == .mood { return }               // no joke over the intro
+        if Self.endsIntro(event, need: introNeed) { cancelIntro() }
         switch event {
         case .hint(let n):
             guard !engine.slumped else { return }                   // lying, he does not pantomime
@@ -267,10 +291,13 @@ final class BalanceController {
                 hideBubble()
                 sim.standOut = .docked
                 if n == .walk { sim.wear(.hat) }
-                let length = pantomime(n)
-                log("intro \(n.rawValue) \(String(format: "%.1f", min(length, 4.2)))s")
+                // 3–4 s (decision 33): a short pantomime (the walk's wave) is held, a long one is cut at 4.2 s.
+                let length = max(3, min(pantomime(n), 4.2))
+                introNeed = n
+                if n == .stretch { sim.hopsTakeClicks = true }        // a click shows the bubble at once
+                log("intro \(n.rawValue) \(String(format: "%.1f", length))s")
                 introShow = { [weak self] in self?.showAsk(n, stage: stage, buttons: buttons, again: again) }
-                introTimer = Timer.scheduledTimer(withTimeInterval: min(length, 4.2), repeats: false) { [weak self] _ in
+                introTimer = Timer.scheduledTimer(withTimeInterval: length, repeats: false) { [weak self] _ in
                     MainActor.assumeIsolated { self?.finishIntro() }
                 }
                 return
@@ -287,7 +314,8 @@ final class BalanceController {
 
     /// The bubble of a request (stage ≥ 1).
     private func showAsk(_ n: Need, stage: Int, buttons: [Reaction], again: Bool) {
-            sim.standOut = stage >= 3 ? .center : (stage >= 2 ? .out : .peek)
+            // Lying (6b, decision 10) he stays at the edge under the dimming / pause of Strict.
+            sim.standOut = stage >= 3 ? (engine.slumped ? .docked : .center) : (stage >= 2 ? .out : .peek)
             if n == .walk { sim.wear(.hat) }
             if n == .endOfDay && stage >= 2 { sim.wear(.backpack) }
             switch stage {
@@ -389,6 +417,18 @@ final class BalanceController {
         introTimer?.invalidate()
         introTimer = nil
         introShow = nil
+        introNeed = nil
+        sim.hopsTakeClicks = false
+    }
+
+    /// Which events end a running intro: a new request, tact, this need's outcome — not another need's credit.
+    private static func endsIntro(_ e: BalanceEvent, need: Need?) -> Bool {
+        switch e {
+        case .nudge, .mood: return false
+        case .credited(let n, _, _), .snoozed(let n), .deferred(let n, _), .tooSoon(let n), .released(let n, _):
+            return need == nil || n == need
+        default: return true
+        }
     }
 
     private func applyOther(_ event: BalanceEvent) {
@@ -868,24 +908,25 @@ final class BalanceController {
 
     private func backFromAway() {
         if walking || engine.state.episode == nil {
-            if walking { cheerOnReturn = true }
-            walking = false
+            walking = false                                    // «ликует» only for a credited walk (`.credited`)
             tidyProps()
             sim.standOut = .docked
         }
         if cheerOnReturn {
             cheerOnReturn = false
-            cheer()
+            if !cheer() { cheerMissedAt = Date() }             // a greeting or a conversation first: `resume()` cheers
         }
     }
 
     /// «Ликует» (6a, decision 6): he steps out from behind the edge to jump, then goes back.
-    func cheer() {
-        guard activity == nil, !isBusy(), hideout?.isHidden != true else { return }   // 6d: hidden, no emotions
+    @discardableResult
+    func cheer() -> Bool {
+        guard activity == nil, !isBusy(), hideout?.isHidden != true else { return false }   // 6d: hidden, no emotions
         log("cheer")
         if engine.state.episode?.phase != .showing { sim.standOut = .peek }
         sim.perform(.cheer)
         settle(after: Act.cheer.duration + 0.4)
+        return true
     }
 
     // MARK: Emotions (slice 6c)

@@ -114,7 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.onChip = { [weak chat] thread, chip in chat?.chip(chip, thread: thread) }
         // Slice 6c: Codex's emotions play on the live Chilk at the edge — in a conversation (before the words) and
         // for a chat turn while he thinks there; otherwise `chilk_busy`.
-        actions.canEmote = { [weak conversation, weak chat] in (conversation?.canEmote ?? false) || (chat?.canEmote ?? false) }
+        // Lying (6b) he plays nothing: in Тишина he talks, but an emotion would fight the pose.
+        actions.canEmote = { [weak conversation, weak chat, weak balance] in
+            !(balance?.engine.slumped ?? false) && ((conversation?.canEmote ?? false) || (chat?.canEmote ?? false))
+        }
         actions.playEmote = { [weak balance] e, strong in balance?.emote(e, strong: strong, from: "Codex") }
         brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
         brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }

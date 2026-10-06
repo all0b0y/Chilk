@@ -111,9 +111,9 @@ final class ChatController: NSObject, NSWindowDelegate {
             // Lying, he does not talk (decision 8): the pair goes into the chat, nothing goes to Codex.
             model.draft = ""
             model.error = nil
-            let plan = store.log.plan(picked: model.selected, liveThread: brain.liveThread)
-            let id = store.record(question: text, answer: line, via: .text, chips: [],
-                                  thread: brain.liveThread ?? "slumped-\(UUID().uuidString)", continuing: plan.continuing)
+            // Into the chat the user picked (not the live thread's chat), with no thread mapped to it.
+            let id = store.recordLocal(question: text, answer: line, via: .text,
+                                       continuing: model.selected.flatMap { store.log.session($0)?.id })
             lastLiveChat = id
             model.selected = id
             log("chat: refused while lying (\(text.count) chars), no Codex turn")
@@ -136,12 +136,13 @@ final class ChatController: NSObject, NSWindowDelegate {
         posing = pose
         if pose { sim.perform(.think(seconds: 60)) }              // at the edge, no bubble (decision 13)
         log("chat: typed question (\(text.count) chars)\(fresh ? ", clean thread" : "")\(plan.continuing != nil ? ", continues a chat" : "")\(pose ? "" : ", Chilk busy at the edge")")
-        let question = ClockCheck.question(text, context: VoiceContext.chat(context())) + text
+        let question = ClockCheck.question(text, context: VoiceContext.chat(context()), channel: .chat) + text
         Task {
             defer {
                 thinking = false
                 posing = false
                 if pose, case .think = sim.act { sim.stopAct() }  // an emotion (6c) plays to its end
+                ClockCheck.turnEnded(.chat)
                 onTurnEnd()
             }
             do {
