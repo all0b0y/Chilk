@@ -169,6 +169,9 @@ func previews(into dir: URL) throws {
         ("65-nightcap-awake", sim({ $0.wear(.nightcap) }, seconds: 2, pointer: lookIn), false),
         ("66-hat-backpack-left", sim({ $0.wear(.hat); $0.wear(.backpack) }, seconds: 2, pointer: lookIn), true),
         ("67-nightcap-asleep-left", sim({ $0.putOnNightcap() }, seconds: 5), true),
+        ("68-shrug", sim({ $0.react(.shrug) }, seconds: 0.7, pointer: lookIn), false),
+        ("69-shrug-left", sim({ $0.react(.shrug) }, seconds: 0.7, pointer: lookIn), true),
+        ("70-game-think", sim({ $0.perform(.think(seconds: 1.2)) }, seconds: 0.6, pointer: lookIn), false),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),
         ("61-bubble-laugh", sim({ $0.say("Почему программисты путают Хэллоуин и Рождество? 31 OCT = 25 DEC", duration: 20)

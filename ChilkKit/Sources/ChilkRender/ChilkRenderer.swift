@@ -210,7 +210,7 @@ public enum ChilkRenderer {
             let r = 0.55 + 0.35 * abs(sin(p.time * 11))                // nom-nom
             mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: 0.8, y: r).translatedBy(x: 0, y: -1)
             mouthPart = .mouthO
-        } else if mood.focused || mood.deadpan {
+        } else if mood.focused || mood.deadpan || mood.shrugging {
             mouthPart = .mouthSmile(tired: 91, lw: lw)                  // a straight, busy line — not a smile
         } else if mood.annoyed || mood.sad || mood.slumped || mood.sulking {
             mouthPart = .mouthFrown(lw: lw)

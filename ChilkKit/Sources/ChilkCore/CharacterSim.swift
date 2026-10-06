@@ -28,6 +28,8 @@ public struct Mood: Sendable, Equatable {
     public var deadpan = false
     /// «Обиделся» after the «><»: turned away towards the edge, a frown.
     public var sulking = false
+    /// Slice 7a: «пожимает плечами» — a straight mouth.
+    public var shrugging = false
     /// Being petted: ^ ^, a brighter blush.
     public var petted = false
     /// One eye shut for a moment when the petting ends.
@@ -123,6 +125,9 @@ public enum Act: Sendable, Equatable {
     case clown
     /// «Обиделся»: «><», «хмф» — then turned away.
     case sulk
+    /// Slice 7a (decision 29, a draw in a game): «пожимает плечами» — arms out with the palms up, the shoulders up a
+    /// little, a straight mouth, eyes up and aside. Game-only: not in `Emotion`, Codex cannot ask for it.
+    case shrug
     /// «Голова кругом»: the dizzy face of three pokes.
     case spin
     /// «Грустит»: the sad face, the sprout droops.
@@ -147,6 +152,7 @@ public enum Act: Sendable, Equatable {
         case .laugh(let strong): strong ? 3.6 : 2.5
         case .clown: 3.5
         case .sulk: 2.2
+        case .shrug: 1.6
         case .spin: 2.6
         case .mope: 2.8
         case .leap(let s, _): s
@@ -157,7 +163,7 @@ public enum Act: Sendable, Equatable {
     /// An emotion (slice 6c): he comes out to show it; petting and antics wait.
     public var isEmotion: Bool {
         switch self {
-        case .cheer, .laugh, .clown, .sulk, .spin, .mope: true
+        case .cheer, .laugh, .clown, .sulk, .spin, .mope, .shrug: true
         default: false
         }
     }
@@ -476,6 +482,7 @@ public final class CharacterSim {
             if case .laugh = a { m.laughing = k < a.duration - 0.2 }
             m.deadpan = a == .clown && k >= 1.7 && k < 3.2
             m.sulking = a == .sulk && k >= 0.7
+            m.shrugging = a == .shrug && k < 1.4
         }
         if currentAntic == .catchSpeck, time < anticUntil {
             let k = time - anticStart
@@ -674,6 +681,15 @@ public final class CharacterSim {
         actBeats = 0
         currentAntic = nil
         if a.isEmotion { endPetting(wink: false) }
+    }
+
+    /// Slice 7a (decision 29): his reaction to a game — cheers when he wins, sulks when you win, shrugs at a draw.
+    public func react(_ r: GameReaction) {
+        switch r {
+        case .cheer: perform(.cheer)
+        case .offended: perform(.sulk)
+        case .shrug: perform(.shrug)
+        }
     }
 
     /// Slice 6c (decision 11): an emotion Codex asked for, played at once.
@@ -955,6 +971,9 @@ public final class CharacterSim {
         case .sulk:
             beat(0) { squash.impulse(5); leaf.impulse(-4) }                    // «хмф»
             if k >= 0.7 { lookX.target = 0.9; lookY.target = -0.15; tilt.target += 0.12 }
+        case .shrug:
+            beat(0.12) { squash.impulse(-4); leaf.impulse(4) }                 // the shoulders go up
+            if k < 1.4 { lookX.target = 0.45; lookY.target = -0.5; tilt.target += 0.05 }
         case .spin:
             beat(0) { squash.impulse(4); leaf.impulse(6) }
         case .mope:
@@ -1115,6 +1134,14 @@ public final class CharacterSim {
             let left = Int(k / Self.danceBeat) % 2 == 0
             let w = sin(k * 14) * 0.15
             return [left ? Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true) : Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]
+        }
+        if act == .shrug {
+            // 7a: both arms out, palms up — open within 0.2 s, held, lowered over the last 0.3 s.
+            let k = t - actStart
+            let u = Self.ease(min(1, k / 0.2)) * (1 - Self.ease(max(0, (k - 1.25) / 0.3)))
+            guard u > 0.15 else { return [] }
+            return [Hand(x: -0.84, y: 0.02 - 0.1 * u, angle: -0.35 - 0.7 * u, arm: true),
+                    Hand(x: 0.84, y: 0.02 - 0.1 * u, angle: 0.35 + 0.7 * u, arm: true)]            // ¯\_(ツ)_/¯
         }
         if act == .cheer, t - actStart < 1.7 {
             let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
@@ -1416,6 +1443,8 @@ public final class CharacterSim {
                 }
             case .sulk where k >= 0.7:
                 p.scaleX *= 1.04                                          // puffed up
+            case .shrug where k > 0.12 && k < 1.35:
+                p.scaleY *= 1.025                                         // shoulders up
             case .mope:
                 p.scaleY *= 0.96
                 p.scaleX *= 1.03
