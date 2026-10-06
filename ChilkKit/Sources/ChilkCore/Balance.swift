@@ -20,8 +20,10 @@ public enum Need: String, CaseIterable, Codable, CodingKeyRepresentable, Sendabl
     public var restsOnWord: Bool { self == .water || self == .eyes }
 }
 
+/// Work / leisure come automatically; call and «не трогать» only from the user's Settings (slice 5c).
+/// Call: Chilk keeps quiet and idle is not rest, like during a real call. Untouchable: quiet while it is in front.
 public enum AppCategory: String, Codable, Sendable {
-    case work, leisure
+    case work, leisure, call, untouchable
 }
 
 /// How far the ladder may climb (В16). Soft is the default; Strict is switched on by the user (2026-10-05).
@@ -157,6 +159,8 @@ public struct BalanceConfig: Sendable, Equatable {
     public var endOfDayQuiet: TimeInterval = 20 * 60
     /// Manual testing: 60 = one real second of sitting counts as a minute (rest is still measured in real time).
     public var timeScale = 1.0
+    /// Needs switched off in Settings (slice 5c): no pressure, no requests.
+    public var needsOff: Set<Need> = []
 
     public init() {}
 
@@ -191,6 +195,8 @@ public struct NeedTrack: Codable, Sendable, Equatable {
     public var pendingSince: TimeInterval?
     /// Engine clock of the last counted rest (water on the word: not again within `waterMinGap`).
     public var lastCredit: TimeInterval?
+    /// This request already counted as «дожимал» (slice 5c, decision 18); a counted rest or an exit resets it.
+    public var pushed = false
 
     public init(threshold: TimeInterval) { self.threshold = threshold }
 
@@ -206,6 +212,7 @@ public struct NeedTrack: Codable, Sendable, Equatable {
         quietUntil = try c.decodeIfPresent(TimeInterval.self, forKey: .quietUntil) ?? 0
         pendingSince = try c.decodeIfPresent(TimeInterval.self, forKey: .pendingSince)
         lastCredit = try c.decodeIfPresent(TimeInterval.self, forKey: .lastCredit)
+        pushed = try c.decodeIfPresent(Bool.self, forKey: .pushed) ?? false
     }
 
     private enum Legacy: String, CodingKey { case snoozesInRow }
@@ -228,9 +235,13 @@ public struct DayStats: Codable, Sendable, Equatable {
     public var firstActivity: Date?
     public var active: TimeInterval = 0
     public var credited: [Need: Int] = [:]
+    /// Requests that had to be pushed: reached stage 2+ or ended by an emergency exit (decision 18).
+    public var pushed: [Need: Int] = [:]
     public var snoozes = 0
     public var busy = 0
     public var exits: [EmergencyExit] = []
+    /// «Конец дня» switched back on mid-day counts its budget from here, not from the morning (slice 5c).
+    public var budgetFrom: TimeInterval = 0
 
     public init(key: String) { self.key = key }
 }
@@ -265,6 +276,10 @@ public struct BalanceState: Codable, Sendable, Equatable {
     public var releasedUntil: TimeInterval = 0
     /// Finished days, newest last (the weekly summary reads them).
     public var history: [DayStats] = []
+    /// Seconds at the Mac since the last rest of at least `stretchRest` (Today: «без перерыва»).
+    public var streak: TimeInterval = 0
+    /// Settings → «Забота» (slice 5c). Kept with the engine's state, like the mode, so «договор с собой» has one owner.
+    public var care = CareSettings()
 }
 
 // Files written by older builds lack newer fields: every field falls back to its default instead of the whole
@@ -288,6 +303,8 @@ extension BalanceState {
         exitsLeft = try field(.exitsLeft, 3)
         releasedUntil = try field(.releasedUntil, 0)
         history = try field(.history, [])
+        streak = try field(.streak, 0)
+        care = (try? c.decodeIfPresent(CareSettings.self, forKey: .care)) ?? CareSettings()   // a bad care keeps the rest
     }
 }
 
@@ -298,9 +315,11 @@ extension DayStats {
         firstActivity = try c.decodeIfPresent(Date.self, forKey: .firstActivity)
         active = try c.decodeIfPresent(TimeInterval.self, forKey: .active) ?? 0
         credited = try c.decodeIfPresent([Need: Int].self, forKey: .credited) ?? [:]
+        pushed = try c.decodeIfPresent([Need: Int].self, forKey: .pushed) ?? [:]
         snoozes = try c.decodeIfPresent(Int.self, forKey: .snoozes) ?? 0
         busy = try c.decodeIfPresent(Int.self, forKey: .busy) ?? 0
         exits = try c.decodeIfPresent([EmergencyExit].self, forKey: .exits) ?? []
+        budgetFrom = try c.decodeIfPresent(TimeInterval.self, forKey: .budgetFrom) ?? 0
     }
 }
 
@@ -338,7 +357,8 @@ public final class BalanceEngine {
 
     /// 0 = just rested, 1 = due.
     public func pressure(_ n: Need) -> Double {
-        if n == .endOfDay, let now = state.lastNow { return state.day.active / budget(for: now) }
+        if config.needsOff.contains(n) { return 0 }
+        if n == .endOfDay, let now = state.lastNow { return (state.day.active - state.day.budgetFrom) / budget(for: now) }
         guard let t = state.needs[n], t.threshold > 0 else { return 0 }
         return t.sitting / t.threshold
     }
@@ -347,6 +367,9 @@ public final class BalanceEngine {
     public var leafFatigue: Double {
         Need.body.map { min(1, max(0, (pressure($0) - 0.5) / 0.7)) }.max() ?? 0
     }
+
+    /// «Договор с собой» (decision 20): while a request is on stage 3–4 nothing may soften care.
+    public var settingsLocked: Bool { (state.episode?.stage ?? 0) >= 3 }
 
     /// Stage 4 is the pause: no buttons, only the emergency exit (the app draws it).
     public func buttons(for n: Need, stage: Int = 1) -> [Reaction] {
@@ -385,19 +408,22 @@ public final class BalanceEngine {
         // Under the pause a video in the background is not being watched: it must not block the rest.
         let paused = state.episode.map { $0.stage >= 4 && $0.phase == .showing } ?? false
         let video = s.video && !paused
+        // An app the user marked «Созвон» counts as a call (slice 5c).
+        let inCall = s.inCall || s.category == .call
         // Idle is never scaled: a typing pause must stay a pause even when minutes run in seconds.
         let idle = s.idle
-        let atMac = !s.locked && (idle < config.activeWithin || s.inCall || video)
+        let atMac = !s.locked && (idle < config.activeWithin || inCall || video)
         let sat = atMac && realDt <= 10 ? dt : 0          // a long gap is the Mac asleep, not sitting
         if sat > 0 {
-            for n in Need.body { state.needs[n]?.sitting += sat }
+            for n in Need.body where !config.needsOff.contains(n) { state.needs[n]?.sitting += sat }
             if state.day.firstActivity == nil { state.day.firstActivity = s.now }
             state.day.active += sat
+            state.streak += sat
         }
 
         // Rest (В10): away from the keyboard counts, unless a call or a video keeps the user busy.
         if realDt > 10 { creditRest(away: dt, into: &out) }
-        if !s.inCall && !video && (s.locked || idle >= config.activeWithin) {
+        if !inCall && !video && (s.locked || idle >= config.activeWithin) {
             creditRest(away: idle, into: &out)
         } else if atMac {
             state.restLevel = 0
@@ -406,12 +432,12 @@ public final class BalanceEngine {
         let appSwitched = state.lastFront != nil && s.frontApp != state.lastFront
         state.lastFront = s.frontApp
         let endOfDayDue = endOfDayIsDue(s.now)
-        let blocked = s.inCall || s.fullscreen || !atMac
+        let blocked = inCall || s.fullscreen || !atMac || s.category == .untouchable
 
         if var e = state.episode {
             // The pause stays up while the user is away (that is the rest); only a call takes it down.
             let off = e.stage >= 4
-                ? s.inCall
+                ? inCall
                 : blocked || (e.need == .endOfDay && (s.category == .leisure || !endOfDayDue))
             if off {
                 if e.phase == .showing {
@@ -433,7 +459,7 @@ public final class BalanceEngine {
                         e.workOnStage = 0
                         e.nextAfter = nextStageDelay()
                         out.append(stageEvent(e, again: true))
-                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0 }
+                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; markPushed(e.need) }
                     }
                 case .showing:
                     e.workOnStage += sat
@@ -443,7 +469,7 @@ public final class BalanceEngine {
                         e.workOnStage = 0
                         e.nextAfter = nextStageDelay()
                         out.append(stageEvent(e, again: false))
-                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0 }
+                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; markPushed(e.need) }
                     } else if e.stage >= 2, e.sinceBounce >= config.bounceEvery {
                         out.append(.nudge)
                         e.sinceBounce = 0
@@ -539,6 +565,7 @@ public final class BalanceEngine {
         guard guided != nil else { return [] }
         guided = nil
         state.restLevel = session.credits.contains(.walk) ? 2 : max(state.restLevel, 1)
+        state.streak = 0
         var out: [BalanceEvent] = []
         for n in session.credits { credit(n, byRest: true, into: &out) }
         return out
@@ -566,7 +593,7 @@ public final class BalanceEngine {
             e.nextAfter = nextStageDelay()
             state.episode = e
             var out = [stageEvent(e, again: true)]
-            if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; state.episode = e }
+            if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; state.episode = e; markPushed(e.need) }
             return out
         }
     }
@@ -588,6 +615,50 @@ public final class BalanceEngine {
         return e.phase == .showing ? [stageEvent(e, again: false)] : []
     }
 
+    // MARK: Settings (slice 5c, decisions 19–20)
+
+    /// Settings → «Забота». «Договор с собой» (decision 20) lives here, not in the UI: while a request is on stage 3–4
+    /// softer care is refused; tightening always goes through.
+    @discardableResult
+    public func setCare(_ new: CareSettings) throws(BalanceRefusal) -> [BalanceEvent] {
+        if settingsLocked && state.care.isSofter(new) { throw .softeningDuringEscalation }
+        state.care = new
+        return applyCare()
+    }
+
+    /// The engine's numbers follow `state.care` (the app calls this once at launch for the care saved with the state).
+    @discardableResult
+    public func applyCare() -> [BalanceEvent] {
+        var c = config
+        state.care.apply(to: &c)
+        return updateConfig(c)
+    }
+
+    /// Thresholds are clamped into the new ranges at once, so tightening acts immediately; a request of a need that is
+    /// off goes quietly; a need switched back on starts from scratch («Конец дня» — its budget counts from now).
+    @discardableResult
+    func updateConfig(_ c: BalanceConfig) -> [BalanceEvent] {
+        let wasOff = config.needsOff
+        config = c
+        var out: [BalanceEvent] = []
+        for n in Need.allCases where c.needsOff.contains(n) != wasOff.contains(n) {
+            state.needs[n] = NeedTrack(threshold: n == .endOfDay ? 0 : threshold(n))
+            if n == .endOfDay && !c.needsOff.contains(n) { state.day.budgetFrom = state.day.active }
+        }
+        if let e = state.episode, c.needsOff.contains(e.need) {
+            state.episode = nil
+            out.append(.withdraw)
+        }
+        for n in Need.body where !c.needsOff.contains(n) {
+            guard var t = state.needs[n] else { continue }
+            let r = c.minutes(n)
+            t.threshold = min(max(t.threshold, r.lowerBound * 60), r.upperBound * 60)
+            if t.sitting < t.threshold { t.pendingSince = nil }
+            state.needs[n] = t
+        }
+        return out
+    }
+
     /// Emergency exit (В13) on stages 3–4: a reason is required; 3 exits, refilled by a walk; with none left
     /// the app makes the user hold the button for `emergencyHold` seconds and passes `held`. Never impossible.
     public func emergencyExit(reason: String, minutes: Int, held: Bool = false, now: Date) throws -> [BalanceEvent] {
@@ -600,6 +671,8 @@ public final class BalanceEngine {
         if !spent { state.exitsLeft -= 1 }
         state.day.exits.append(EmergencyExit(at: now, need: e.need, minutes: minutes,
                                              reason: String(reason.prefix(200)), held: spent))
+        markPushed(e.need)                        // «снята экстренным выходом» (decision 18), once per request
+        state.needs[e.need]?.pushed = false       // the request is over; the next one counts again
         state.needs[e.need]?.debt = true
         state.needs[e.need]?.pendingSince = nil
         state.releasedUntil = state.clock + Double(minutes) * 60
@@ -679,10 +752,10 @@ public final class BalanceEngine {
 
     private func dueNeeds(category: AppCategory, endOfDayDue: Bool) -> [Need] {
         var due = Need.body.filter { n in
-            guard let t = state.needs[n] else { return false }
+            guard !config.needsOff.contains(n), let t = state.needs[n] else { return false }
             return t.sitting >= t.threshold && state.clock >= t.quietUntil
         }
-        if endOfDayDue, category == .work, state.clock >= (state.needs[.endOfDay]?.quietUntil ?? 0) {
+        if endOfDayDue, category == .work, !config.needsOff.contains(.endOfDay), state.clock >= (state.needs[.endOfDay]?.quietUntil ?? 0) {
             due.append(.endOfDay)
         }
         return due
@@ -696,10 +769,17 @@ public final class BalanceEngine {
         state.needs[n]?.pendingSince = nil
         state.starts.append(state.clock)
         out.append(stageEvent(e, again: false))
-        if stage >= 2 { out.append(.nudge) }
+        if stage >= 2 { out.append(.nudge); markPushed(n) }
+    }
+
+    private func markPushed(_ n: Need) {
+        guard state.needs[n]?.pushed == false else { return }
+        state.needs[n]?.pushed = true
+        state.day.pushed[n, default: 0] += 1
     }
 
     private func creditRest(away: TimeInterval, into out: inout [BalanceEvent]) {
+        if away >= config.stretchRest { state.streak = 0 }
         if away >= config.walkRest, state.restLevel < 2 {
             state.restLevel = 2
             for n in [Need.walk, .stretch, .eyes] { credit(n, byRest: true, into: &out) }
@@ -728,6 +808,7 @@ public final class BalanceEngine {
         t.resumeStage = 0
         t.lastCredit = state.clock
         t.pendingSince = nil
+        t.pushed = false
         if n == .endOfDay {
             // Finished for today: quiet for a while, then work apps meet him at «настаивает» right away.
             t.quietUntil = state.clock + config.endOfDayQuiet
@@ -746,19 +827,19 @@ public final class BalanceEngine {
 
     // MARK: Day
 
-    private func dayKey(_ date: Date) -> String {
-        let c = calendar.dateComponents([.year, .month, .day], from: date.addingTimeInterval(-Double(config.dayStartsAtHour) * 3600))
-        return String(format: "%04d-%02d-%02d", c.year ?? 0, c.month ?? 0, c.day ?? 0)
-    }
+    private func dayKey(_ date: Date) -> String { config.dayKey(date, calendar: calendar) }
 
     private func budget(for now: Date) -> TimeInterval {
-        let dayDate = now.addingTimeInterval(-Double(config.dayStartsAtHour) * 3600)
-        return calendar.isDateInWeekend(dayDate) ? config.weekendBudget : config.weekdayBudget
+        config.budget(forDay: now.addingTimeInterval(-Double(config.dayStartsAtHour) * 3600), calendar: calendar)
     }
+
+    /// «Сегодня» and «Неделя» of the main window (slice 5c), on the engine's own calendar.
+    public func today(now: Date) -> TodaySummary { Summaries.today(state, config: config, now: now, calendar: calendar) }
+    public func week(now: Date) -> WeekSummary { Summaries.week(state, config: config, now: now, calendar: calendar) }
 
     private func endOfDayIsDue(_ now: Date) -> Bool {
         if state.forceEndOfDay { return true }
-        if state.day.active >= budget(for: now) { return true }
+        if state.day.active - state.day.budgetFrom >= budget(for: now) { return true }
         // «или 00:00»: still at work after midnight (the day itself lasts until dayStartsAtHour).
         return calendar.component(.hour, from: now) < config.dayStartsAtHour && state.day.firstActivity != nil
     }

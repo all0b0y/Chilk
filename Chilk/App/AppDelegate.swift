@@ -21,7 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let profile = ProfileStore()
     private let chats = ChatStore()
     private let memory = MemoryStore()
+    private let settings = SettingsStore()
     private var chat: ChatController?
+    private var main: MainWindowController?
 
     static func main() {
         let app = NSApplication.shared
@@ -36,12 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
+        let settings = self.settings
         let edge = EdgeController()
+        edge.screenChoice = { settings.settings.screen }
         edge.show()
         self.edge = edge
         let presence = PresenceMonitor(sim: edge.sim)
         self.presence = presence
-        let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence)
+        let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence, settings: settings)
         self.balance = balance
         let actions = Actions(balance: balance, sim: edge.sim)
         self.actions = actions
@@ -87,8 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Slice 5b: the chat (voice and text in one log) and Chilk's memory.
-        let chat = ChatController(store: chats, memory: memory, brain: brain, conversation: conversation, ears: ears,
-                                  sim: edge.sim)
+        let chat = ChatController(store: chats, brain: brain, conversation: conversation, ears: ears, sim: edge.sim)
         chat.context = { [weak conversation] in conversation?.context() ?? "" }
         chat.log = { [weak balance] in balance?.log($0) }
         self.chat = chat
@@ -102,12 +105,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             chat?.recordVoice(question: question, answer: answer, thread: thread)
         }
 
+        let tools = ToolsBridge(switches: switches, ears: ears, files: actions.files)
+        tools.log = { [weak balance] in balance?.log($0) }
         let tray = Tray(edge: edge, balance: balance, brain: brain, ears: ears, actions: actions,
-                        conversation: conversation, switches: switches)
+                        conversation: conversation, tools: tools)
         tray.log = { [weak balance] in balance?.log($0) }
         tray.menu = { [weak self] in self?.trayMenu() ?? NSMenu() }
         tray.openChat = { [weak chat] in chat?.show() }
         self.tray = tray
+
+        // Slice 5c: the main window — Сегодня, Неделя, Память, Инструменты, Настройки.
+        let main = MainWindowController(balance: balance, settings: settings, profile: profile, chats: chats, memory: memory,
+                                        tools: tools, edge: edge)
+        main.log = { [weak balance] in balance?.log($0) }
+        main.setHotkey = { [weak self] spec in self?.registerHotkey(spec) ?? false }
+        main.pauseHotkey = { [weak self] paused in
+            guard let self else { return }
+            if paused { self.hotkey = nil } else if !self.registerHotkey(settings.settings.hotkey) { _ = self.registerHotkey(.standard) }
+        }
+        self.main = main
+        tray.openMain = { [weak main] in main?.show(.today) }
+        tray.openSettings = { [weak main] in main?.show(.settings) }
+        chat.model.openMemory = { [weak main] in main?.show(.memory) }
         let greeting = FirstMeeting(profile: profile, edge: edge, balance: balance)
         greeting.log = { [weak balance] in balance?.log($0) }
         greeting.onNamed = { [weak tray] in tray?.nudge() }
@@ -173,9 +192,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if greeting?.clicked() == true { return }
             balance?.poked()
         }
-        let key = Hotkey.defaultKey
-        hotkey = Hotkey(keyCode: key.code, modifiers: key.modifiers, id: 1) { [weak conversation] in conversation?.trigger() }
+        if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
+        // SPEC «Умолчания»: launch at login is on until the user switches it off (not in isolated acceptance runs).
+        // Saved only once it really worked: a failed registration is tried again at the next launch.
+        if settings.settings.launchAtLogin == nil, env["CHILK_STATE_DIR"] == nil {
+            if let failure = LoginItem.set(true) {
+                balance.log("launch at login not registered, will retry: \(failure)")
+            } else {
+                settings.update { $0.launchAtLogin = true }
+                balance.log("launch at login on by default")
+            }
+        }
         if env["CHILK_DEMO_TALK"] != nil {
             Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation] _ in
                 MainActor.assumeIsolated { conversation?.trigger() }
@@ -193,6 +221,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // Acceptance only: CHILK_DEMO_MAIN=<section> opens the main window after 3 s; CHILK_DEMO_SETTINGS="off:water,…"
+        // runs Settings steps through the same actions as clicks; CHILK_DEMO_MAIN_SNAPSHOT=/dir draws every section.
+        if let raw = env["CHILK_DEMO_MAIN"], let section = MainSection(rawValue: raw) {
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak main] _ in
+                MainActor.assumeIsolated {
+                    main?.show(section)
+                    let steps = (env["CHILK_DEMO_SETTINGS"] ?? "").components(separatedBy: ",")
+                    main?.runDemo(steps, snapshot: env["CHILK_DEMO_MAIN_SNAPSHOT"].map { URL(fileURLWithPath: $0) })
+                }
+            }
+        }
         if let raw = env["CHILK_DEMO_TOOL_OFF"] {
             for name in raw.split(separator: ",") { if let a = ChilkAbility(rawValue: String(name)) { switches.set(a, on: false) } }
         }
@@ -206,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         balance?.save()
+        settings.flush()
         actions?.shutdown()
         phrases?.shutdown()
         tray?.shutdown()
@@ -220,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// «Позвать Чилка», «Проверка ▸» for acceptance, «О Чилке», «Выйти». Everything else is in the popover.
     private func trayMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.defaultKey.label, #selector(callChilk)))
+        menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.label, #selector(callChilk)))
         menu.addItem(.separator())
 
         // Manual acceptance helpers.
@@ -243,11 +283,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Уснуть"), #selector(sleepNow)))
         sub.addItem(item(String(localized: "Проснуться: «с возвращением»"), #selector(wakeWelcome)))
         sub.addItem(item(String(localized: "Проснуться: «доброе утро»"), #selector(wakeMorning)))
-        sub.addItem(.separator())
-        // The edge side moves to Settings (5c); until then it is here and by dragging him.
-        sub.addItem(edge?.edge == .left
-            ? item(String(localized: "Переселить к правому краю"), #selector(moveRight))
-            : item(String(localized: "Переселить к левому краю"), #selector(moveLeft)))
         check.submenu = sub
         menu.addItem(check)
         menu.addItem(.separator())
@@ -263,8 +298,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)
     }
-    @objc private func moveLeft() { edge?.move(to: .left) }
-    @objc private func moveRight() { edge?.move(to: .right) }
     @objc private func makeDue(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let n = Need(rawValue: raw) { balance?.makeDue(n) }
     }
@@ -274,6 +307,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func sleepNow() { edge?.sim.fallAsleep() }
     @objc private func wakeWelcome() { presence?.wake(after: 30 * 60, hour: 15) }
     @objc private func wakeMorning() { presence?.wake(after: 8 * 3600, hour: 8) }
+
+    /// Registers the call hotkey (replacing the current one). `false` = the system refused it; nothing is registered.
+    @discardableResult
+    private func registerHotkey(_ spec: HotkeySpec) -> Bool {
+        hotkey = nil                                                  // unregisters the old one
+        hotkey = Hotkey(keyCode: spec.keyCode, modifiers: spec.modifiers, id: 1) { [weak self] in self?.conversation?.trigger() }
+        if hotkey != nil { Hotkey.label = spec.label }
+        return hotkey != nil
+    }
 
     private func item(_ title: String, _ action: Selector) -> NSMenuItem {
         let i = NSMenuItem(title: title, action: action, keyEquivalent: "")

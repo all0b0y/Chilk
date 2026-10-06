@@ -95,10 +95,16 @@ final class BalanceController {
     /// Minutes since the last real stretch break — the only activity fact sent to Codex (В24).
     var sittingMinutes: Int { Int((engine.state.needs[.stretch]?.sitting ?? 0) / 60) }
 
-    init(sim: CharacterSim, edge: EdgeController, presence: PresenceMonitor) {
+    /// Settings (slice 5c): app categories and the recent-apps list (care is the engine's, in `balance.json`).
+    private let settings: SettingsStore
+
+    init(sim: CharacterSim, edge: EdgeController, presence: PresenceMonitor, settings: SettingsStore) {
         var config = BalanceConfig()
         if let scale = ProcessInfo.processInfo.environment["CHILK_TIME_SCALE"].flatMap(Double.init) { config.timeScale = scale }
         engine = BalanceEngine(config: config, restoring: Self.load())
+        engine.applyCare()                                  // the care saved with the state (a request of a need now off goes)
+        self.settings = settings
+        monitor.rules = { [weak settings] in settings?.settings.apps ?? AppRules() }
         self.sim = sim
         self.edge = edge
         edge.onButton = { [weak self] i in self?.pressed(i) }
@@ -133,6 +139,9 @@ final class BalanceController {
 
     private func tick() {
         let s = monitor.snapshot()
+        if let front = s.frontApp, front != lastSignals?.frontApp, front != Bundle.main.bundleIdentifier {
+            settings.noteFront(front)
+        }
         lastSignals = s
         let events = engine.tick(s)
         if logURL != nil {
@@ -338,6 +347,42 @@ final class BalanceController {
         }
         if shown >= 4, let rest = engine.pauseRest {
             escalation.update(restLeft: max(0, rest - (lastSignals?.idle ?? 0)), exitsLeft: engine.state.exitsLeft)
+        }
+    }
+
+    // MARK: Settings (slice 5c, decisions 19–20)
+
+    /// «Договор с собой»: a request is on stage 3–4, so nothing may soften care.
+    var settingsLocked: Bool { engine.settingsLocked }
+
+    /// A click in Settings → «Забота». `false` = refused by the engine (it softens during stages 3–4).
+    @discardableResult
+    func changeCare(_ change: CareChange) -> Bool {
+        let events: [BalanceEvent]
+        do {
+            events = try engine.setCare(engine.state.care.applying(change))
+        } catch {
+            log("care \(change) refused")
+            return false
+        }
+        save()
+        log("care \(change)")
+        apply(events)
+        syncEscalation()
+        return true
+    }
+
+    /// Settings → apps: `nil` = automatic. `false` = refused (softer during stages 3–4).
+    @discardableResult
+    func setCategory(_ id: String, to category: AppCategory?) -> Bool {
+        let automatic = AppCatalog.automatic(bundleID: id)
+        do {
+            try settings.update { try $0.apps.set(id, to: category, automatic: automatic, locked: engine.settingsLocked) }
+            log("app category \(id) → \(category?.rawValue ?? "auto")")
+            return true
+        } catch {
+            log("app category \(id) → \(category?.rawValue ?? "auto") refused")
+            return false
         }
     }
 

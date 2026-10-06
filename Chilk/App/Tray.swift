@@ -12,7 +12,8 @@ import SwiftUI
 final class Tray: NSObject, NSPopoverDelegate {
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     private let popover = NSPopover()
-    private let model = TrayModel()
+    private let model: TrayModel
+    private let tools: ToolsBridge
     private let hero = HeroView()
     private var icons: [TrayIconState: NSImage] = [:]
     private var iconState: TrayIconState?
@@ -27,7 +28,6 @@ final class Tray: NSObject, NSPopoverDelegate {
     private let ears: Ears
     private let actions: Actions
     private let conversation: Conversation
-    private let switches: ToolSwitchStore
 
     /// He is on the hero card right now: the edge is empty and the director waits (decision 7).
     private(set) var holdsChilk = false
@@ -37,17 +37,21 @@ final class Tray: NSObject, NSPopoverDelegate {
     var menu: () -> NSMenu = { NSMenu() }
     /// «Чат» (slice 5b): opens the chat window.
     var openChat: () -> Void = {}
+    /// «Открыть Чилка» / «Настройки» (slice 5c): the main window on «Сегодня» / «Настройки».
+    var openMain: () -> Void = {}
+    var openSettings: () -> Void = {}
     var log: (String) -> Void = { _ in }
 
     init(edge: EdgeController, balance: BalanceController, brain: Brain, ears: Ears, actions: Actions,
-         conversation: Conversation, switches: ToolSwitchStore) {
+         conversation: Conversation, tools: ToolsBridge) {
         self.edge = edge
         self.balance = balance
         self.brain = brain
         self.ears = ears
         self.actions = actions
         self.conversation = conversation
-        self.switches = switches
+        self.tools = tools
+        model = TrayModel(tools: tools.model)
         super.init()
         if let button = item.button {
             button.target = self
@@ -230,7 +234,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         let engine = balance.engine
         model.now = Date()
         let card = HeroCard.make(pressure: { engine.pressure($0) }, exitsLeft: engine.state.exitsLeft,
-                                 exitsMax: engine.config.emergencyExits, mode: balance.mode)
+                                 exitsMax: engine.config.emergencyExits, mode: balance.mode, off: engine.config.needsOff)
         if card != model.card { model.card = card }
         let timers = (actions.executor?.entries ?? []).sorted { $0.deadline < $1.deadline }.prefix(3)
             .map { TrayModel.TimerRow(id: $0.id, title: $0.title, deadline: $0.deadline) }
@@ -242,13 +246,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         case .ready, .connecting: ears.broken ? .earsBroken(ears.status) : nil
         }
         if problem != model.problem { model.problem = problem }
-        if model.switches != switches.switches { model.switches = switches.switches }
-        if model.earsOn != ears.enabled { model.earsOn = ears.enabled }
-        let files = actions.files
-        let folders = files.grants.map { TrayModel.FolderRow(name: $0.name, place: files.place(of: $0), kind: $0.kind) }
-        if folders != model.folders { model.folders = folders }
-        if model.canChangeFolders != files.canChange { model.canChangeFolders = files.canChange }
-        if model.foldersNote != files.busyNote { model.foldersNote = files.busyNote }
+        tools.refresh()
     }
 
     private func wire() {
@@ -263,21 +261,11 @@ final class Tray: NSObject, NSPopoverDelegate {
             self.log("tray mode \(m.rawValue) \(ok ? "set" : "refused")")
             return ok
         }
-        model.toggle = { [weak self] a, on in
-            guard let self else { return }
-            self.switches.set(a, on: on)
-            self.model.switches = self.switches.switches
-            self.log("tool \(a.rawValue) \(on ? "on" : "off")")
-        }
-        model.toggleEars = { [weak self] on in
-            guard let self, self.ears.enabled != on else { return }
-            self.ears.toggle()
-            self.model.earsOn = self.ears.enabled
-        }
-        model.addFolder = { [weak self] kind in self?.closing { self?.actions.files.choose(kind) } }
-        model.removeFolder = { [weak self] name in self?.actions.files.forget(name: name) }
+        model.addFolder = { [weak self] kind in self?.closing { self?.tools.addFolder(kind) } }
         model.login = { [weak self] in self?.closing { self?.brain.login() } }
         model.openChat = { [weak self] in self?.closing { self?.openChat() } }
+        model.openMain = { [weak self] in self?.closing { self?.openMain() } }
+        model.openSettings = { [weak self] in self?.closing { self?.openSettings() } }
         model.reconnect = { [weak self] in
             guard let brain = self?.brain else { return }
             Task { await brain.connect() }

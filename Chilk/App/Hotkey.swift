@@ -8,8 +8,8 @@ final class Hotkey {
     nonisolated(unsafe) private static var handlerInstalled = false
     nonisolated(unsafe) private var ref: EventHotKeyRef?
 
-    /// Default: ⌃⌥Space.
-    static let defaultKey = (code: UInt32(kVK_Space), modifiers: UInt32(controlKey | optionKey), label: "⌃⌥Space")
+    /// The call hotkey as shown to the user (menu, the «Слух сломался» bubble); Settings can change it (slice 5c).
+    static var label = "⌃⌥Space"
 
     init?(keyCode: UInt32, modifiers: UInt32, id: UInt32, action: @escaping () -> Void) {
         Self.installHandler()

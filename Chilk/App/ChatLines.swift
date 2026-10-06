@@ -27,7 +27,6 @@ extension Lines {
     static let memorySave = String(localized: "Сохранить")
     static let memoryEdit = String(localized: "Изменить")
     static let memoryForget = String(localized: "Забыть")
-    static let memoryDone = String(localized: "Готово")
     static let memorySelfNoted = String(localized: "сам запомнил")
 
     /// Why a fact was not kept (`nil` = kept).

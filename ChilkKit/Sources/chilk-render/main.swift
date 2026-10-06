@@ -161,6 +161,24 @@ let target = URL(fileURLWithPath: args[2])
 switch args[1] {
 case "icon": try icon(into: target)
 case "previews": try previews(into: target)
+case "portrait":
+    // The main window's still portrait for the three sprout states (fresh / drooping / wilted), on light and dark.
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+    for (name, fatigue) in [("fresh", 0.0), ("drooping", 0.55), ("wilted", 1.0)] {
+        guard let image = Portrait.image(fatigue: fatigue, side: 160) else { continue }
+        for (bg, gray) in [("light", 0.96), ("dark", 0.16)] {
+            let out = render(CGSize(width: 160, height: 160), scale: 2) { ctx in
+                ctx.setFillColor(CGColor(gray: gray, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: 160, height: 160))
+                ctx.saveGState()
+                ctx.translateBy(x: 0, y: 160)
+                ctx.scaleBy(x: 1, y: -1)
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: 160, height: 160))
+                ctx.restoreGState()
+            }
+            writePNG(out, to: target.appendingPathComponent("portrait-\(name)-\(bg).png"))
+        }
+    }
 case "tray":
     // Tray icon states at 4× on white and black (how the template looks on a light and a dark menu bar).
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)

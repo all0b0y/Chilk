@@ -17,13 +17,6 @@ final class TrayModel {
         let title: String
         let deadline: Date
     }
-    /// A shared folder (read-only, any number of them — branch `breaks-readonly-files`).
-    struct FolderRow: Identifiable, Equatable {
-        var id: String { name }
-        let name: String
-        let place: String
-        let kind: ChilkFileScope
-    }
 
     var page = Page.main
     var card = HeroCard.make(pressure: { _ in 0 }, exitsLeft: 3, exitsMax: 3, mode: .soft)
@@ -33,13 +26,11 @@ final class TrayModel {
     var problem: Problem?
     /// The last refusal of a softer mode («договор с собой»), shown under the card for a few seconds.
     var refusal: String?
-    var switches = ToolSwitches()
-    var earsOn = false
-    var folders: [FolderRow] = []
-    var canChangeFolders = false
-    /// «Изменяю доступ…» / «Загружаю доступ…» while folders cannot be changed.
-    var foldersNote: String?
+    /// The Tools page (shared with the main window's «Инструменты»).
+    let tools: ToolsModel
     var now = Date()
+
+    init(tools: ToolsModel) { self.tools = tools }
 
     // Actions, wired by the tray.
     var breathe: (Double) -> Void = { _ in }
@@ -48,12 +39,12 @@ final class TrayModel {
     var warmup: () -> Void = {}
     var walk: () -> Void = {}
     var setMode: (BalanceMode) -> Bool = { _ in false }
-    var toggle: (ChilkAbility, Bool) -> Void = { _, _ in }
-    var toggleEars: (Bool) -> Void = { _ in }
     var addFolder: (ChilkFileScope) -> Void = { _ in }
-    var removeFolder: (String) -> Void = { _ in }
     var login: () -> Void = {}
     var openChat: () -> Void = {}
+    /// «Открыть Чилка» → the main window on «Сегодня»; «Настройки» → on «Настройки» (slice 5c).
+    var openMain: () -> Void = {}
+    var openSettings: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
 
@@ -148,25 +139,7 @@ struct TrayView: View {
     }
 
     private func statBar(_ stat: HeroStat) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(Lines.statNames[stat.need] ?? "").font(.caption2).foregroundStyle(.secondary)
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(.quaternary)
-                    Capsule().fill(color(stat.tone)).frame(width: max(4, g.size.width * stat.fill))
-                }
-            }
-            .frame(height: 6)
-        }
-    }
-
-    /// Leaf green, wilting to yellow and brown as the pressure grows.
-    private func color(_ tone: HeroStat.Tone) -> Color {
-        switch tone {
-        case .fresh: Color(red: 0x8F / 255.0, green: 0xD8 / 255.0, blue: 0x6A / 255.0)
-        case .tired: Color(red: 0.93, green: 0.78, blue: 0.29)
-        case .wilted: Color(red: 0.62, green: 0.42, blue: 0.24)
-        }
+        StatBar(stat: stat, height: 6, font: .caption2)
     }
 
     private var breaks: some View {
@@ -233,23 +206,13 @@ struct TrayView: View {
             Spacer(minLength: 4)
             Button { model.page = .tools } label: { Label(String(localized: "Инструменты"), systemImage: "switch.2") }
             Spacer(minLength: 4)
-            soon(String(localized: "Настройки"), "gearshape")
+            Button { model.openSettings() } label: { Label(String(localized: "Настройки"), systemImage: "gearshape") }
             Spacer(minLength: 4)
-            soon(String(localized: "Открыть Чилка"), "macwindow")
+            Button { model.openMain() } label: { Label(String(localized: "Открыть Чилка"), systemImage: "macwindow") }
         }
         .labelStyle(VerticalLabel())
         .buttonStyle(.borderless)
         .padding(.horizontal, 6)
-    }
-
-    /// Until 5b/5c land: visible, disabled, «скоро» (so the agreed layout is there in acceptance).
-    private func soon(_ title: String, _ image: String) -> some View {
-        Button {} label: { Label(title, systemImage: image) }
-            .disabled(true)
-            .help(Lines.soon)
-            .overlay(alignment: .topTrailing) {
-                Text(Lines.soon).font(.system(size: 8, weight: .semibold)).foregroundStyle(.secondary).offset(x: 4, y: -6)
-            }
     }
 
     // MARK: Tools page (decision 9)
@@ -263,60 +226,8 @@ struct TrayView: View {
                 Text(String(localized: "Инструменты")).font(.headline)
                 Spacer()
             }
-            switchRow(String(localized: "Уши: слышит «Чилк»"), isOn: Binding(get: { model.earsOn }, set: { model.toggleEars($0) }))
-            ForEach([ChilkAbility.webSearch, .timers, .reminders], id: \.self) { a in abilityToggle(a) }
-            abilityToggle(.files)
-            abilityToggle(.obsidian)
-            abilityToggle(.phrases)
-            folderList
-            Text(String(localized: "Выключенное действует со следующего ответа. Папки на паузе не забываются."))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            ToolsPane(model: model.tools, addFolder: model.addFolder)
         }
-    }
-
-    private func abilityToggle(_ a: ChilkAbility) -> some View {
-        switchRow(Lines.abilityName(a), isOn: Binding(get: { model.switches.isOn(a) }, set: { model.toggle(a, $0) }))
-    }
-
-    /// Name on the left, the switch on the right edge — every switch in one column.
-    private func switchRow(_ title: String, isOn: Binding<Bool>) -> some View {
-        HStack {
-            Text(title)
-            Spacer(minLength: 8)
-            Toggle(title, isOn: isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
-        }
-    }
-
-    /// Shared folders, read-only: a folder of a switched-off kind is paused (dimmed), «Убрать» forgets it.
-    private var folderList: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(String(localized: "Папки — только чтение")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-            if model.folders.isEmpty {
-                Text(String(localized: "Пока пусто. Чилк может и сам спросить: «Можно я загляну?»"))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(model.folders) { f in
-                let paused = !model.switches.isOn(f.kind.ability)
-                HStack(spacing: 6) {
-                    Image(systemName: f.kind == .obsidian ? "book.closed" : "folder").foregroundStyle(.secondary)
-                    Text(f.place).lineLimit(1).truncationMode(.middle)
-                    if paused { Text(String(localized: "на паузе")).foregroundStyle(.secondary) }
-                    Spacer()
-                    Button(String(localized: "Убрать")) { model.removeFolder(f.name) }.disabled(!model.canChangeFolders)
-                }
-                .opacity(paused ? 0.5 : 1)
-            }
-            HStack(spacing: 8) {
-                Button(String(localized: "Добавить папку…")) { model.addFolder(.files) }
-                Button(String(localized: "Добавить Obsidian…")) { model.addFolder(.obsidian) }
-            }
-            .disabled(!model.canChangeFolders)
-            if let note = model.foldersNote { Text(note).font(.caption).foregroundStyle(.secondary) }
-        }
-        .font(.caption)
-        .controlSize(.small)
     }
 }
 
@@ -327,5 +238,39 @@ private struct VerticalLabel: LabelStyle {
             configuration.title.font(.caption2)
         }
         .frame(minWidth: 44)
+    }
+}
+
+/// One need as a stat bar: leaf green, wilting to yellow and brown as the pressure grows; «выкл» when switched off.
+struct StatBar: View {
+    let stat: HeroStat
+    var height: CGFloat = 6
+    var font: Font = .caption2
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text(Lines.statNames[stat.need] ?? "")
+                if stat.off { Text(Lines.statOff) }
+            }
+            .font(font).foregroundStyle(.secondary)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    if !stat.off {
+                        Capsule().fill(Self.color(stat.tone)).frame(width: max(height * 0.66, g.size.width * stat.fill))
+                    }
+                }
+            }
+            .frame(height: height)
+        }
+    }
+
+    static func color(_ tone: HeroStat.Tone) -> Color {
+        switch tone {
+        case .fresh: Color(red: 0x8F / 255.0, green: 0xD8 / 255.0, blue: 0x6A / 255.0)
+        case .tired: Color(red: 0.93, green: 0.78, blue: 0.29)
+        case .wilted: Color(red: 0.62, green: 0.42, blue: 0.24)
+        }
     }
 }

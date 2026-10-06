@@ -14,6 +14,8 @@ final class SignalMonitor {
     /// back at the keyboard (idle = CHILK_FAKE_IDLE or 0.5 s). Lets the timer-bubble rule run without a person.
     private let fakeAwayUntil = ProcessInfo.processInfo.environment["CHILK_FAKE_AWAY_UNTIL"].flatMap(Double.init)
     private let launched = ProcessInfo.processInfo.systemUptime
+    /// Settings → apps (slice 5c): the user's categories on top of the automatic work / leisure.
+    var rules: () -> AppRules = { AppRules() }
 
     func snapshot() -> Signals {
         // CHILK_FAKE_IDLE=3 pretends the user is typing (demo / acceptance runs without a person at the Mac).
@@ -31,7 +33,7 @@ final class SignalMonitor {
             idle: idle,
             locked: locked || CGDisplayIsAsleep(CGMainDisplayID()) != 0,
             frontApp: front?.bundleIdentifier,
-            category: AppCatalog.category(of: front),
+            category: rules().category(of: front?.bundleIdentifier, automatic: AppCatalog.category(of: front)),
             fullscreen: isFullscreen(front),
             inCall: assertions.call || microphoneInUseByOthers() || cameraInUse(),
             video: assertions.video
@@ -127,19 +129,25 @@ enum AppCatalog {
     ]
     @MainActor private static var cache: [String: AppCategory] = [:]
 
+    /// The automatic category, also of an app that is not running (Settings → apps).
     @MainActor
-    static func category(of app: NSRunningApplication?) -> AppCategory {
-        guard let app, let id = app.bundleIdentifier else { return .work }
+    static func automatic(bundleID id: String, url known: URL? = nil) -> AppCategory {
         if let hit = cache[id] { return hit }
         var result = AppCategory.work
         if leisureApps.contains(id) {
             result = .leisure
-        } else if let url = app.bundleURL, let info = Bundle(url: url)?.infoDictionary,
-                  let type = info["LSApplicationCategoryType"] as? String,
+        } else if let url = known ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
+                  let type = Bundle(url: url)?.infoDictionary?["LSApplicationCategoryType"] as? String,
                   leisureCategories.contains(type) || type.hasSuffix("-games") {
             result = .leisure
         }
         cache[id] = result
         return result
+    }
+
+    @MainActor
+    static func category(of app: NSRunningApplication?) -> AppCategory {
+        guard let app, let id = app.bundleIdentifier else { return .work }
+        return automatic(bundleID: id, url: app.bundleURL)
     }
 }

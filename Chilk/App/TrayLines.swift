@@ -26,7 +26,7 @@ extension Lines {
         .walk: String(localized: "Прогулка"), .endOfDay: String(localized: "Запас дня"),
     ]
 
-    static let soon = String(localized: "скоро")
+    static let statOff = String(localized: "выкл")
     static let softerRefused = String(localized: "Сейчас нельзя — сначала отдохни или экстренный выход")
 
     static func abilityName(_ a: ChilkAbility) -> String {

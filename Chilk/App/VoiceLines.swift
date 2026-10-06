@@ -11,7 +11,7 @@ extension Lines {
     static let noMicrophone = String(localized: "Мне нужен микрофон: Настройки → Конфиденциальность → Микрофон → Чилк")
     static let earsFailed = String(localized: "Уши барахлят 😕 Не получилось включить распознавание речи")
     @MainActor static var earsBroken: String {
-        String(localized: "Слух сломался 😕 Нажми \(Hotkey.defaultKey.label) или включи уши заново в трее")
+        String(localized: "Слух сломался 😕 Нажми \(Hotkey.label) или включи уши заново в трее")
     }
     static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Нажми на меня в трее наверху → «Войти в Codex»")
     static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕")

@@ -34,6 +34,8 @@ public struct HeroStat: Equatable, Sendable {
     /// 1 = just rested, 0 = due (or the day's budget is spent).
     public var fill: Double
     public var tone: Tone
+    /// Switched off in Settings (slice 5c): shown as «выкл».
+    public var off = false
 }
 
 /// The RPG hero card in the popover: stats = needs, potions = emergency exits, difficulty = mode. No levelling.
@@ -46,11 +48,12 @@ public struct HeroCard: Equatable, Sendable {
     public var potionsMax: Int
     public var mode: BalanceMode
 
-    public static func make(pressure: (Need) -> Double, exitsLeft: Int, exitsMax: Int, mode: BalanceMode) -> HeroCard {
+    public static func make(pressure: (Need) -> Double, exitsLeft: Int, exitsMax: Int, mode: BalanceMode,
+                            off: Set<Need> = []) -> HeroCard {
         let stats = order.map { n -> HeroStat in
             let fill = min(1, max(0, 1 - pressure(n)))
             let tone: HeroStat.Tone = fill >= 0.5 ? .fresh : (fill > 0 ? .tired : .wilted)
-            return HeroStat(need: n, fill: fill, tone: tone)
+            return HeroStat(need: n, fill: fill, tone: tone, off: off.contains(n))
         }
         return HeroCard(stats: stats, potions: max(0, min(exitsLeft, exitsMax)), potionsMax: exitsMax, mode: mode)
     }

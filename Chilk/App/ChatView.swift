@@ -15,17 +15,13 @@ final class ChatModel {
     var error: String?
     var listening = false
     var voiceBusy = false
-    var facts: [MemoryFact] = []
-    var showMemory = false
 
     var send: () -> Void = {}
     var typed: () -> Void = {}
     var toggleMic: () -> Void = {}
     var delete: (UUID) -> Void = { _ in }
-    /// Returns why it was not kept (`nil` = kept).
-    var remember: (String) -> String? = { _ in nil }
-    var edit: (UUID, String) -> String? = { _, _ in nil }
-    var forget: (UUID) -> Void = { _ in }
+    /// «Память» lives in the main window (slice 5c).
+    var openMemory: () -> Void = {}
 
     var current: ChatSession? { selected.flatMap { id in sessions.first { $0.id == id } } }
 }
@@ -61,7 +57,7 @@ struct ChatView: View {
             }
             .toolbar {
                 ToolbarItem {
-                    Button { model.showMemory = true } label: { Label(Lines.memoryTitle, systemImage: "brain") }
+                    Button { model.openMemory() } label: { Label(Lines.memoryTitle, systemImage: "brain") }
                         .help(Lines.memoryHelp)
                 }
                 if let id = model.selected {
@@ -72,7 +68,6 @@ struct ChatView: View {
             }
         }
         .tint(TrayView.peach)
-        .sheet(isPresented: $model.showMemory) { MemoryView(model: model) }
         .confirmationDialog(Lines.chatDeleteQuestion, isPresented: Binding(get: { confirmDelete != nil },
                                                                            set: { if !$0 { confirmDelete = nil } })) {
             Button(Lines.chatDelete, role: .destructive) {
@@ -204,70 +199,5 @@ private struct Avatar: View {
 
     var body: some View {
         Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: size, height: size)
-    }
-}
-
-/// Decision 17: what Chilk remembers — edit, remove, add. In 5c it moves to the main window's «Память».
-struct MemoryView: View {
-    @Bindable var model: ChatModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var newFact = ""
-    @State private var note: String?
-    @State private var editing: UUID?
-    @State private var editText = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(Lines.memoryTitle).font(.headline)
-                Text(verbatim: "\(model.facts.count)/\(MemoryBook.limit)").foregroundStyle(.secondary)
-                Spacer()
-                Button(Lines.memoryDone) { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-            Text(Lines.memoryHelp).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            List {
-                if model.facts.isEmpty { Text(Lines.memoryEmpty).foregroundStyle(.secondary) }
-                ForEach(model.facts) { fact in
-                    HStack(spacing: 8) {
-                        if editing == fact.id {
-                            TextField(Lines.memoryEdit, text: $editText).onSubmit { commitEdit(fact.id) }
-                            Button(Lines.memorySave) { commitEdit(fact.id) }
-                        } else {
-                            Text(fact.text)
-                            if fact.selfNoted {
-                                Text(Lines.memorySelfNoted).font(.caption2).foregroundStyle(.secondary)
-                                    .padding(.horizontal, 5).padding(.vertical, 1)
-                                    .background(Capsule().fill(.quaternary))
-                            }
-                            Spacer()
-                            Button { editing = fact.id; editText = fact.text } label: { Image(systemName: "pencil") }
-                                .buttonStyle(.borderless).help(Lines.memoryEdit)
-                            Button { model.forget(fact.id) } label: { Image(systemName: "trash") }
-                                .buttonStyle(.borderless).help(Lines.memoryForget)
-                        }
-                    }
-                }
-            }
-            .frame(minHeight: 220)
-            HStack {
-                TextField(Lines.memoryNew, text: $newFact).onSubmit(add)
-                Button(Lines.memoryAdd, action: add)
-                    .disabled(newFact.trimmingCharacters(in: .whitespaces).isEmpty || model.facts.count >= MemoryBook.limit)
-            }
-            if let note { Text(note).font(.caption).foregroundStyle(.orange) }
-        }
-        .padding(16)
-        .frame(width: 460, height: 420)
-        .tint(TrayView.peach)
-    }
-
-    private func add() {
-        note = model.remember(newFact)
-        if note == nil { newFact = "" }
-    }
-
-    private func commitEdit(_ id: UUID) {
-        note = model.edit(id, editText)
-        if note == nil { editing = nil }
     }
 }

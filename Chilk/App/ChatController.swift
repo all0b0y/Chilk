@@ -9,7 +9,6 @@ import SwiftUI
 @MainActor
 final class ChatController: NSObject, NSWindowDelegate {
     private let store: ChatStore
-    private let memory: MemoryStore
     private let brain: Brain
     private let conversation: Conversation
     private let ears: Ears
@@ -41,16 +40,14 @@ final class ChatController: NSObject, NSWindowDelegate {
     /// A typed question is being answered: the balance waits, like for a conversation.
     private(set) var thinking = false
 
-    init(store: ChatStore, memory: MemoryStore, brain: Brain, conversation: Conversation, ears: Ears, sim: CharacterSim) {
+    init(store: ChatStore, brain: Brain, conversation: Conversation, ears: Ears, sim: CharacterSim) {
         self.store = store
-        self.memory = memory
         self.brain = brain
         self.conversation = conversation
         self.ears = ears
         self.sim = sim
         super.init()
         store.onChange.append { [weak self] in self?.refresh() }
-        memory.onChange.append { [weak self] in self?.refresh() }
         wire()
         refresh()
     }
@@ -253,7 +250,6 @@ final class ChatController: NSObject, NSWindowDelegate {
         stopMic(send: false)
         openTimer?.invalidate()
         openTimer = nil
-        model.showMemory = false
         if counted {
             counted = false
             WindowPolicy.closed()
@@ -284,25 +280,10 @@ final class ChatController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Acceptance: the window's own drawing to a PNG (no Screen Recording needed): the layer tree rendered in software.
+    /// Acceptance: the window as composited on screen, to a PNG (own window: no Screen Recording needed).
     func snapshot(to url: URL) {
-        guard let view = window?.contentView, let layer = view.layer else { return }
-        let scale = window?.backingScaleFactor ?? 2
-        let size = view.bounds.size
-        guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
-                                  bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-        ctx.setFillColor(NSColor.windowBackgroundColor.cgColor)
-        ctx.fill(CGRect(x: 0, y: 0, width: size.width * scale, height: size.height * scale))
-        ctx.scaleBy(x: scale, y: scale)
-        if view.isFlipped {
-            ctx.translateBy(x: 0, y: size.height)
-            ctx.scaleBy(x: 1, y: -1)
-        }
-        layer.render(in: ctx)
-        guard let image = ctx.makeImage() else { return }
-        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
-        log("chat snapshot \(url.lastPathComponent)")
+        guard let window else { return }
+        log("chat snapshot \(url.lastPathComponent)\(WindowSnapshot.write(window, to: url) ? "" : " failed")")
     }
 
     // MARK: Model
@@ -311,8 +292,6 @@ final class ChatController: NSObject, NSWindowDelegate {
         let sessions = store.log.sessions
         if sessions != model.sessions { model.sessions = sessions }
         if let s = model.selected, !sessions.contains(where: { $0.id == s }) { model.selected = nil }
-        let facts = memory.book.facts
-        if facts != model.facts { model.facts = facts }
         model.voiceBusy = conversation.voiceBusy
     }
 
@@ -336,15 +315,6 @@ final class ChatController: NSObject, NSWindowDelegate {
             self.log("chat deleted")
         }
         model.typed = { [weak self] in self?.typed() }
-        model.remember = { [weak self] text in
-            guard let self else { return nil }
-            return Lines.memoryOutcome(self.memory.remember(text, selfNoted: false))
-        }
-        model.edit = { [weak self] id, text in
-            guard let self else { return nil }
-            return Lines.memoryOutcome(self.memory.edit(id, to: text))
-        }
-        model.forget = { [weak self] id in self?.memory.forget(id) }
     }
 }
 

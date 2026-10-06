@@ -61,6 +61,8 @@ final class EdgeController: NSObject {
     }
 
     var edge: Edge { placement.edge }
+    /// Settings → screen (slice 5c): follow the active screen or stay on a pinned one.
+    var screenChoice: () -> ScreenChoice = { .follow }
     /// His window on screen (the long-answer panel opens beside it).
     var windowFrame: NSRect { panel.frame }
 
@@ -246,7 +248,7 @@ final class EdgeController: NSObject {
             sim.isCarried = true
         }
         if d.moved {
-            let screen = (NSScreen.main ?? NSScreen.screens[0]).frame
+            let screen = home.frame
             var origin = CGPoint(x: m.x - d.grabOffset.x, y: m.y - d.grabOffset.y)
             origin.x = min(max(origin.x, screen.minX - metrics.sceneSize.width / 2), screen.maxX - metrics.sceneSize.width / 2)
             origin.y = min(max(origin.y, screen.minY), screen.maxY - metrics.sceneSize.height)
@@ -346,12 +348,35 @@ final class EdgeController: NSObject {
 
     // MARK: Geometry
 
-    private var visibleFrame: CGRect { (NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
+    private var visibleFrame: CGRect { home.visibleFrame }
+
+    /// The screen he lives on: the active one, or the pinned one while it is connected (Settings, slice 5c).
+    var home: NSScreen {
+        let choice = screenChoice()
+        guard case .pinned = choice else { return NSScreen.main ?? NSScreen.screens[0] }   // per frame: keep it cheap
+        let screens = NSScreen.screens
+        let active = NSScreen.main ?? screens[0]
+        let ids = screens.map { Self.uuid(of: $0) ?? "" }
+        return screens[choice.pick(ids: ids, active: screens.firstIndex(of: active) ?? 0)]
+    }
+
+    private static var uuids: [CGDirectDisplayID: String] = [:]
+
+    /// A display's UUID survives reconnects and reboots (unlike its number).
+    static func uuid(of screen: NSScreen) -> String? {
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+        let id = CGDirectDisplayID(number.uint32Value)
+        if let hit = uuids[id] { return hit }
+        guard let u = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue() else { return nil }
+        let text = CFUUIDCreateString(nil, u) as String
+        uuids[id] = text
+        return text
+    }
 
     private func targetOrigin() -> CGPoint {
         if centered {
             // The whole screen, not the visible frame: the pause hides the Dock and the menu bar.
-            let f = (NSScreen.main ?? NSScreen.screens[0]).frame
+            let f = home.frame
             return CGPoint(x: (f.midX - metrics.sceneSize.width / 2).rounded(), y: (f.midY - metrics.sceneSize.height / 2).rounded())
         }
         return placement.panelOrigin(panelSize: metrics.sceneSize, visibleFrame: visibleFrame)

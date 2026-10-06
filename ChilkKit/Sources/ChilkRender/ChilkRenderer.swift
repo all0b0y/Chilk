@@ -243,6 +243,16 @@ public enum ChilkRenderer {
         ctx.restoreGState()
     }
 
+    /// Чилк alone, no tile, in `rect` (y-down): the sticker portrait of the main window («Сегодня», slice 5c).
+    public static func drawPortrait(in ctx: CGContext, rect: CGRect, pose: CharacterPose, metrics m: Metrics, palette: Palette) {
+        let size = Double(min(rect.width, rect.height))
+        let s = size / 160
+        let base = CGAffineTransform(translationX: rect.midX, y: rect.minY + size * 0.58).scaledBy(x: s * pose.scaleX, y: s * pose.scaleY)
+        var parts: [Placement] = []
+        figurePlacements(into: &parts, pose: pose, metrics: m, lineScale: (max(1, 1.5 / (3.6 * s)) * 100).rounded() / 100, base: base)
+        draw(parts, in: ctx, metrics: m, palette: palette)
+    }
+
     // MARK: Helpers
 
     static func fillEllipse(_ ctx: CGContext, center: CGPoint, rx: Double, ry: Double, rotation: Double, color: RGBA) {

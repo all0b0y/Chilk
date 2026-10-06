@@ -49,6 +49,13 @@ final class ProfileStore {
         save()
     }
 
+    /// Settings → «Как тебя называть» (slice 5c): an empty field forgets the name; the greeting does not come back.
+    func clearName() {
+        profile.name = nil
+        profile.greetingDone = true
+        save()
+    }
+
     private func save() {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? JSONEncoder().encode(profile).write(to: url, options: .atomic)
@@ -122,6 +129,14 @@ final class ChatStore {
         changed()
     }
 
+    /// Settings (slice 5c): 1 / 7 / 30 days, `nil` = never; applies at once.
+    func setAutoDelete(days: Int?) {
+        guard log.autoDeleteDays != days else { return }
+        log.autoDeleteDays = days
+        _ = log.purge(now: Date())
+        changed()
+    }
+
     private func purge() {
         if log.purge(now: Date()) > 0 { changed() }
     }
@@ -170,5 +185,75 @@ final class MemoryStore {
     private func changed() {
         if writable { store(book, to: url) }
         for f in onChange { f() }
+    }
+}
+
+/// Slice 5c (decisions 19–20): the main window's Settings on disk (`settings.json`). Care, app categories, hotkey,
+/// screen and launch at login; the mode stays in `balance.json`, the name in `profile.json`, the chat retention in
+/// `chats.json`, the edge in the user defaults. A damaged file is set aside and the defaults apply.
+@MainActor
+final class SettingsStore {
+    private let url = AppState.directory.appendingPathComponent("settings.json")
+    private(set) var settings: AppSettings
+    /// After every change made through `update` (the recent-apps list does not notify).
+    var onChange: [() -> Void] = []
+    private let writable: Bool
+    private var dirty = false
+    private var flushTimer: Timer?
+
+    init() {
+        switch load(AppSettings.self, from: url) {
+        case .value(let s):
+            settings = s
+            writable = true
+            Self.keepCopyIfLossy(url, decoded: s)
+        case .missing: settings = AppSettings(); writable = true
+        case .untouchable: settings = AppSettings(); writable = false
+        }
+    }
+
+    /// `throws` = refused (the change is not applied, nothing is written).
+    func update(_ change: (inout AppSettings) throws -> Void) rethrows {
+        var s = settings
+        try change(&s)
+        guard s != settings else { return }
+        settings = s
+        save()
+        for f in onChange { f() }
+    }
+
+    /// The front app changed: kept for the Settings list, written at most once a minute.
+    func noteFront(_ id: String) {
+        guard settings.apps.noteFront(id) else { return }
+        dirty = true
+        guard flushTimer == nil else { return }
+        flushTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushTimer = nil
+                self?.flush()
+            }
+        }
+    }
+
+    func flush() {
+        guard dirty else { return }
+        save()
+    }
+
+    /// A file read only in part (a damaged field fell back to its default) is copied aside before anything writes over
+    /// it, like a file that cannot be read at all.
+    private static func keepCopyIfLossy(_ url: URL, decoded: AppSettings) {
+        guard let original = try? Data(contentsOf: url),
+              let before = (try? JSONSerialization.jsonObject(with: original)) as? NSDictionary,
+              let data = try? JSONEncoder().encode(decoded),
+              let after = (try? JSONSerialization.jsonObject(with: data)) as? NSDictionary,
+              before != after else { return }
+        let aside = url.deletingPathExtension().appendingPathExtension("damaged-\(Int(Date().timeIntervalSince1970)).json")
+        try? FileManager.default.copyItem(at: url, to: aside)
+    }
+
+    private func save() {
+        dirty = false
+        if writable { store(settings, to: url) }
     }
 }
