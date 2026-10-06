@@ -169,6 +169,8 @@ public struct AppRules: Codable, Equatable, Sendable {
     /// Newest first, at most `recentLimit`; no times — only which apps to offer in Settings.
     public private(set) var recent: [String] = []
     public static let recentLimit = 30
+    /// Slice 6f-2: apps marked «Музыка» (their sound counts as music for the disco). Not a category: nothing to soften.
+    public private(set) var musicMarks: Set<String> = []
 
     public init() {}
 
@@ -208,19 +210,26 @@ public struct AppRules: Codable, Equatable, Sendable {
         overrides[id] = category
     }
 
-    private enum CodingKeys: String, CodingKey { case overrides, recent }
+    /// Slice 6f-2: mark / unmark an app as music.
+    public mutating func setMusic(_ id: String, _ on: Bool) {
+        if on { musicMarks.insert(id) } else { musicMarks.remove(id) }
+    }
+
+    private enum CodingKeys: String, CodingKey { case overrides, recent, music }
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let raw = (try? c.decodeIfPresent([String: String].self, forKey: .overrides)) ?? [:]
         overrides = raw.compactMapValues(AppCategory.init(rawValue:))
         recent = Array(((try? c.decodeIfPresent([String].self, forKey: .recent)) ?? []).prefix(Self.recentLimit))
+        musicMarks = Set((try? c.decodeIfPresent([String].self, forKey: .music)) ?? [])
     }
 
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(overrides.mapValues(\.rawValue), forKey: .overrides)
         try c.encode(recent, forKey: .recent)
+        try c.encode(musicMarks.sorted(), forKey: .music)
     }
 }
 

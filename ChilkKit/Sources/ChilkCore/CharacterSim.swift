@@ -22,6 +22,8 @@ public struct Mood: Sendable, Equatable {
     // Slice 6c: emotions from Codex and petting.
     /// «Смеётся»: ^ ^ with tears, a «D» mouth.
     public var laughing = false
+    /// Slice 6f-2: dancing under the disco ball (^ ^).
+    public var dancing = false
     /// The clown's stone face: heavy lids, a flat mouth, eyes on the user.
     public var deadpan = false
     /// «Обиделся» after the «><»: turned away towards the edge, a frown.
@@ -128,6 +130,8 @@ public enum Act: Sendable, Equatable {
     /// Slice 6e: the leap to another monitor — the app flies the window along a `HopArc`; he crouches, flies with his
     /// hands tucked and the sprout fluttering, lands squashed. `dir`: +1 towards the screen edge, −1 into the screen.
     case leap(seconds: Double, dir: Double)
+    /// Slice 6f-2: the disco dance — sways on the beat, arms up in turn, a spin now and then, no jumps; a bow at the end.
+    case dance(seconds: Double)
 
     public var duration: Double {
         switch self {
@@ -146,6 +150,7 @@ public enum Act: Sendable, Equatable {
         case .spin: 2.6
         case .mope: 2.8
         case .leap(let s, _): s
+        case .dance(let s): s
         }
     }
 
@@ -155,6 +160,12 @@ public enum Act: Sendable, Equatable {
         case .cheer, .laugh, .clown, .sulk, .spin, .mope: true
         default: false
         }
+    }
+
+    /// Slice 6f-2: the disco dance (shown out from behind the edge like an emotion).
+    public var isDance: Bool {
+        if case .dance = self { return true }
+        return false
     }
 }
 
@@ -389,6 +400,9 @@ public final class CharacterSim {
     public static let winkAfter = 1.0, winkDuration = 0.5
     nonisolated public static let confettiLife = 1.4
     nonisolated public static let puffLife = 0.6
+    /// Slice 6f-2: the dance's beat (120 bpm) and the bow at its end.
+    public static let danceBeat = 0.5
+    public static let danceBow = 1.4
     /// Diving behind the edge: slowly, then a dash (ease-in), leaning in so the sprout goes last.
     public static let diveDuration = 0.8
 
@@ -452,6 +466,7 @@ public final class CharacterSim {
         if let a = act {
             let k = time - actStart
             m.cheering = a == .cheer && k < 1.7
+            m.dancing = a.isDance && k < a.duration - Self.danceBow
             m.focused = a == .hops
             if case .laugh = a { m.laughing = k < a.duration - 0.2 }
             m.deadpan = a == .clown && k >= 1.7 && k < 3.2
@@ -729,7 +744,7 @@ public final class CharacterSim {
         if tucked { x.target = standOut == .lurk ? metrics.lurkX : metrics.awayX }
         if let h = hopX, !m.carried { x.target = h }              // between the hops he stays where he landed
         // An emotion is shown out from behind the edge (6c); falling on his back needs a little more room.
-        if let a = act, a.isEmotion, !m.carried {
+        if let a = act, a.isEmotion || a.isDance, !m.carried {
             x.target = min(x.target, a == .laugh(strong: true) ? metrics.peekX - 40 : metrics.peekX)
         }
         let sag = sagLevel
@@ -928,6 +943,20 @@ public final class CharacterSim {
                 }
             }
             if k >= landAt, actBeats < 1000 { squash.impulse(8); leaf.impulse(-6 * dir); actBeats = 1000 }   // landing
+        case .dance(let s):
+            let beat = Self.danceBeat, bowAt = s - Self.danceBow
+            if k < bowAt {
+                let b = Int(k / beat)
+                if b + 1 > actBeats { actBeats = b + 1; squash.impulse(2.2); leaf.impulse(b % 2 == 0 ? 4.5 : -4.5) }
+                let sway = sin(k * .pi / beat)
+                tilt.target += sway * 0.16                                     // one side per beat
+                lookX.target = sway * 0.4
+                lookY.target = -0.1
+            } else {
+                if actBeats < 10_000 { squash.impulse(3); leaf.impulse(-5); actBeats = 10_000 }
+                tilt.target = -0.45                                            // a bow
+                lookY.target = 0.6
+            }
         }
     }
 
@@ -1045,6 +1074,13 @@ public final class CharacterSim {
             // 6e: short arms swept back against the flight (floating mittens read as balls).
             let back = dir > 0 ? -2.25 : 2.25
             return [Hand(x: -0.78, y: 0.12, angle: back, arm: true), Hand(x: 0.78, y: 0.12, angle: back, arm: true)]
+        }
+        if case .dance(let s) = act, t - actStart < s - Self.danceBow {
+            // 6f-2: one arm up per beat, in turn, waving a little.
+            let k = t - actStart
+            let left = Int(k / Self.danceBeat) % 2 == 0
+            let w = sin(k * 14) * 0.15
+            return [left ? Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true) : Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]
         }
         if act == .cheer, t - actStart < 1.7 {
             let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
@@ -1292,6 +1328,14 @@ public final class CharacterSim {
         if case .leap(let s, _) = act {
             p.passThrough = true
             p.airborne = Self.envelope(t - actStart - HopArc.crouch, length: s - HopArc.crouch - HopArc.land, rise: 0.12, fall: 0.12)
+        }
+        if case .dance(let s) = act {
+            // A spin every 6 s from the 3rd: he turns round in 0.7 s (seen from the front: thin, then the other way).
+            let k = t - actStart, ph = (k - 3).truncatingRemainder(dividingBy: 6)
+            if k >= 3, k < s - Self.danceBow - 0.2, ph < 0.7 {
+                let c = cos(ph / 0.7 * 2 * .pi)
+                p.scaleX *= c < 0 ? min(-0.08, c) : max(0.08, c)
+            }
         }
         p.lying = lying
         if let a = puffAt, t - a < Self.puffLife {

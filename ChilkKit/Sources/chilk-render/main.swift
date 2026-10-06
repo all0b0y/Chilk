@@ -171,6 +171,10 @@ func previews(into dir: URL) throws {
         ("52-lamp-left-edge", sim({ $0.wear(.lamp) }, seconds: 1.5), true),
         ("53-sunglasses", sim({ $0.wear(.sunglasses) }, seconds: 1.5), false),
         ("54-sunglasses-peek", sim({ $0.wear(.sunglasses); $0.standOut = .peek }, seconds: 1.5), true),
+        // Slice 6f-2: the dance (a beat with an arm up, mid-spin, the bow).
+        ("55-dance-beat", sim({ $0.perform(.dance(seconds: 20)) }, seconds: 1.3), false),
+        ("56-dance-spin", sim({ $0.perform(.dance(seconds: 20)) }, seconds: 3.25), false),
+        ("57-dance-bow", sim({ $0.perform(.dance(seconds: 20)) }, seconds: 19.4), true),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in
@@ -180,6 +184,13 @@ func previews(into dir: URL) throws {
         }
         writePNG(image, to: dir.appendingPathComponent("\(name).png"))
     }
+    // Slice 6f-2: the disco ball window above him, its thread from the top of the screen.
+    let ball = render(CGSize(width: DiscoBall.width, height: 260)) { ctx in
+        ctx.setFillColor(CGColor(srgbRed: 0.98, green: 0.95, blue: 0.89, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: DiscoBall.width, height: 260))
+        DiscoBall.draw(in: ctx, width: DiscoBall.width, drop: 170, time: 2.3)
+    }
+    writePNG(ball, to: dir.appendingPathComponent("58-disco-ball.png"))
     let dock = render(CGSize(width: 200, height: 70)) { ctx in
         ctx.setFillColor(CGColor(srgbRed: 0.2, green: 0.21, blue: 0.25, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 70))

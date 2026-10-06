@@ -19,6 +19,8 @@ final class MainModel {
         let name: String
         let automatic: AppCategory
         let chosen: AppCategory?
+        /// Slice 6f-2: marked «музыка».
+        var music = false
     }
     struct ScreenRow: Identifiable, Equatable {
         let id: String
@@ -60,6 +62,7 @@ final class MainModel {
     var setMode: (BalanceMode) -> Void = { _ in }
     var changeCare: (CareChange) -> Void = { _ in }
     var setCategory: (String, AppCategory?) -> Void = { _, _ in }
+    var setMusic: (String, Bool) -> Void = { _, _ in }
     var record: (Bool) -> Void = { _ in }
     var setEdge: (ChilkCore.Edge) -> Void = { _ in }
     var setScreen: (ScreenChoice) -> Void = { _ in }
@@ -218,7 +221,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         let rows = rules.listed.map { id -> MainModel.AppRow in
             let info = appInfo(id)
             return MainModel.AppRow(id: id, name: info.name, automatic: AppCatalog.automatic(bundleID: id),
-                                    chosen: rules.overrides[id])
+                                    chosen: rules.overrides[id], music: rules.music.contains(id))
         }
         if rows != model.apps { model.apps = rows }
     }
@@ -276,6 +279,12 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.setCategory = { [weak self] id, category in
             guard let self else { return }
             if !self.balance.setCategory(id, to: category) { self.refused() }
+            self.refreshApps()
+        }
+        model.setMusic = { [weak self] id, on in
+            guard let self else { return }
+            self.settings.update { $0.apps.setMusic(id, on) }
+            self.log("settings app \(id) music \(on)")
             self.refreshApps()
         }
         model.record = { [weak self] on in on ? self?.startRecording() : self?.stopRecording() }

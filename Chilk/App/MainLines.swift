@@ -98,6 +98,8 @@ extension Lines {
     static let edgeLeft = String(localized: "Левый")
     static let edgeRight = String(localized: "Правый")
     static let monitor = String(localized: "Монитор")
+    /// Slice 6f-2: Settings → Приложения, the app's sound counts as music for the disco.
+    static let musicApp = String(localized: "Это музыка (для диско)")
     static let followActive = String(localized: "Следовать за активным экраном")
     static func pinnedTo(_ name: String) -> String { String(localized: "Закрепить: \(name)") }
     static func notConnected(_ name: String) -> String { String(localized: "\(name) (не подключён)") }

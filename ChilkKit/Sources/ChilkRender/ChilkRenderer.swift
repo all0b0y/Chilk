@@ -147,7 +147,7 @@ public enum ChilkRenderer {
                 part = .eyeLidded(lw: lw)                          // -_- (6c)
                 t = eye.scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
             } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) || mood.cheering || mood.chomping
-                        || mood.laughing || mood.petted {
+                        || mood.laughing || mood.petted || mood.dancing {
                 part = .eyeHappy(lw: lw)
             } else if mood.sad {
                 part = .eyeOpen                                    // half-closed, looking down

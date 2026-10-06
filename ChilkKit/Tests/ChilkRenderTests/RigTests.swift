@@ -152,6 +152,8 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.wear(.lamp); run(1); mirrored = true; run(1); mirrored = false; sim.takeOff(.lamp)
     sim.wear(.sunglasses); run(1); mirrored = true; run(1); mirrored = false; sim.takeOff(.sunglasses)
     sim.putOnNightcap(); run(4); sim.wakeUp(); run(1)
+    // Slice 6f-2: the dance (arms up in turn, a spin, the bow), both edges.
+    sim.perform(.dance(seconds: 8)); run(4); mirrored = true; run(4.5); mirrored = false
     sim.fatigue = 0.37
     mirrored = false
     run(20)

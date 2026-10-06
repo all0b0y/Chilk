@@ -392,6 +392,8 @@ private struct SettingsSection: View {
                     Button(Lines.categoryName(c)) { model.setCategory(app.id, c) }
                         .disabled(softens(app, to: c))
                 }
+                Divider()
+                Toggle(Lines.musicApp, isOn: Binding(get: { app.music }, set: { model.setMusic(app.id, $0) }))
             }
             .fixedSize()
         }

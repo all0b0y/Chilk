@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var greeting: FirstMeeting?
     private var hide: HideController?
     private var ambience: AmbienceController?
+    private var disco: DiscoController?
     private let switches = ToolSwitchStore()
     private let profile = ProfileStore()
     private let chats = ChatStore()
@@ -187,6 +188,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ambience.eyesPressure = { [weak balance] in balance?.engine.pressure(.eyes) ?? 0 }
         ambience.onBuiltin = { [weak edge] in edge?.homeIsBuiltin ?? false }
         self.ambience = ambience
+        // Slice 6f-2: music → the disco ball and a dance.
+        let disco = DiscoController(sim: edge.sim, edge: edge)
+        disco.log = { [weak balance] in balance?.log($0) }
+        disco.busy = { [weak edge] in edge?.hopBusy() ?? false }
+        disco.marked = { [weak self] in self?.settings.settings.apps.music ?? [] }
+        disco.callOrVideo = { [weak balance] in
+            guard let s = balance?.lastSignals else { return false }
+            return s.inCall || s.video
+        }
+        self.disco = disco
         hide.canPeek = { [weak tray, weak chat, weak edge] in
             (tray?.isFree() ?? false) && !(tray?.holdsChilk ?? true) && !(chat?.thinking ?? true) && edge?.sim.act == nil
         }
@@ -347,6 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         light.submenu = lightMenu
         sub.addItem(light)
+        sub.addItem(item(String(localized: "Диско"), #selector(discoNow)))
         // Slice 6c: Codex's emotions, played at once and past the limits (the clown's 14 days are not spent).
         let emotions = NSMenuItem(title: String(localized: "Эмоции"), action: nil, keyEquivalent: "")
         let emotionsMenu = NSMenu()
@@ -376,6 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func ambienceNow(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let a = Ambience(rawValue: raw) { ambience?.put(a, check: true) }
     }
+    @objc private func discoNow() { disco?.dance(why: "check") }
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)

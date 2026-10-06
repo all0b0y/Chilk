@@ -406,7 +406,7 @@ final class EdgeController: NSObject {
         let m = sim.pose.mood
         // 6d: also while he peeks from behind the edge, the «пф!» is in the air, or hidden he is out for a while.
         let hidingShown = sim.standOut == .lurk || sim.pose.puffAge != nil || (sim.hidden && !sim.isHiddenHome)
-        guard sim.isEmoting || m.petted || m.winking || hidingShown || leap != nil else { return }
+        guard sim.isEmoting || m.petted || m.winking || hidingShown || leap != nil || (sim.act?.isDance ?? false) else { return }
         let now = CACurrentMediaTime()
         guard now - lastEdgeSnapshot >= (leap != nil ? 0.1 : 0.3) else { return }
         lastEdgeSnapshot = now
@@ -500,6 +500,14 @@ final class EdgeController: NSObject {
 
     /// He lives on the Mac's own display (6f).
     var homeIsBuiltin: Bool { home.builtin }
+
+    /// 6f-2: his body centre on screen (AppKit, y-up) and the top of his screen's visible frame (the disco ball).
+    var bodyOnScreen: CGPoint {
+        let c = sim.bodyCenter
+        let x = isMirrored ? metrics.width - Double(c.x) : Double(c.x)
+        return CGPoint(x: Double(sceneOrigin.x) + x, y: Double(sceneOrigin.y) + metrics.height - Double(c.y))
+    }
+    var screenTop: CGFloat { visibleFrame.maxY }
 
     private static func isBuiltin(_ s: NSScreen) -> Bool {
         guard let n = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
