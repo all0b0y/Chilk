@@ -207,6 +207,37 @@ final class EdgeController: NSObject {
             stats?.switches += 1
         }
         if stats != nil { record(now: now, cpu: clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuStart) }
+        trace(now: now, dt: dt)
+    }
+
+    // MARK: Debug trace (CHILK_POSE_TRACE=/abs/path.tsv): one line per frame — the body's placement and the panel frame.
+    // CHILK_DEMO_SLEEP=<s>[,<s>]: he falls asleep that many seconds after launch, then (optionally) wakes up — the
+    // shake-at-sleep diagnosis (acceptance 2026-10-06).
+
+    private lazy var traceHandle: FileHandle? = {
+        guard let path = env["CHILK_POSE_TRACE"], path.hasPrefix("/") else { return nil }
+        FileManager.default.createFile(atPath: path, contents: Data("t\tdt\ttx\tty\ta\tb\tc\td\tpx\tpy\tpw\tph\ttilt\thop\tsy\tsleep\n".utf8))
+        return FileHandle(forWritingAtPath: path)
+    }()
+    private lazy var demoSleep: [Double] = (env["CHILK_DEMO_SLEEP"] ?? "").split(separator: ",")
+        .compactMap { Double($0) }.map { CACurrentMediaTime() + $0 }
+
+    private func trace(now: CFTimeInterval, dt: Double) {
+        if let at = demoSleep.first, now >= at {
+            if sim.isAsleep { sim.wakeUp() } else { sim.fallAsleep() }
+            demoSleep.removeFirst()
+        }
+        guard let handle = traceHandle else { return }
+        let p = sim.pose
+        let plan = ChilkRenderer.placements(pose: p, metrics: metrics, mirrored: isMirrored)
+        let t = plan.first { $0.slot == Slot.body }?.transform ?? .identity
+        let e = plan.first { $0.slot == Slot.eye }?.transform ?? .identity
+        let h = plan.first { $0.slot == Slot.hat }?.transform ?? .identity
+        let f = panel.frame
+        let line = String(format: "%.4f\t%.4f\t%.3f\t%.3f\t%.4f\t%.4f\t%.4f\t%.4f\t%.1f\t%.1f\t%.1f\t%.1f\t%.4f\t%.3f\t%.4f\t%.2f\t%.3f\t%.3f\t%.3f\t%.3f\t%d\n",
+                          now, dt, t.tx, t.ty, t.a, t.b, t.c, t.d, f.minX, f.minY, f.width, f.height, p.tilt, p.hop, p.scaleY, p.sleep,
+                          e.tx, e.ty, h.tx, h.ty, plan.count)
+        handle.write(Data(line.utf8))
     }
 
     private func restartTimer(fps: Double) {

@@ -316,6 +316,9 @@ public final class CharacterSim {
     private var mug = Spring(0, stiffness: 90, damping: 14)
     private var ears = Spring(0, stiffness: 240, damping: 11)
     private var sleepLevel = 0.0
+    /// Breathing phase, integrated in `step` (acceptance 2026-10-06): the period follows sleep, fatigue and exhaustion,
+    /// and `sin(time · 2π / period)` made every period change after a long run a phase jump of hundreds of radians.
+    private var breathPhase = 0.0
 
     private var rng: any RandomSource
     private let phase: Double
@@ -745,6 +748,7 @@ public final class CharacterSim {
 
         sleepLevel += isAsleep ? dt / Self.fallAsleepDuration : -dt / Self.wakeUpDuration
         sleepLevel = min(1, max(0, sleepLevel))
+        breathPhase = (breathPhase + dt * .pi * 2 / breathPeriod).truncatingRemainder(dividingBy: .pi * 2)
         let drowsy = sleepLevel > 0.05
         lieLevel = min(1, max(0, lieLevel + (slumped ? dt / Self.lieDown : -dt / Self.getUp)))
         let lying = Lying.eased(lieLevel)
@@ -1307,11 +1311,13 @@ public final class CharacterSim {
 
     // MARK: Output
 
+    /// Seconds per breath: slower when tired, asleep or exhausted.
+    private var breathPeriod: Double { 3.6 + fatigue * 1.8 + sleepLevel * 1.6 + Lying.eased(lieLevel) * 2.2 }
+
     public var pose: CharacterPose {
         let t = time
         let lying = Lying.eased(lieLevel)
-        let period = 3.6 + fatigue * 1.8 + sleepLevel * 1.6 + lying * 2.2
-        let breathing = sin(t * .pi * 2 / period + phase) * (1 + sleepLevel * 0.6 + lying * 1.0)   // slow and heavy
+        let breathing = sin(breathPhase + phase) * (1 + sleepLevel * 0.6 + lying * 1.0)   // slow and heavy
         let sag = postureSag
         // Slice 6a: tiredness no longer closes the eyes — only sleep, blinks and yawns do.
         var open = lid * (1 - sleepLevel) * (1 - lying * 0.5)          // lying: half-closed (6b)
