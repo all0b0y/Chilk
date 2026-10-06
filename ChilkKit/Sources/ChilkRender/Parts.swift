@@ -63,6 +63,13 @@ public enum Part: Hashable, Sendable {
     // Slice 6d
     /// One puff of the «пф!» cloud when he dives behind the edge; `index` picks its size.
     case puff(index: Int)
+    // Slice 6f-1
+    /// A floppy nightcap with a pompom (instead of the beanie); the sprout pokes through it.
+    case nightcap(lw: Double)
+    /// Round dark sunglasses over both eyes (part origin = the eye line, centre between the eyes).
+    case sunglasses(lw: Double)
+    /// A little lamp standing on the floor beside him and its warm circle of light (origin = its foot).
+    case lamp(lw: Double)
 
     public static let waveFrames = 24
     public static let confettiPieces = 8
@@ -108,19 +115,21 @@ public enum Slot {
     public static let eye = 21          // +0, +1
     public static let tear = 23         // +0…+5 — 3 per eye (6c)
     public static let mouth = 29
-    public static let clownNose = 30    // (6c)
-    public static let hand = 31         // +0, +1 — a mitten in front of the body
-    public static let mug = 33
-    public static let speck = 34
-    public static let confetti = 35     // +0…+7
-    public static let z = 43            // +0…+2
-    public static let ha = 46           // +0…+5 — «ХА» (6c)
-    public static let puff = 52         // +0…+4 — «пф!» (6d)
-    public static let bubbleBox = 57
-    public static let bubbleTail = 58
-    public static let bubbleStroke = 59
-    public static let button = 60       // +index
-    public static let word = 72         // +index
+    public static let sunglasses = 30   // (6f) over the eyes
+    public static let clownNose = 31    // (6c)
+    public static let hand = 32         // +0, +1 — a mitten in front of the body
+    public static let mug = 34
+    public static let lamp = 35         // (6f) its warm light falls on him
+    public static let speck = 36
+    public static let confetti = 37     // +0…+7
+    public static let z = 45            // +0…+2
+    public static let ha = 48           // +0…+5 — «ХА» (6c)
+    public static let puff = 54         // +0…+4 — «пф!» (6d)
+    public static let bubbleBox = 59
+    public static let bubbleTail = 60
+    public static let bubbleStroke = 61
+    public static let button = 62       // +index
+    public static let word = 74         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -221,6 +230,12 @@ extension Part {
         case .puff(let i):
             let r = Props.puffRadius(i)
             return box(-r, -r, r * 2, r * 2, margin: 2)
+        case .nightcap(let lw):
+            return box(-50, -34, 84, 46, margin: 5 + 1.5 * lw)
+        case .sunglasses(let lw):
+            return box(-30, -9, 60, 17, margin: 2 + 1.5 * lw)
+        case .lamp:
+            return box(-84, -136, 168, 146, margin: 2)       // the foot's die-cut border reaches below the floor line
         }
     }
 
@@ -566,6 +581,68 @@ extension Part {
             ctx.setStrokeColor(RGBA(0.17, 0.16, 0.22, 0.45).cgColor)
             ctx.setLineWidth(1.6)
             ctx.strokeEllipse(in: c)
+
+        case .nightcap(let lw):                             // a floppy cap, its tip hanging towards the screen
+            let cap = CGMutablePath()
+            cap.move(to: CGPoint(x: -29, y: 4))
+            cap.addCurve(to: CGPoint(x: -40, y: -8), control1: CGPoint(x: -24, y: -30), control2: CGPoint(x: -42, y: -30))
+            cap.addCurve(to: CGPoint(x: 29, y: 4), control1: CGPoint(x: -28, y: -20), control2: CGPoint(x: 26, y: -26))
+            cap.closeSubpath()
+            let band = CGPath(roundedRect: CGRect(x: -33, y: 0, width: 66, height: 11), cornerWidth: 5.5, cornerHeight: 5.5, transform: nil)
+            let pompom = CGPath(ellipseIn: CGRect(x: -48, y: -14, width: 14, height: 14), transform: nil)
+            let whole = CGMutablePath()
+            whole.addPath(cap); whole.addPath(band); whole.addPath(pompom)
+            ctx.addPath(whole)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()                                // sticker die-cut border
+            Props.sticker(ctx, cap, fill: Props.nightcapBlue, outline: outline, lw: 3 * lw, border: false)
+            Props.sticker(ctx, band, fill: Props.nightcapBand, outline: outline, lw: 3 * lw, border: false)
+            Props.sticker(ctx, pompom, fill: Props.nightcapBand, outline: outline, lw: 2.6 * lw, border: false)
+            ctx.setFillColor(RGBA.hex(0xFFF3B0).cgColor)    // two little stars on the cap
+            for (x, y) in [(-12.0, -12.0), (10.0, -9.0)] {
+                ctx.fillEllipse(in: CGRect(x: x - 2.2, y: y - 2.2, width: 4.4, height: 4.4))
+            }
+
+        case .sunglasses(let lw):                           // two round dark lenses and a bridge
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(2.6 * lw)
+            ctx.setLineCap(.round)
+            ctx.move(to: CGPoint(x: -7.5, y: -2.5))
+            ctx.addQuadCurve(to: CGPoint(x: 7.5, y: -2.5), control: CGPoint(x: 0, y: -6))
+            ctx.strokePath()
+            for s in [-1.0, 1.0] {
+                let lens = CGPath(roundedRect: CGRect(x: s * 18 - 11, y: -7.5, width: 22, height: 15),
+                                  cornerWidth: 7, cornerHeight: 7, transform: nil)
+                Props.sticker(ctx, lens, fill: Props.lens, outline: outline, lw: 2.6 * lw, border: false)
+                ctx.setStrokeColor(RGBA(1, 1, 1, 0.55).cgColor)  // a glint
+                ctx.setLineWidth(2)
+                ctx.move(to: CGPoint(x: s * 18 - 6, y: -1))
+                ctx.addLine(to: CGPoint(x: s * 18 - 2, y: -5))
+                ctx.strokePath()
+            }
+
+        case .lamp(let lw):                                 // warm light first, then the little lamp itself
+            let colors = [RGBA.hex(0xFFD27A, alpha: 0.42).cgColor, RGBA.hex(0xFFD27A, alpha: 0).cgColor] as CFArray
+            if let g = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors, locations: [0, 1]) {
+                ctx.saveGState()
+                ctx.clip(to: CGRect(x: -84, y: -136, width: 168, height: 138))   // the light stays above the floor
+                ctx.drawRadialGradient(g, startCenter: CGPoint(x: 0, y: -52), startRadius: 0,
+                                       endCenter: CGPoint(x: 0, y: -52), endRadius: 82, options: [])
+                ctx.restoreGState()
+            }
+            let foot = CGPath(ellipseIn: CGRect(x: -12, y: -5, width: 24, height: 7), transform: nil)
+            Props.sticker(ctx, foot, fill: Props.lampMetal, outline: outline, lw: 2.4 * lw)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(3.4)
+            ctx.move(to: CGPoint(x: 0, y: -3)); ctx.addLine(to: CGPoint(x: 0, y: -46))
+            ctx.strokePath()
+            let shade = CGMutablePath()
+            shade.move(to: CGPoint(x: -16, y: -44)); shade.addLine(to: CGPoint(x: 16, y: -44))
+            shade.addLine(to: CGPoint(x: 9, y: -62)); shade.addLine(to: CGPoint(x: -9, y: -62)); shade.closeSubpath()
+            ctx.setFillColor(RGBA.hex(0xFFF1C2).cgColor)    // the bulb glowing under the shade
+            ctx.fillEllipse(in: CGRect(x: -6, y: -47, width: 12, height: 7))
+            Props.sticker(ctx, shade, fill: Props.lampShade, outline: outline, lw: 2.6 * lw)
         }
     }
 }
@@ -581,6 +658,12 @@ enum Props {
     static let strapBlue = RGBA.hex(0x4C83BF).cgColor
     static let hatYellow = RGBA.hex(0xF4B942).cgColor
     static let hatBand = RGBA.hex(0xE3953A).cgColor
+    // Slice 6f-1
+    static let nightcapBlue = RGBA.hex(0x6F82D6).cgColor
+    static let nightcapBand = RGBA.hex(0xF3F1FA).cgColor
+    static let lens = RGBA.hex(0x2B2935).cgColor
+    static let lampMetal = RGBA.hex(0x7D8293).cgColor
+    static let lampShade = RGBA.hex(0xF6C35F).cgColor
     static let mugMint = RGBA.hex(0x8FD6C4).cgColor
     static let buttonFill = RGBA.hex(0xF3EEE6).cgColor
     static let bagLavender = RGBA.hex(0x9580D4).cgColor

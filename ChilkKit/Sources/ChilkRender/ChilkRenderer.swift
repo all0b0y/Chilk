@@ -39,6 +39,10 @@ public enum ChilkRenderer {
         if p.sleep > 0.3 { zPlacements(into: &out, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let age = p.haAge { haPlacements(into: &out, age: age, count: p.haCount, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let age = p.puffAge { puffPlacements(into: &out, age: age, origin: p.puffOrigin, mirror: mirror) }
+        if p.props.contains(.lamp) {                       // 6f: on the floor beside him, on the screen side
+            out.append(Placement(slot: Slot.lamp, part: .lamp(lw: 1),
+                                 transform: mirror.translatedBy(x: p.x - m.radiusX * 1.55, y: m.ground), alpha: 1))
+        }
         if let text = p.bubble, !text.isEmpty { bubblePlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: text) }
         return out
     }
@@ -56,7 +60,7 @@ public enum ChilkRenderer {
                 out.append(Placement(slot: Slot.foot + i, part: .foot(lw: lw), transform: t, alpha: 1))
             }
         }
-        out.append(Placement(slot: Slot.body, part: .body(lw: lw, shine: !p.props.contains(.hat)), transform: base, alpha: 1))
+        out.append(Placement(slot: Slot.body, part: .body(lw: lw, shine: !p.props.contains(.hat) && !p.props.contains(.nightcap)), transform: base, alpha: 1))
 
         // Ears pop up while he listens (behind the head, springy, twitching with the voice).
         if p.earsUp > 0.02 {
@@ -73,7 +77,9 @@ public enum ChilkRenderer {
             out.append(Placement(slot: Slot.backpack, part: .backpack(lw: lw), transform: base, alpha: 1))
             out.append(Placement(slot: Slot.strap, part: .strap(lw: lw), transform: base, alpha: 1))
         }
-        if p.props.contains(.hat) {
+        if p.props.contains(.nightcap) {                      // 6f: instead of the beanie (never both)
+            out.append(Placement(slot: Slot.hat, part: .nightcap(lw: lw), transform: base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.86), alpha: 1))
+        } else if p.props.contains(.hat) {
             out.append(Placement(slot: Slot.hat, part: .hat(lw: lw), transform: base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.86), alpha: 1))
         }
         if p.clownWig > 0.01 {                              // the clown's tufts; the sprout grows on the bald top
@@ -152,6 +158,9 @@ public enum ChilkRenderer {
                     .scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
             }
             out.append(Placement(slot: Slot.eye + i, part: part, transform: t, alpha: 1))
+        }
+        if p.props.contains(.sunglasses) {                    // 6f: over both eyes, following the look a little
+            out.append(Placement(slot: Slot.sunglasses, part: .sunglasses(lw: lw), transform: base.translatedBy(x: ox * 0.7, y: ey + oy * 0.6), alpha: 1))
         }
         // Tears of laughter fly sideways from the outer corners of the eyes (😂, 6c).
         if let age = p.tearAge {

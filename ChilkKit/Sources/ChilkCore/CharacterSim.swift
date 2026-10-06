@@ -89,6 +89,8 @@ public enum StandOut: Sendable, Equatable {
 /// Things he can hold or wear. Order = drawing order (behind → front).
 public enum Prop: String, CaseIterable, Sendable, Hashable {
     case backpack, hat, mug
+    /// Slice 6f-1: the light around him — a nightcap to sleep in, a lamp beside him, sunglasses.
+    case nightcap, lamp, sunglasses
 }
 
 /// Directed performances for the balance ladder and the breaks (В18). Unlike antics they are asked for.
@@ -348,6 +350,9 @@ public final class CharacterSim {
     private var winkAt = -99.0
     private var blushHotLevel = 0.0
     private var clownGaze = (x: 0.0, y: 0.0)
+    // Slice 6f-1
+    private var nightcapSleepAt: Double?
+    private var sleptInNightcap = false
     // Slice 6d
     private var wasHome = false
     private var diveAt = -99.0
@@ -603,6 +608,27 @@ public final class CharacterSim {
         currentAntic = nil
     }
 
+    /// Slice 6f-1: dark — the nightcap instead of the hat, a yawn, then asleep; waking up takes the cap off.
+    public func putOnNightcap() {
+        props.remove(.hat)
+        wear(.nightcap)
+        nightcapSleepAt = time + Antic.yawn.duration + 0.4
+        if act == nil, !isAsleep { beginAntic(.yawn, at: time) }
+    }
+
+    private func stepNightcap(t: Double) {
+        guard props.contains(.nightcap) else { nightcapSleepAt = nil; sleptInNightcap = false; return }
+        if let at = nightcapSleepAt, t >= at {
+            nightcapSleepAt = nil
+            fallAsleep()
+            sleptInNightcap = true
+        }
+        if sleptInNightcap, !isAsleep {                                     // woken up: off with the cap
+            sleptInNightcap = false
+            props.remove(.nightcap)
+        }
+    }
+
     /// The user is back: eyes pop open, a little hop.
     public func wakeUp() {
         guard isAsleep else { return }
@@ -710,6 +736,7 @@ public final class CharacterSim {
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08 - sag * 0.07
         stepHiding(t: t)
+        stepNightcap(t: t)
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
         ears.target = listening ? 1 : 0
 

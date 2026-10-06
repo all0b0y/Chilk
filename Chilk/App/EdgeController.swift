@@ -54,6 +54,8 @@ final class EdgeController: NSObject {
         let id: String
         let frame: CGRect
         let visibleFrame: CGRect
+        /// The Mac's own display (6f: its brightness drives the nightcap, the lamp and the sunglasses).
+        var builtin = false
     }
     private var hop = ScreenHop()
     private var homeDisplay: Display?
@@ -426,7 +428,7 @@ final class EdgeController: NSObject {
 
     private func displays() -> [Display] {
         var list = NSScreen.screens.compactMap { s in
-            Self.uuid(of: s).map { Display(id: $0, frame: s.frame, visibleFrame: s.visibleFrame) }
+            Self.uuid(of: s).map { Display(id: $0, frame: s.frame, visibleFrame: s.visibleFrame, builtin: Self.isBuiltin(s)) }
         }
         if demoHopAt != nil, let main = list.first {
             let dx = main.frame.width
@@ -493,7 +495,15 @@ final class EdgeController: NSObject {
     private var home: Display {
         if let d = homeDisplay { return d }
         let s = NSScreen.main ?? NSScreen.screens[0]
-        return Display(id: Self.uuid(of: s) ?? "", frame: s.frame, visibleFrame: s.visibleFrame)
+        return Display(id: Self.uuid(of: s) ?? "", frame: s.frame, visibleFrame: s.visibleFrame, builtin: Self.isBuiltin(s))
+    }
+
+    /// He lives on the Mac's own display (6f).
+    var homeIsBuiltin: Bool { home.builtin }
+
+    private static func isBuiltin(_ s: NSScreen) -> Bool {
+        guard let n = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }
+        return CGDisplayIsBuiltin(CGDirectDisplayID(n.uint32Value)) != 0
     }
 
     private static var uuids: [CGDirectDisplayID: String] = [:]

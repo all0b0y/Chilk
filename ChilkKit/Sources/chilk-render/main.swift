@@ -164,6 +164,13 @@ func previews(into dir: URL) throws {
         ("46-leap-flight", leapPose(at: 0.7), false),
         ("47-leap-flight-left-edge", leapPose(at: 0.7), true),
         ("48-leap-landing", leapPose(at: 1.45), false),
+        // Slice 6f-1: the light around him.
+        ("49-nightcap-yawn", sim({ $0.putOnNightcap() }, seconds: 0.8), false),
+        ("50-nightcap-asleep", sim({ $0.putOnNightcap() }, seconds: 5), false),
+        ("51-lamp", sim({ $0.wear(.lamp) }, seconds: 1.5), false),
+        ("52-lamp-left-edge", sim({ $0.wear(.lamp) }, seconds: 1.5), true),
+        ("53-sunglasses", sim({ $0.wear(.sunglasses) }, seconds: 1.5), false),
+        ("54-sunglasses-peek", sim({ $0.wear(.sunglasses); $0.standOut = .peek }, seconds: 1.5), true),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

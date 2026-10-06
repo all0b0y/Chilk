@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var tray: Tray?
     private var greeting: FirstMeeting?
     private var hide: HideController?
+    private var ambience: AmbienceController?
     private let switches = ToolSwitchStore()
     private let profile = ProfileStore()
     private let chats = ChatStore()
@@ -179,6 +180,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || (edge?.sim.isTalking ?? false)
         }
         edge.log = { [weak balance] in balance?.log($0) }
+        // Slice 6f-1: the light around him (the built-in display's brightness).
+        let ambience = AmbienceController(sim: edge.sim)
+        ambience.log = { [weak balance] in balance?.log($0) }
+        ambience.busy = { [weak edge] in edge?.hopBusy() ?? false }
+        ambience.eyesPressure = { [weak balance] in balance?.engine.pressure(.eyes) ?? 0 }
+        ambience.onBuiltin = { [weak edge] in edge?.homeIsBuiltin ?? false }
+        self.ambience = ambience
         hide.canPeek = { [weak tray, weak chat, weak edge] in
             (tray?.isFree() ?? false) && !(tray?.holdsChilk ?? true) && !(chat?.thinking ?? true) && edge?.sim.act == nil
         }
@@ -328,6 +336,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Ликует"), #selector(cheerNow)))
         sub.addItem(item(String(localized: "Лежит"), #selector(slumpNow)))
         if hide?.isHidden == true { sub.addItem(item(String(localized: "Выглянуть"), #selector(peekNow))) }
+        // Slice 6f-1: the looks, past the roll.
+        let light = NSMenuItem(title: String(localized: "Свет"), action: nil, keyEquivalent: "")
+        let lightMenu = NSMenu()
+        for (title, key) in [(String(localized: "Колпак и сон"), "nightcap"), (String(localized: "Лампа"), "lamp"),
+                             (String(localized: "Очки"), "sunglasses")] {
+            let i = item(title, #selector(ambienceNow(_:)))
+            i.representedObject = key
+            lightMenu.addItem(i)
+        }
+        light.submenu = lightMenu
+        sub.addItem(light)
         // Slice 6c: Codex's emotions, played at once and past the limits (the clown's 14 days are not spent).
         let emotions = NSMenuItem(title: String(localized: "Эмоции"), action: nil, keyEquivalent: "")
         let emotionsMenu = NSMenu()
@@ -354,6 +373,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showChilk() { hide?.show("tray") }
     @objc private func hideChilk() { hide?.hide("tray") }
     @objc private func peekNow() { hide?.look(seconds: 2, why: "check") }
+    @objc private func ambienceNow(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let a = Ambience(rawValue: raw) { ambience?.put(a, check: true) }
+    }
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)

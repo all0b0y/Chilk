@@ -148,6 +148,10 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.perform(.leap(seconds: 1.6, dir: -1)); run(1.8)
     mirrored = true; sim.perform(.leap(seconds: 1.6, dir: 1)); run(1.8)
     mirrored = false
+    // Slice 6f-1: the light around him (the lamp's warm gradient, the nightcap, the sunglasses), both edges.
+    sim.wear(.lamp); run(1); mirrored = true; run(1); mirrored = false; sim.takeOff(.lamp)
+    sim.wear(.sunglasses); run(1); mirrored = true; run(1); mirrored = false; sim.takeOff(.sunglasses)
+    sim.putOnNightcap(); run(4); sim.wakeUp(); run(1)
     sim.fatigue = 0.37
     mirrored = false
     run(20)
