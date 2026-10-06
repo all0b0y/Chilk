@@ -105,31 +105,32 @@ public enum Slot {
     public static let backpack = 7      // behind him
     public static let body = 8
     public static let strap = 9
-    public static let hat = 10          // the sprout grows through it
-    public static let wig = 11          // the clown's tufts (6c); the sprout grows on the bald top
-    public static let stem = 12
-    public static let leaf = 13         // +0, +1
-    public static let blush = 15        // +0, +1
-    public static let blushHot = 17     // +0, +1 — petted (6c)
-    public static let eyeBag = 19       // +0, +1 — under the eyes
-    public static let eye = 21          // +0, +1
-    public static let tear = 23         // +0…+5 — 3 per eye (6c)
-    public static let mouth = 29
-    public static let sunglasses = 30   // (6f) over the eyes
-    public static let clownNose = 31    // (6c)
-    public static let hand = 32         // +0, +1 — a mitten in front of the body
-    public static let mug = 34
-    public static let lamp = 35         // (6f) its warm light falls on him
-    public static let speck = 36
-    public static let confetti = 37     // +0…+7
-    public static let z = 45            // +0…+2
-    public static let ha = 48           // +0…+5 — «ХА» (6c)
-    public static let puff = 54         // +0…+4 — «пф!» (6d)
-    public static let bubbleBox = 59
-    public static let bubbleTail = 60
-    public static let bubbleStroke = 61
-    public static let button = 62       // +index
-    public static let word = 74         // +index
+    public static let fringe = 10       // +0, +1 — under a hat the sprout peeks out from below the band, like bangs
+    public static let hat = 12
+    public static let wig = 13          // the clown's tufts (6c); the sprout grows on the bald top
+    public static let stem = 14
+    public static let leaf = 15         // +0, +1
+    public static let blush = 17        // +0, +1
+    public static let blushHot = 19     // +0, +1 — petted (6c)
+    public static let eyeBag = 21       // +0, +1 — under the eyes
+    public static let eye = 23          // +0, +1
+    public static let tear = 25         // +0…+5 — 3 per eye (6c)
+    public static let mouth = 31
+    public static let sunglasses = 32   // (6f) over the eyes
+    public static let clownNose = 33    // (6c)
+    public static let hand = 34         // +0, +1 — a mitten in front of the body
+    public static let mug = 36
+    public static let lamp = 37         // (6f) its warm light falls on him
+    public static let speck = 38
+    public static let confetti = 39     // +0…+7
+    public static let z = 47            // +0…+2
+    public static let ha = 50           // +0…+5 — «ХА» (6c)
+    public static let puff = 56         // +0…+4 — «пф!» (6d)
+    public static let bubbleBox = 61
+    public static let bubbleTail = 62
+    public static let bubbleStroke = 63
+    public static let button = 64       // +index
+    public static let word = 76         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -231,7 +232,7 @@ extension Part {
             let r = Props.puffRadius(i)
             return box(-r, -r, r * 2, r * 2, margin: 2)
         case .nightcap(let lw):
-            return box(-50, -34, 84, 46, margin: 5 + 1.5 * lw)
+            return box(-55, -38, 86, 52, margin: 5 + 1.5 * lw)
         case .sunglasses(let lw):
             return box(-30, -9, 60, 17, margin: 2 + 1.5 * lw)
         case .lamp:
@@ -582,14 +583,16 @@ extension Part {
             ctx.setLineWidth(1.6)
             ctx.strokeEllipse(in: c)
 
-        case .nightcap(let lw):                             // a floppy cap, its tip hanging towards the screen
+        case .nightcap(let lw):                             // a cone that flops over to one side, pompom at its tip
             let cap = CGMutablePath()
-            cap.move(to: CGPoint(x: -29, y: 4))
-            cap.addCurve(to: CGPoint(x: -40, y: -8), control1: CGPoint(x: -24, y: -30), control2: CGPoint(x: -42, y: -30))
-            cap.addCurve(to: CGPoint(x: 29, y: 4), control1: CGPoint(x: -28, y: -20), control2: CGPoint(x: 26, y: -26))
+            cap.move(to: CGPoint(x: -30, y: 4))
+            cap.addCurve(to: CGPoint(x: -24, y: -15), control1: CGPoint(x: -31, y: -6), control2: CGPoint(x: -28, y: -12))
+            cap.addCurve(to: CGPoint(x: -45, y: -5), control1: CGPoint(x: -32, y: -15), control2: CGPoint(x: -41, y: -12))
+            cap.addCurve(to: CGPoint(x: -6, y: -37), control1: CGPoint(x: -45, y: -22), control2: CGPoint(x: -30, y: -37))
+            cap.addCurve(to: CGPoint(x: 30, y: 4), control1: CGPoint(x: 15, y: -37), control2: CGPoint(x: 30, y: -19))
             cap.closeSubpath()
             let band = CGPath(roundedRect: CGRect(x: -33, y: 0, width: 66, height: 11), cornerWidth: 5.5, cornerHeight: 5.5, transform: nil)
-            let pompom = CGPath(ellipseIn: CGRect(x: -48, y: -14, width: 14, height: 14), transform: nil)
+            let pompom = CGPath(ellipseIn: CGRect(x: -54, y: -6, width: 15, height: 15), transform: nil)
             let whole = CGMutablePath()
             whole.addPath(cap); whole.addPath(band); whole.addPath(pompom)
             ctx.addPath(whole)
@@ -600,7 +603,7 @@ extension Part {
             Props.sticker(ctx, band, fill: Props.nightcapBand, outline: outline, lw: 3 * lw, border: false)
             Props.sticker(ctx, pompom, fill: Props.nightcapBand, outline: outline, lw: 2.6 * lw, border: false)
             ctx.setFillColor(RGBA.hex(0xFFF3B0).cgColor)    // two little stars on the cap
-            for (x, y) in [(-12.0, -12.0), (10.0, -9.0)] {
+            for (x, y) in [(-14.0, -24.0), (8.0, -14.0)] {
                 ctx.fillEllipse(in: CGRect(x: x - 2.2, y: y - 2.2, width: 4.4, height: 4.4))
             }
 

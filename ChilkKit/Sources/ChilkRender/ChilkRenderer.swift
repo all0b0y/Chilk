@@ -97,15 +97,26 @@ public enum ChilkRenderer {
         // Sprout: stem on the head, two leaves at its tip (follow-through comes from leafAngle).
         let fp = Int((p.fatigue * 100).rounded())
         let f = Double(fp) / 100
+        let flutter = sin(p.time * 3.1 + p.phase) * 0.06
+        if p.props.contains(.hat) || p.props.contains(.nightcap) {
+            // Acceptance 2026-10-06: under a hat the sprout does not poke through the top — its leaves peek out from
+            // under the band over the forehead, like bangs (the band covers their base: the fringe slots sit below it).
+            let band = base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.86 + 8)
+            for (i, (dx, down)) in [(-12.0, Double.pi + 0.85), (4.0, Double.pi - 0.65)].enumerated() {
+                let sway = p.leafAngle * 0.35 + flutter * (i == 0 ? 1 : -1)
+                let t = band.translatedBy(x: dx, y: 3).rotated(by: down + sway).scaledBy(x: 1.02 * (1 - f * 0.2), y: 1.02)
+                out.append(Placement(slot: Slot.fringe + i, part: .leaf(index: i, f: fp, lw: lw), transform: t, alpha: 1))
+            }
+        } else {
         let root = base.translatedBy(x: ox * 0.35, y: -m.radiusY * 0.94).rotated(by: p.leafAngle)
         out.append(Placement(slot: Slot.stem, part: .stem(f: fp, lw: lw), transform: root, alpha: 1))
         let len = 22 + f * 2
         let tip = CGPoint(x: f * 16, y: -len * (1 - f * 0.62))
-        let flutter = sin(p.time * 3.1 + p.phase) * 0.06
         for (i, side) in [-1.0, 1.0].enumerated() {
             let angle = side * 0.85 * (1 - f) + f * (2.55 + side * 0.3) + flutter * (i == 1 ? -1 : 1) * (1 - f * 0.7)
             let t = root.translatedBy(x: tip.x, y: tip.y).rotated(by: angle + p.leafSpin).scaledBy(x: 1 - f * 0.3, y: 1 - f * 0.12)
             out.append(Placement(slot: Slot.leaf + i, part: .leaf(index: i, f: fp, lw: lw), transform: t, alpha: 1))
+        }
         }
 
         // Blush moves less than the eyes → parallax depth.

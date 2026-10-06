@@ -165,6 +165,10 @@ func previews(into dir: URL) throws {
         ("47-leap-flight-left-edge", leapPose(at: 0.7), true),
         ("48-leap-landing", leapPose(at: 1.45), false),
         // Acceptance 2026-10-06: «измотан» (no flip) next to the most tired plain pose; emotions beside the words.
+        ("64-hat", sim({ $0.wear(.hat) }, seconds: 2, pointer: lookIn), false),
+        ("65-nightcap-awake", sim({ $0.wear(.nightcap) }, seconds: 2, pointer: lookIn), false),
+        ("66-hat-backpack-left", sim({ $0.wear(.hat); $0.wear(.backpack) }, seconds: 2, pointer: lookIn), true),
+        ("67-nightcap-asleep-left", sim({ $0.putOnNightcap() }, seconds: 5), true),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),
         ("61-bubble-laugh", sim({ $0.say("Почему программисты путают Хэллоуин и Рождество? 31 OCT = 25 DEC", duration: 20)
