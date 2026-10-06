@@ -130,6 +130,10 @@ public enum BalanceEvent: Equatable, Sendable {
     case mood
     /// Focus mode is over (its time is up or the user ended it): what piled up comes back at «настаивает».
     case focusEnded
+    /// «Лежит» (slice 6b): every body need is empty — he lies down; the «Помоги мне…» bubble shows (again).
+    case slumped
+    /// He is back up: a rest counted or «Встряхнуться».
+    case roseUp
 }
 
 /// Starting values (В11, В12, В17); everything is tunable later in settings.
@@ -305,6 +309,8 @@ public struct BalanceState: Codable, Sendable, Equatable {
     public var care = CareSettings()
     /// Focus mode until this moment (slice 4b); survives a restart.
     public var focusUntil: Date?
+    /// «Лежит» (slice 6b): `false` after «Встряхнуться» — he does not lie down again until a rest re-arms him.
+    public var slumpArmed = true
 }
 
 // Files written by older builds lack newer fields: every field falls back to its default instead of the whole
@@ -331,6 +337,7 @@ extension BalanceState {
         streak = try field(.streak, 0)
         care = (try? c.decodeIfPresent(CareSettings.self, forKey: .care)) ?? CareSettings()   // a bad care keeps the rest
         focusUntil = (try? c.decodeIfPresent(Date.self, forKey: .focusUntil)) ?? nil
+        slumpArmed = try field(.slumpArmed, true)
     }
 }
 
@@ -363,6 +370,10 @@ public final class BalanceEngine {
     public private(set) var guided: GuidedOrigin?
     private var rng: any RandomSource
     private let calendar: Calendar
+    /// «Лежит» as the app last heard of it, and whether its bubble is hidden (a call, full screen, away). Not saved:
+    /// after a restart the first tick says `.slumped` again.
+    private var reportedSlump = false
+    private var slumpHidden = false
 
     public init(config: BalanceConfig = BalanceConfig(), restoring saved: BalanceState? = nil,
                 rng: any RandomSource = SystemRandom(), calendar: Calendar = .current) {
@@ -374,6 +385,11 @@ public final class BalanceEngine {
             s.lastNow = nil          // time while Chilk was not running is unknown — not rest, not sitting
             state = s
             for n in Need.allCases where state.needs[n] == nil { state.needs[n] = NeedTrack(threshold: threshold(n)) }
+            // A pantomime left by a build without the mode floor (slice 6, decision 33) becomes its bubble.
+            if var e = state.episode, e.stage < state.mode.floor {
+                e.stage = min(state.mode.floor, cap(e.need))
+                state.episode = e
+            }
         } else {
             for n in Need.allCases { state.needs[n] = NeedTrack(threshold: threshold(n)) }
             state.nextMood = self.rng.uniform(config.moodEvery.lowerBound, config.moodEvery.upperBound)
@@ -408,6 +424,18 @@ public final class BalanceEngine {
 
     /// Focus mode is on (slice 4b): every request stays on stages 0–1 until `state.focusUntil`.
     public var focusing: Bool { state.focusUntil != nil }
+
+    /// «Лежит» (slice 6b, decision 7): every body need that is on is empty (≥ 100 %), at least two are on, and no
+    /// «Встряхнуться» since the last rest.
+    public var slumped: Bool { state.slumpArmed && slumpCondition }
+
+    /// Lying, he answers only with a ready line, without Codex (decision 8) — except in Silence (decision 10).
+    public var refusesToTalk: Bool { slumped && state.mode != .silent }
+
+    private var slumpCondition: Bool {
+        let on = Need.body.filter { !config.needsOff.contains($0) }
+        return on.count >= 2 && on.allSatisfy { pressure($0) >= 1 }
+    }
 
     /// Focus time left for today, in seconds.
     public var focusLeftToday: TimeInterval { max(0, config.focusPerDay - state.day.focus) }
@@ -498,6 +526,11 @@ public final class BalanceEngine {
         let endOfDayDue = endOfDayIsDue(s.now)
         let blocked = inCall || s.fullscreen || !atMac || s.category == .untouchable
 
+        // «Лежит» (6b): Soft and Silence pause the ladder and the mood while he lies; Strict keeps counting under him,
+        // so lying never gets round the shade and the pause (decision 10).
+        refreshSlump(blocked: blocked, into: &out)
+        if slumped && state.mode != .strict { return out }
+
         if var e = state.episode {
             // The pause stays up while the user is away (that is the rest); only a call takes it down.
             let off = e.stage >= 4
@@ -554,7 +587,7 @@ public final class BalanceEngine {
         if let n = due.min() {
             let waited = state.clock - (state.needs[n]?.pendingSince ?? state.clock)
             if budgetLeft && (convenient || waited >= config.convenientWait) { start(n, into: &out) }
-        } else if budgetLeft, convenient, state.clock >= state.nextMood {
+        } else if budgetLeft, convenient, !slumped, state.clock >= state.nextMood {
             state.starts.append(state.clock)
             state.nextMood = state.clock + rng.uniform(config.moodEvery.lowerBound, config.moodEvery.upperBound)
             out.append(.mood)
@@ -564,6 +597,38 @@ public final class BalanceEngine {
 
     public func handle(_ r: Reaction) -> [BalanceEvent] {
         r == .busy ? deferBusy(minutes: config.busyMinutes[0]) : react(r)
+    }
+
+    // MARK: «Лежит» (slice 6b)
+
+    /// After a rest the app credited outside `tick` (a button): `.roseUp` right away instead of a second later.
+    @discardableResult
+    public func updateSlump() -> [BalanceEvent] {
+        var out: [BalanceEvent] = []
+        refreshSlump(blocked: slumpHidden, into: &out)
+        return out
+    }
+
+    /// «Встряхнуться» done (decision 9): he gets up, the warm-up need is NOT credited.
+    public func shakeUp() -> [BalanceEvent] {
+        guard slumped else { return [] }
+        state.slumpArmed = false
+        reportedSlump = false
+        slumpHidden = false
+        return [.roseUp]
+    }
+
+    private func refreshSlump(blocked: Bool, into out: inout [BalanceEvent]) {
+        if !slumpCondition { state.slumpArmed = true }
+        let now = slumped
+        if now != reportedSlump {
+            reportedSlump = now
+            slumpHidden = now && blocked
+            if !now { out.append(.roseUp) } else if !blocked { out.append(.slumped) }
+        } else if now, blocked != slumpHidden {
+            slumpHidden = blocked
+            out.append(blocked ? .withdraw : .slumped)
+        }
     }
 
     /// «Я занят» → «Через сколько вернуться?» → this (15/30/60). Once per request, inside the deferral limit.
@@ -879,6 +944,14 @@ public final class BalanceEngine {
         state.needs[n]?.pendingSince = since
         state.starts = []                     // manual testing must not run into the hourly budget
         state.episode = nil
+    }
+
+    /// «Проверка ▸ Лежит» (slice 6b): every body need that is on becomes empty.
+    public func makeSlumped() {
+        for n in Need.body where !config.needsOff.contains(n) {
+            if let t = state.needs[n] { state.needs[n]?.sitting = max(t.sitting, t.threshold) }
+        }
+        state.slumpArmed = true
     }
 
     public func resetAll() {

@@ -13,6 +13,8 @@ final class Conversation {
     var isActive: Bool { phase != .idle || closing }
     /// Called when the stage is free again (balance shows its prompt again).
     var onEnd: (() -> Void)?
+    /// «Лежит» (slice 6b): a ready line instead of listening — no Codex. `nil` = he talks.
+    var refusal: () -> String? = { nil }
     /// Minimal context for Codex (В24): time and how long the user has been sitting.
     var context: () -> String = { "" }
     /// Local debug log (CHILK_BALANCE_LOG), never sent anywhere.
@@ -86,12 +88,14 @@ final class Conversation {
     // MARK: Controls
 
     func trigger() {
+        if phase == .idle, !closing, let line = refusal() { return leave(saying: line, after: 3.5) }
         if phase == .idle { suppressFollowUps = false }
         perform(Dialogue.hotkey(phase))
     }
 
     func wake() {
         guard phase == .idle, !closing else { return }
+        if let line = refusal() { return leave(saying: line, after: 3.5) }
         suppressFollowUps = false
         closeLongAnswer()
         if let problem = brain.problem { return leave(saying: problem, after: 4) }

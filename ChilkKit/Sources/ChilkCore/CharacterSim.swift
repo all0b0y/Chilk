@@ -17,7 +17,32 @@ public struct Mood: Sendable, Equatable {
     /// «Хап!» — the speck is caught; then chewing.
     public var chomping = false
     public var chewing = false
+    /// «Лежит» (slice 6b): on his side, half-closed eyes, a frown.
+    public var slumped = false
     public init() {}
+}
+
+/// «Лежит» (slice 6b): he turns onto his side about his feet, head away from the screen edge, and is lifted so the
+/// turned body still rests on the floor. Shared by the simulation (hit tests) and the renderer (the frame plan).
+public enum Lying {
+    /// Extra rotation when fully lying (y-down: negative = the head goes left, into the screen).
+    public static let turn = -Double.pi / 2
+
+    public static func eased(_ level: Double) -> Double {
+        let c = min(1, max(0, level))
+        return c * c * (3 - 2 * c)
+    }
+
+    /// `angle`: total rotation about the feet; `lift`: up (negative) so the body touches the floor; `dx`, `dy`: body
+    /// centre from the feet; `halfHeight`: half the turned body's height. `rx`, `ry`: body radii with the scale.
+    public static func frame(lying: Double, tilt: Double, rx: Double, ry: Double)
+        -> (angle: Double, lift: Double, dx: Double, dy: Double, halfHeight: Double) {
+        guard lying > 0.001 else { return (tilt, 0, 0, -ry, ry) }
+        let a = tilt + turn * lying
+        let h = ((rx * sin(a)) * (rx * sin(a)) + (ry * cos(a)) * (ry * cos(a))).squareRoot()
+        let lift = -(h - ry * cos(a))
+        return (a, lift, ry * sin(a), lift - ry * cos(a), h)
+    }
 }
 
 /// Little things Чилк does on his own, "по настроению", not on a timer the user can predict.
@@ -135,6 +160,8 @@ public struct CharacterPose: Sendable, Equatable {
     public var confettiOrigin: CGPoint = .zero
     /// Clicks go through him (the hops hint must never catch a click meant for the window under him).
     public var passThrough = false
+    /// «Лежит» (slice 6b): 0 = standing, 1 = on his side (eased).
+    public var lying: Double = 0
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -181,6 +208,8 @@ public final class CharacterSim {
     public var eyesWide = false
     /// Emergency exit with none left: he is sad while the button is held.
     public var isSad = false
+    /// «Лежит» (slice 6b): every need of the user is empty — he lies on his side at the edge until a rest.
+    public var slumped = false
     public var hoveredButton: Int?
     /// Listening to the user: little ears pop up; `hearing` (0…1, voice level) makes them twitch.
     public var listening = false
@@ -240,6 +269,8 @@ public final class CharacterSim {
     private var confettiOrigin = CGPoint.zero
     private var strainShown = 0.0
     private var strainBlinked = false
+    private var lieLevel = 0.0
+    private var nextSigh = 0.0
 
     public static let calledDuration = 4.4
     public static let dizzyDuration = 2.6
@@ -261,6 +292,8 @@ public final class CharacterSim {
     public static let hopsZone = 230.0
     /// The eyes mirror: slow to show (minutes of strain), quick to clear (~1 s after a rest).
     public static let strainRise = 0.25, strainFall = 1.2
+    /// «Лежит»: down in ~0.8 s, up slowly in ~1.5 s («медленно встаёт»).
+    public static let lieDown = 0.8, getUp = 1.5
     nonisolated public static let confettiLife = 1.4
 
     public init(metrics: Metrics = .standard, rng: any RandomSource = SystemRandom()) {
@@ -276,7 +309,10 @@ public final class CharacterSim {
     // MARK: Queries
 
     public var bodyCenter: CGPoint {
-        CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - metrics.radiusY * (1 - squash.value * 0.22))
+        let ry = metrics.radiusY * (1 - squash.value * 0.22)
+        let lie = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: ry)
+        guard lieLevel > 0.001 else { return CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - ry) }
+        return CGPoint(x: x.value + lie.dx, y: metrics.ground + hop.value + jumpY + lie.dy)
     }
 
     /// Horizontal position inside the panel (scene points, docked-right orientation).
@@ -293,8 +329,13 @@ public final class CharacterSim {
     /// Hit test against the body ellipse (scene coordinates).
     public func contains(_ p: CGPoint) -> Bool {
         let c = bodyCenter
-        let dx = (Double(p.x) - Double(c.x)) / metrics.radiusX
-        let dy = (Double(p.y) - Double(c.y)) / metrics.radiusY
+        var px = Double(p.x) - Double(c.x), py = Double(p.y) - Double(c.y)
+        if lieLevel > 0.001 {                                   // into the turned body's own axes
+            let a = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: metrics.radiusY).angle
+            (px, py) = (px * cos(a) + py * sin(a), -px * sin(a) + py * cos(a))
+        }
+        let dx = px / metrics.radiusX
+        let dy = py / metrics.radiusY
         return dx * dx + dy * dy < 1.05 * 1.05
     }
 
@@ -307,6 +348,7 @@ public final class CharacterSim {
         m.sleeping = sleepLevel > 0.6
         m.carried = isCarried
         m.sad = isSad
+        m.slumped = lieLevel > 0.4
         if let a = act {
             let k = time - actStart
             m.cheering = a == .cheer && k < 1.7
@@ -500,6 +542,9 @@ public final class CharacterSim {
         sleepLevel += isAsleep ? dt / Self.fallAsleepDuration : -dt / Self.wakeUpDuration
         sleepLevel = min(1, max(0, sleepLevel))
         let drowsy = sleepLevel > 0.05
+        lieLevel = min(1, max(0, lieLevel + (slumped ? dt / Self.lieDown : -dt / Self.getUp)))
+        let lying = Lying.eased(lieLevel)
+        if slumped { currentAntic = nil }
 
         updateHover(pointer: pointer, center: center)
 
@@ -551,14 +596,20 @@ public final class CharacterSim {
             lookY.target = idleLook.y + sag * 0.3                       // tired: the gaze drops a little (6a)
             if m.called || listening { lookX.target = -0.2; lookY.target = 0.05 }
         }
+        if lying > 0 { lookY.target += lying * 0.25 }
 
         stepAct(t: t)
 
         // Antics "по настроению". At night (and when tired) yawns win far more often. Not during acts; fewer when tired.
         if t >= anticUntil { currentAntic = nil }
-        if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && t > nextAntic {
+        if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && lieLevel == 0 && t > nextAntic {
             beginAntic(pickAntic(), at: t)
             nextAntic = t + rng.uniform(8, 15) * (1 + sag * 0.8)
+        }
+        // Lying: a heavy sigh now and then (6b).
+        if lieLevel >= 1, t > nextSigh {
+            if nextSigh > 0 { squash.impulse(-3.2); leaf.impulse(-2) }
+            nextSigh = t + rng.uniform(5, 8)
         }
         if currentAntic == .wiggle {
             let k = t - anticStart
@@ -568,7 +619,7 @@ public final class CharacterSim {
         tilt.target = min(Self.maxTilt, max(-Self.maxTilt, tilt.target))
 
         // Leaf: droops with fatigue and sleep, sways in a breeze, lags behind body motion (follow-through).
-        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (isSad ? 0.3 : 0)
+        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (isSad ? 0.3 : 0) + lying * 0.5
             + sin(t * 0.9 + phase) * 0.07 * (1 - sleepLevel * 0.6) + sin(t * 2.3) * 0.025
         if case .think = act { leaf.target += sin((t - actStart) * 2.4) * 0.3 }
         leaf.velocity += -x.velocity * 0.0022 - (hop.velocity + jumpVelocity) * 0.0009 - carry * 0.0012
@@ -802,7 +853,7 @@ public final class CharacterSim {
             hoverLostAt = nil
             if !isHovering {
                 isHovering = true
-                if !isAsleep { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"
+                if !isAsleep && !slumped { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"; lying, he does not
             }
         } else {
             loseHover()
@@ -830,11 +881,12 @@ public final class CharacterSim {
 
     public var pose: CharacterPose {
         let t = time
-        let period = 3.6 + fatigue * 1.8 + sleepLevel * 1.6
-        let breathing = sin(t * .pi * 2 / period + phase) * (1 + sleepLevel * 0.6)
+        let lying = Lying.eased(lieLevel)
+        let period = 3.6 + fatigue * 1.8 + sleepLevel * 1.6 + lying * 2.2
+        let breathing = sin(t * .pi * 2 / period + phase) * (1 + sleepLevel * 0.6 + lying * 1.0)   // slow and heavy
         let sag = sagLevel
         // Slice 6a: tiredness no longer closes the eyes — only sleep, blinks and yawns do.
-        var open = lid * (1 - sleepLevel)
+        var open = lid * (1 - sleepLevel) * (1 - lying * 0.5)          // lying: half-closed (6b)
         let m = mood
         if m.yawning { open = min(open, 0.1) }
 
@@ -875,6 +927,7 @@ public final class CharacterSim {
             p.confettiOrigin = confettiOrigin
         }
         p.passThrough = act == .hops
+        p.lying = lying
         p.mood = m
         p.calledAge = t - calledAt
         p.props = props

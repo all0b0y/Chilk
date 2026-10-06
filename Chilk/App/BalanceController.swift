@@ -49,7 +49,7 @@ final class BalanceController {
         }
     }
 
-    private enum Activity { case eyeGym, breathing, guided }
+    private enum Activity { case eyeGym, breathing, guided, shakeUp }
 
     /// Guided warm-up / walk in progress (decisions 2026-10-05).
     private struct GuidedRun {
@@ -78,9 +78,16 @@ final class BalanceController {
     /// Something of the balance holds Chilk at the edge right now: a break, a walk, a bubble of the ladder, the
     /// shade or the pause. The tray then leaves him there (decision 7).
     var isOccupied: Bool {
-        if activity != nil || walking || escalation.level != .none { return true }
+        if activity != nil || walking || escalation.level != .none || engine.slumped { return true }
         if let e = engine.state.episode, e.phase == .showing, e.stage >= 1 { return true }
         return false
+    }
+
+    /// «Лежит» (6b, decision 8): the ready line he answers with instead of a conversation; `nil` = he talks.
+    func refusal() -> String? {
+        guard engine.refusesToTalk else { return nil }
+        log("slumped: refused to talk")
+        return Lines.slumpRefusal
     }
 
     /// The stage of the request on screen (`nil` = none) — the dot on the tray icon.
@@ -94,6 +101,7 @@ final class BalanceController {
             pendingBreak = nil
             if Date().timeIntervalSince(at) < 300 { return startBreak(b) }
         }
+        if engine.slumped, !stageThreeOrMore, activity == nil { return showSlump() }   // «Помоги мне…» comes back
         let focusLine = focusEndedUnsaid
         focusEndedUnsaid = false
         if let prompt = engine.currentPrompt() {
@@ -136,10 +144,16 @@ final class BalanceController {
             MainActor.assumeIsolated { self?.tick() }
         }
         timer?.tolerance = 0.2
-        // Acceptance runs: CHILK_DEMO_DUE=stretch makes a need due 3 s after launch.
+        // CHILK_DEMO_DUE=stretch makes a need due 3 s after launch.
         if let raw = env["CHILK_DEMO_DUE"], let n = Need(rawValue: raw) {
             Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.makeDue(n) }
+            }
+        }
+        // CHILK_DEMO_SLUMP=1 (acceptance): «лежит» 3 s after launch.
+        if env["CHILK_DEMO_SLUMP"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.makeSlumped() }
             }
         }
         // CHILK_DEMO_FOCUS=<seconds>: focus mode 4 s after launch (the popover's path, any length ≥ 60 s).
@@ -181,7 +195,9 @@ final class BalanceController {
         syncEscalation()
         sim.fatigue = engine.leafFatigue
         sim.eyeStrain = engine.eyeStrain
-        if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(),
+        // He gets up to lead an exercise; otherwise he lies while every need is empty (6b).
+        sim.slumped = engine.slumped && activity == nil && guidedRun == nil
+        if let e = engine.state.episode, e.stage == 0, e.phase == .showing, activity == nil, !isBusy(), !engine.slumped,
            Date().timeIntervalSince(lastPantomime) > 25 {
             pantomime(e.need)
         }
@@ -218,12 +234,15 @@ final class BalanceController {
         if event != .nudge { cancelIntro() }
         switch event {
         case .hint(let n):
+            guard !engine.slumped else { return }                   // lying, he does not pantomime
             hideBubble()
             sim.standOut = .docked
             pantomime(n)
 
         case .ask(let n, let stage, let buttons, let again):
             guard activity == nil else { return }
+            if engine.slumped && stage < 3 { return }                // Strict counts on under him; 3–4 still show (6b)
+            if stage < 3, Date() < riseQuietUntil { return }          // «Ох… спасибо» first; `resume()` shows it after
             if stage == 1, !again {
                 // Soft / Strict start on the bubble; the need's pantomime is its intro (6a, decision 33).
                 hideBubble()
@@ -304,6 +323,21 @@ final class BalanceController {
         switch event {
         case .hint, .ask, .nudge:
             break
+
+        case .slumped:
+            log("slumped")
+            guard activity == nil, !stageThreeOrMore else { return }
+            showSlump()
+
+        case .roseUp:
+            log("rose up")
+            guard activity == nil else { return }                     // an exercise says its own words
+            if (lastSignals?.idle ?? 0) >= 60 || lastSignals?.locked == true {
+                returnLine = Lines.roseUp                           // got up by being away: say it when they are back
+                hideBubble()
+                return
+            }
+            riseAndThank()
 
         case .withdraw:
             guard activity == nil else { return }
@@ -656,8 +690,102 @@ final class BalanceController {
 
     func poked() {
         guard activity == nil else { return }
+        if engine.slumped, !stageThreeOrMore, buttonActions.isEmpty, engine.state.mode != .silent { return showSlump() }
         if introShow != nil { return finishIntro() }               // a click skips the intro
         apply(engine.pokedDuringHint())
+    }
+
+    // MARK: «Лежит» (slice 6b)
+
+    private var stageThreeOrMore: Bool {
+        engine.state.episode.map { $0.phase == .showing && $0.stage >= 3 } ?? false
+    }
+
+    /// «Помоги мне… сделай хоть что-нибудь» with «Попил» (if water is on) and «Встряхнуться». Silence: the pose only.
+    private func showSlump() {
+        cancelIntro()
+        hideBubble()
+        sim.stopAct()
+        sim.standOut = .docked
+        guard engine.state.mode != .silent else { return }
+        let water = !engine.config.needsOff.contains(.water)
+        var titles: [String] = [], actions: [() -> Void] = []
+        if water {
+            titles.append(Lines.slumpDrank)
+            actions.append { [weak self] in self?.slumpDrink() }
+        }
+        titles.append(Lines.slumpShake)
+        actions.append { [weak self] in self?.startShakeUp() }
+        sim.say(Lines.slumpHelp, buttons: titles)
+        buttonActions = actions
+    }
+
+    /// He gets up slowly and thanks the user; what waited (a request) comes back after.
+    private func riseAndThank(drinking: Bool = false) {
+        hideBubble()
+        sim.slumped = false
+        if drinking { sim.perform(.drink) }
+        sim.say(Lines.roseUp, duration: 3.5)
+        riseQuietUntil = Date().addingTimeInterval(3.7)
+        save()
+        settle(after: 3.5)
+        Timer.scheduledTimer(withTimeInterval: 3.8, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isBusy(), self.activity == nil else { return }
+                self.resume()
+            }
+        }
+    }
+
+    /// «Попил» in his bubble: water counts (the 20-minute rule still holds) and he gets up.
+    private func slumpDrink() {
+        let credit = engine.state.episode?.need == .water ? engine.handle(.done) : engine.tookRest(.water)
+        if credit.contains(.tooSoon(.water)) { return apply(credit) }   // «Ты же только что пил», he stays down
+        let rose = engine.updateSlump()
+        log("slumped: drank → \(rose)")
+        if rose.contains(.roseUp) { riseAndThank(drinking: true) } else { apply(credit + rose) }
+    }
+
+    /// «Встряхнуться» (decision 9): three moves at the edge, 20–30 s, no dark screen; he gets up, nothing is credited.
+    private func startShakeUp() {
+        guard activity == nil else { return }
+        activity = .shakeUp
+        hideBubble()
+        sim.slumped = false
+        sim.standOut = .peek
+        log("shake-up started")
+        let stepLength = 8.0 / guideScale
+        let started = Date()
+        shakeShownStep = -1
+        activityTimer?.invalidate()
+        activityTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.activity == .shakeUp else { return }
+                let k = Date().timeIntervalSince(started) / stepLength
+                let step = Int(k)
+                guard step < Lines.shakeSteps.count else { return self.finishShakeUp() }
+                if step != self.shakeShownStep {
+                    self.shakeShownStep = step
+                    self.sim.perform(.stretches)
+                    self.sim.say(Lines.shakeStep(Lines.shakeSteps[step], seconds: 8), duration: .infinity)
+                }
+                let left = max(1, Int(((Double(step) + 1 - k) * 8).rounded(.up)))
+                self.sim.updateBubble(Lines.shakeStep(Lines.shakeSteps[step], seconds: left))
+            }
+        }
+    }
+
+    private var shakeShownStep = -1
+    /// A request that comes due while he thanks the user for getting him up waits for `resume()` (6b).
+    private var riseQuietUntil = Date.distantPast
+
+    private func finishShakeUp() {
+        activityTimer?.invalidate()
+        activity = nil
+        sim.clearBubble()
+        let events = engine.shakeUp()
+        log("shake-up finished: \(events)")
+        riseAndThank()
     }
 
     private func backFromAway() {
@@ -948,6 +1076,12 @@ final class BalanceController {
     func makeDue(_ n: Need) {
         hideBubble()
         engine.makeDue(n)
+    }
+
+    /// «Проверка ▸ Лежит» (6b): every body need that is on becomes empty; the next tick lays him down.
+    func makeSlumped() {
+        hideBubble()
+        engine.makeSlumped()
     }
 
     func showPressure() {

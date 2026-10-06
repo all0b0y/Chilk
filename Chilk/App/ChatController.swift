@@ -36,6 +36,8 @@ final class ChatController: NSObject, NSWindowDelegate {
     var context: () -> String = { "" }
     /// Chilk is free at the edge for the «thinking» pose (no bubble, no break, not in the popover).
     var chilkFree: () -> Bool = { false }
+    /// «Лежит» (slice 6b): the ready line that answers instead of Codex. `nil` = a normal turn.
+    var refusal: () -> String? = { nil }
     var log: (String) -> Void = { _ in }
     /// A typed question is being answered: the balance waits, like for a conversation.
     private(set) var thinking = false
@@ -97,6 +99,18 @@ final class ChatController: NSObject, NSWindowDelegate {
             return toggleMic()
         }
         guard !conversation.voiceBusy else { model.error = Lines.chatVoiceBusy; return }
+        if let line = refusal() {
+            // Lying, he does not talk (decision 8): the pair goes into the chat, nothing goes to Codex.
+            model.draft = ""
+            model.error = nil
+            let plan = store.log.plan(picked: model.selected, liveThread: brain.liveThread)
+            let id = store.record(question: text, answer: line, via: .text, chips: [],
+                                  thread: brain.liveThread ?? "slumped-\(UUID().uuidString)", continuing: plan.continuing)
+            lastLiveChat = id
+            model.selected = id
+            log("chat: refused while lying (\(text.count) chars), no Codex turn")
+            return
+        }
         if let problem = brain.problem { model.error = problem; return }
         conversation.yieldToChat()
         stopMic(send: false)

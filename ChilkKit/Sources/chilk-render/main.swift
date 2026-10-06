@@ -95,6 +95,13 @@ func previews(into dir: URL) throws {
         ("24-speck-watch", sim({ $0.startAntic(.catchSpeck) }, seconds: 0.9), false),
         ("25-speck-chew", sim({ $0.startAntic(.catchSpeck) }, seconds: 1.9), false),
         ("26-strain-left-edge", sim({ $0.eyeStrain = 1; $0.standOut = .peek }, seconds: 5), true),
+        // Slice 6b
+        ("27-lying", sim({ $0.slumped = true }, seconds: 2, pointer: lookIn), false),
+        ("28-lying-help", sim({ $0.slumped = true; $0.say("Помоги мне… сделай хоть что-нибудь", buttons: ["Попил", "Встряхнуться"]) }, seconds: 2), false),
+        ("29-lying-left-edge", sim({ $0.slumped = true; $0.say("Сделаешь — поговорим потом", duration: 30) }, seconds: 2), true),
+        ("30-getting-up", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42)); s.slumped = true
+            for _ in 0..<120 { s.step(dt: 1.0 / 60, pointer: nil) }; s.slumped = false
+            for _ in 0..<45 { s.step(dt: 1.0 / 60, pointer: nil) }; return s.pose }(), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

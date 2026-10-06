@@ -112,6 +112,12 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     mirrored = false
     sim.startAntic(.catchSpeck); run(3)
     sim.eyeStrain = 0; sim.standOut = .docked; run(1.5)
+    // Slice 6b: lying on his side with the «help me» bubble, on both edges, then getting up.
+    sim.slumped = true; run(1.2)
+    sim.say("Помоги мне… сделай хоть что-нибудь", buttons: ["Попил", "Встряхнуться"]); run(1.5)
+    mirrored = true; run(1)
+    sim.clearBubble(); sim.slumped = false; run(2)
+    mirrored = false
     sim.fatigue = 0.37
     mirrored = false
     run(20)

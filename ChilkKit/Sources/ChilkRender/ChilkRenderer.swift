@@ -17,13 +17,16 @@ public enum ChilkRenderer {
         out.reserveCapacity(24)
         let mirror: CGAffineTransform = mirrored ? CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: m.width, ty: 0) : .identity
 
+        // «Лежит» (6b): turned onto his side about the feet and lifted back onto the floor; nothing changes standing.
+        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX * p.scaleX, ry: m.radiusY * p.scaleY)
         // Contact shadow: shrinks and fades while he is in the air.
         let lift = clamp(-p.hop / 70)
         out.append(Placement(slot: Slot.contactShadow, part: .contactShadow,
-                             transform: mirror.translatedBy(x: p.x, y: m.ground + 3).scaledBy(x: p.scaleX * (1 - lift * 0.35), y: 1 - lift * 0.35),
+                             transform: mirror.translatedBy(x: p.x + (p.lying > 0.001 ? lie.dx : 0), y: m.ground + 3)
+                                .scaledBy(x: p.scaleX * (1 - lift * 0.35), y: 1 - lift * 0.35),
                              alpha: 1 - lift * 0.6))
 
-        let figure = mirror.translatedBy(x: p.x, y: m.ground + p.hop).rotated(by: p.tilt)
+        let figure = mirror.translatedBy(x: p.x, y: m.ground + p.hop + lie.lift).rotated(by: lie.angle)
             .scaledBy(x: p.scaleX, y: p.scaleY).translatedBy(x: 0, y: -m.radiusY)
         figurePlacements(into: &out, pose: p, metrics: m, lineScale: 1, base: figure)
 
@@ -144,7 +147,7 @@ public enum ChilkRenderer {
             mouthPart = .mouthO
         } else if mood.focused {
             mouthPart = .mouthSmile(tired: 91, lw: lw)                  // a straight, busy line — not a smile
-        } else if mood.annoyed || mood.sad {
+        } else if mood.annoyed || mood.sad || mood.slumped {
             mouthPart = .mouthFrown(lw: lw)
         } else {
             let tired = clamp((p.fatigue - 0.45) / 0.55)
@@ -203,10 +206,13 @@ public enum ChilkRenderer {
 
         let layout = BubbleLayout.of(text, buttons: p.buttons, maxTextWidth: m.width - 20 - 28)
         let bw = layout.width, bh = layout.height
-        let top = m.ground + p.hop - m.radiusY * 2
-        var bx = min(max(p.x - bw - 14, 10), m.width - bw - 10)
-        let by = min(max(top - 46 - bh, 10), m.height)      // above the sprout, not over it
-        var tailX = min(p.x - 22, bx + bw - 18)
+        // Above the body as it stands — or lies (6b: lower and wider, its centre further from the edge).
+        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY)
+        let cx = p.x + (p.lying > 0.001 ? lie.dx : 0)
+        let top = m.ground + p.hop - (p.lying > 0.001 ? 2 * lie.halfHeight : m.radiusY * 2)
+        var bx = min(max(cx - bw - 14, 10), m.width - bw - 10)
+        let by = min(max(top - (46 - 28 * p.lying) - bh, 10), m.height)   // above the sprout (lying: it points sideways)
+        var tailX = min(cx - 22, bx + bw - 18)
         var dir = 1.0
         if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX; dir = -1 }
         let tailY = by + bh

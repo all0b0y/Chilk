@@ -79,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           balance: balance?.engine.brief())
         }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
+        conversation.refusal = { [weak balance] in balance?.refusal() }        // «лежит» (6b)
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
 
         // Tray → Tools (decision 9): switched-off tools leave new threads; folder kinds pause their folders.
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let chat = ChatController(store: chats, brain: brain, conversation: conversation, ears: ears, sim: edge.sim)
         chat.context = { [weak conversation] in conversation?.context() ?? "" }
         chat.log = { [weak balance] in balance?.log($0) }
+        chat.refusal = { [weak balance] in balance?.refusal() }
         self.chat = chat
         actions.memory = memory
         actions.onChip = { [weak chat] thread, chip in chat?.chip(chip, thread: thread) }
@@ -290,6 +292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Выходка: чешет листик"), #selector(anticScratch)))
         sub.addItem(item(String(localized: "Выходка: ловит пылинку"), #selector(anticSpeck)))
         sub.addItem(item(String(localized: "Ликует"), #selector(cheerNow)))
+        sub.addItem(item(String(localized: "Лежит"), #selector(slumpNow)))
         check.submenu = sub
         menu.addItem(check)
         menu.addItem(.separator())
@@ -317,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func anticScratch() { edge?.sim.startAntic(.scratchLeaf) }
     @objc private func anticSpeck() { edge?.sim.startAntic(.catchSpeck) }
     @objc private func cheerNow() { balance?.cheer() }
+    @objc private func slumpNow() { balance?.makeSlumped() }
 
     /// Registers the call hotkey (replacing the current one). `false` = the system refused it; nothing is registered.
     @discardableResult

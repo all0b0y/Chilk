@@ -34,7 +34,8 @@ final class SignalMonitor {
         return Signals(
             now: Date(),
             idle: idle,
-            locked: locked || CGDisplayIsAsleep(CGMainDisplayID()) != 0,
+            // CHILK_FAKE_FREE also ignores a locked / sleeping screen: demo runs while nobody is at the Mac (6b).
+            locked: !fakeFree && (locked || CGDisplayIsAsleep(CGMainDisplayID()) != 0),
             frontApp: front?.bundleIdentifier,
             category: rules().category(of: front?.bundleIdentifier, automatic: AppCatalog.category(of: front)),
             fullscreen: !fakeFree && isFullscreen(front),
