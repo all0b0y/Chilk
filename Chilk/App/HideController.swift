@@ -21,6 +21,8 @@ final class HideController {
     private var ticks = 0
 
     var log: (String) -> Void = { _ in }
+    /// `chilk_hide(true)` arrived: a voice conversation ends at once (6d).
+    var onHideAsked: () -> Void = {}
     /// Chilk is idle at home (no conversation, timer, bubble, break, popover): only then he peeks.
     var canPeek: () -> Bool = { false }
     /// He came out for good (tray, click, a roll, Codex): the request on screen, if any, shows again.
@@ -77,6 +79,8 @@ final class HideController {
         let changed = hidden != state.hidden
         pending = changed ? hidden : nil
         log("hide requested by Codex: \(hidden ? "hide" : "show")\(changed ? "" : " (already)")")
+        // By voice he hides at once, without an answer (acceptance 2026-10-06): the conversation ends, its end applies it.
+        if hidden, changed { DispatchQueue.main.async { [weak self] in self?.onHideAsked() } }
         return ["hidden": .bool(hidden), "changed": .bool(changed)]
     }
 

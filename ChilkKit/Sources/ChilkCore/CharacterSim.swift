@@ -1201,9 +1201,15 @@ public final class CharacterSim {
     private func stepHiding(t: Double) {
         let home = isHiddenHome
         if home && !wasHome {
-            diveAt = t
-            diveFrom = x.value
-            puffPending = true
+            if x.value - metrics.radiusX * 1.15 >= metrics.width {
+                // Already out of sight (back from the popover, where he ducked behind the edge): no dive, no «пф!».
+                diveAt = -99
+                puffPending = false
+            } else {
+                diveAt = t
+                diveFrom = x.value
+                puffPending = true
+            }
             currentAntic = nil
         } else if !home && wasHome {
             hop.impulse(-240)

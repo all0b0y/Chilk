@@ -423,6 +423,15 @@ final class Conversation {
         Task { await d?.cancel() }
     }
 
+    /// 6d (acceptance 2026-10-06): «спрячься» by voice — no answer and no follow-up window; he hides at once.
+    func endForHide() {
+        guard phase == .thinking, !closing else { return }
+        log("hide asked by voice: no answer, the conversation ends now")
+        answerTask?.cancel()
+        Task { await brain.interrupt() }
+        leave(saying: nil, after: 0.05)
+    }
+
     /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
     private func leave(saying line: String?, after seconds: Double) {
         settleQuestion(nil)

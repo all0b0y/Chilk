@@ -148,8 +148,10 @@ final class EdgeController: NSObject {
 
     private func frame(now: CFTimeInterval) {
         let cpuStart = stats == nil ? 0 : clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
-        let dt = min(1.0 / 30, max(0, now - (lastTimestamp ?? now)))
+        let gap = max(0, now - (lastTimestamp ?? now))
+        let dt = min(1.0 / 30, gap)
         lastTimestamp = now
+        if stats != nil, gap > 0 { stats?.gaps.append(gap) }
 
         if now - lastHopCheck >= 0.1, drag == nil, flight == nil, leap == nil {
             lastHopCheck = now
@@ -202,6 +204,7 @@ final class EdgeController: NSObject {
                 : CAFrameRateRange(minimum: min(10, idle), maximum: idle, preferred: idle)
             if driverTimer != nil { restartTimer(fps: busy ? 60 : idleFPS) }
             lastBusy = busy
+            stats?.switches += 1
         }
         if stats != nil { record(now: now, cpu: clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuStart) }
     }
@@ -231,6 +234,11 @@ final class EdgeController: NSObject {
         var frames = 0
         var cpuNanos: UInt64 = 0
         var reasons: [String: Int] = [:]
+        /// Frame pacing: raw intervals between frames, and how often the 60 / idle rate was switched.
+        var gaps: [Double] = []
+        var switches = 0
+        var lastProps = ""
+        var propChanges: [String] = []
     }
 
     private lazy var stats: Stats? = env["CHILK_DEBUG"] != nil ? Stats() : nil
@@ -239,22 +247,34 @@ final class EdgeController: NSObject {
         guard var s = stats else { return }
         s.frames += 1
         s.cpuNanos += cpu
+        let props = sim.props.map(\.rawValue).sorted().joined(separator: "+")
+        if props != s.lastProps { s.propChanges.append(props.isEmpty ? "-" : props); s.lastProps = props }
         s.reasons[sim.busyReason ?? (drag != nil ? "drag" : (abs(originX.velocity) > 2 || abs(originY.velocity) > 2 ? "panel moving" : "idle")), default: 0] += 1
         defer { stats = s }
         guard let since = s.since else { s.since = now; return }
         let span = now - since
         guard span >= 2 else { return }
         let reasons = s.reasons.sorted { $0.value > $1.value }.prefix(4).map { "\($0.key) \($0.value)" }.joined(separator: ", ")
-        let line = String(format: "%.0f s: frames %.1f/s, frame cpu %.3f ms, %@ | %@\n",
+        let g = s.gaps.sorted()
+        let pacing = g.isEmpty ? "" : String(format: " | gaps ms min %.1f med %.1f max %.1f, >40ms %d, >1/30 clamped %d, rate switches %d",
+                                             g[0] * 1000, g[g.count / 2] * 1000, g[g.count - 1] * 1000,
+                                             g.filter { $0 > 0.040 }.count, g.filter { $0 > 1.0 / 30 + 0.001 }.count, s.switches)
+        let line = String(format: "%.0f s: frames %.1f/s, frame cpu %.3f ms, %@ | %@%@\n",
                           now, Double(s.frames) / span, Double(s.cpuNanos) / Double(max(1, s.frames)) / 1e6,
-                          view.isVector ? "vector" : "rig", reasons)
+                          view.isVector ? "vector" : "rig", reasons, pacing)
         if let path = env["CHILK_DEBUG"], path.hasPrefix("/"),
            let h = FileHandle(forWritingAtPath: path) ?? (FileManager.default.createFile(atPath: path, contents: nil) ? FileHandle(forWritingAtPath: path) : nil) {
             h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
         } else {
             NSLog("chilk %@", line)
         }
-        s = Stats(since: now)
+        if !s.propChanges.isEmpty {
+            let changes = "  props: \(s.propChanges.prefix(12).joined(separator: " → ")) (\(s.propChanges.count))\n"
+            if let path = env["CHILK_DEBUG"], let h = FileHandle(forWritingAtPath: path) {
+                h.seekToEndOfFile(); h.write(Data(changes.utf8)); try? h.close()
+            }
+        }
+        s = Stats(since: now, lastProps: s.lastProps)
     }
 
     // MARK: Mouse (only reaches us over the body)

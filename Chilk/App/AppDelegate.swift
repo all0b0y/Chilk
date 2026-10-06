@@ -201,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return s.inCall || s.video
         }
         self.disco = disco
+        hide.onHideAsked = { [weak conversation] in conversation?.endForHide() }
         hide.canPeek = { [weak tray, weak chat, weak edge] in
             (tray?.isFree() ?? false) && !(tray?.holdsChilk ?? true) && !(chat?.thinking ?? true) && edge?.sim.act == nil
         }
