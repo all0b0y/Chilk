@@ -239,6 +239,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         let timers = (actions.executor?.entries ?? []).sorted { $0.deadline < $1.deadline }.prefix(3)
             .map { TrayModel.TimerRow(id: $0.id, title: $0.title, deadline: $0.deadline) }
         if timers != model.timers { model.timers = Array(timers) }
+        if balance.focusUntil != model.focusUntil { model.focusUntil = balance.focusUntil }
         let problem: TrayModel.Problem? = switch brain.state {
         case .signedOut: .codexSignedOut
         case .failed(let why): .codexDown(why)
@@ -271,6 +272,19 @@ final class Tray: NSObject, NSPopoverDelegate {
             Task { await brain.connect() }
         }
         model.restartEars = { [weak self] in self?.ears.restart() }
+        model.startFocus = { [weak self] hours in
+            guard let self else { return nil }
+            let outcome = self.balance.startFocus(seconds: Double(hours) * 3600)
+            self.log("tray focus \(hours) h \(outcome)")
+            switch outcome {
+            case .started:
+                self.closing { [weak self] in self?.balance.announceFocus() }
+                return nil
+            case .refused(let r): return r == .focusSpent ? Lines.focusSpent : Lines.softerRefused
+            case .notSaved: return Lines.focusNotSaved
+            }
+        }
+        model.endFocus = { [weak self] in self?.closing { [weak self] in self?.balance.endFocus() } }
     }
 
     func shutdown() {

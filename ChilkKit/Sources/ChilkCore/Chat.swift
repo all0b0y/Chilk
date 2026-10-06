@@ -8,6 +8,8 @@ import Foundation
 public struct ChatChip: Codable, Equatable, Sendable {
     public enum Kind: String, Codable, Sendable {
         case timer, cancelTimer, reminder, webSearch, findFiles, readFile, requestFolder, mode, water, takeBreak, remember
+        /// Slice 4b: a persuaded deferral, the focus mode on, the focus ended early.
+        case deferRequest, focus, endFocus
     }
     public var kind: Kind
     /// What it was about: a timer's title, a file's name, a mode, a break — never what a file or page said.

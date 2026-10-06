@@ -31,6 +31,11 @@ public enum ChilkAction: Equatable, Sendable {
     case takeBreak(ChilkBreak)
     /// Slice 5b, decision 17: one short fact for Chilk's memory; `asked` = the user asked («запомни…»).
     case remember(fact: String, asked: Bool)
+    /// Slice 4b: persuasion — defer the request on screen (Codex chose 15/30/60; the engine may cut it).
+    case deferRequest(minutes: Int)
+    /// Slice 4b: focus mode for `minutes` from now (the engine cuts it to 3 h / today's rest), or end it early.
+    case focus(minutes: Int)
+    case endFocus
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -73,6 +78,11 @@ public enum ChilkToolCatalog {
             tool("chilk_walk", "Only when the user asks: a 15-minute walk — Chilk in a hat in the middle of a dark screen with a countdown and an idea; the user can stop it. Starts after your short reply.", [:]),
             tool("chilk_remember", "Remember ONE short lasting fact about the user for future conversations (preferences, people, pets, routines, how they like to be helped), written in Russian in the third person, e.g. «пьёт чай без сахара». asked=true when the user asked («запомни…»); asked=false only when you notice something clearly important and lasting on your own — then do it rarely. Never secrets: passwords, tokens, keys, PINs, card or document numbers. Result: added / duplicate (already known) / refused with a reason (memory_full, looks_secret, too_long).",
                  ["fact": ["type": "string", "minLength": 1, "maxLength": 200], "asked": ["type": "boolean"]]),
+            tool("chilk_defer", "Persuasion: the user asks to postpone Chilk's CURRENT request (see «на экране просьба» in [контекст]) and gives a reason. Judge the reason first: a concrete matter with a time (a call in 10 minutes, a deadline at 15:00, finishing a release) — as long as it needs; vague (busy, later, don't want) — call with 15, or refuse with a joke (then do not call). Only this call lets the user off: without it the request stays, so never say you let them off unless it succeeded. minutes: 15, 30 or 60. Result minutes = what Chilk granted (each next persuasion of the same request today gets less) and back = when the request returns, more insistent. Refused: nothing_to_defer (no request now), pause_in_progress (only the emergency exit on the pause), limit_reached (this request was persuaded already or its deferrals are spent; snoozeButtonLeft = the «Через 10 мин» button still works, else only a break helps).",
+                 ["minutes": ["type": "integer", "enum": [15, 30, 60]]]),
+            tool("chilk_focus", "Focus mode, only on the user's request («важная работа до 18:00», «фокус на 2 часа», «не трогай меня час»): until it ends Chilk only shows and asks (stages 0–1), never insists, dims or pauses; afterwards everything that piled up comes back at once, more insistently. minutes from now (for «до 18:00» compute from the time in [контекст]). At most 3 h at a time and 4 h a day: shortened=true means less was granted — say until what time. A new focus replaces the running one. Refused: escalation_in_progress (not while Chilk dims or pauses the screen), focus_spent_today.",
+                 ["minutes": ["type": "integer", "minimum": 1, "maximum": 720]]),
+            tool("chilk_end_focus", "End the focus mode early, only on the user's request. ended=false: there was no focus.", [:]),
         ]
     }()
 
@@ -222,6 +232,17 @@ public enum ChilkToolCatalog {
             guard Set(fields.keys) == ["minutes"], case .number(let m) = fields["minutes"], m == 1 || m == 3
             else { throw ToolError.invalidArguments }
             return .takeBreak(.breathe(minutes: Int(m)))
+        case "chilk_defer":
+            guard Set(fields.keys) == ["minutes"], case .number(let m) = fields["minutes"], [15.0, 30, 60].contains(m)
+            else { throw ToolError.invalidArguments }
+            return .deferRequest(minutes: Int(m))
+        case "chilk_focus":
+            guard Set(fields.keys) == ["minutes"], case .number(let m) = fields["minutes"], m.isFinite,
+                  m.rounded(.towardZero) == m, m >= 1, m <= 720 else { throw ToolError.invalidArguments }
+            return .focus(minutes: Int(m))
+        case "chilk_end_focus":
+            guard fields.isEmpty else { throw ToolError.invalidArguments }
+            return .endFocus
         case "chilk_mode":
             guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
                   let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }

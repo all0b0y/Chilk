@@ -29,6 +29,21 @@ extension Lines {
     static let statOff = String(localized: "выкл")
     static let softerRefused = String(localized: "Сейчас нельзя — сначала отдохни или экстренный выход")
 
+    // Slice 4b: the focus mode in the popover.
+    static let focusMenu = String(localized: "Фокус…")
+    static func focusRow(_ until: String) -> String { String(localized: "Фокус до \(until)") }
+    static let focusEnd = String(localized: "Закончить")
+    static func focusHours(_ h: Int) -> String {
+        switch h {
+        case 1: String(localized: "1 час")
+        case 2: String(localized: "2 часа")
+        default: String(localized: "3 часа")
+        }
+    }
+    static let focusNotSaved = String(localized: "Не получилось сохранить — фокус не включён")
+    static let focusSpent = String(localized: "Фокус на сегодня кончился — 4 часа уже были")
+    static let focusHelp = String(localized: "До конца фокуса Чилк только напоминает, не настаивает. Потом всё набравшееся вернётся настойчивее")
+
     static func abilityName(_ a: ChilkAbility) -> String {
         switch a {
         case .webSearch: String(localized: "Поиск в интернете")

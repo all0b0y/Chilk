@@ -89,7 +89,17 @@ final class BalanceController {
             pendingBreak = nil
             if Date().timeIntervalSince(at) < 300 { return startBreak(b) }
         }
-        if let prompt = engine.currentPrompt() { apply(prompt) }
+        let focusLine = focusEndedUnsaid
+        focusEndedUnsaid = false
+        if let prompt = engine.currentPrompt() {
+            apply(prompt)
+        } else if focusLine {
+            apply(.focusEnded)
+        } else if engine.state.episode == nil, activity == nil, !walking {
+            // Persuaded during a chat turn: the request's bubble and props are still up (events were held back).
+            if !buttonActions.isEmpty { hideBubble(); sim.standOut = .docked }
+            tidyProps()
+        }
     }
 
     /// Minutes since the last real stretch break — the only activity fact sent to Codex (В24).
@@ -125,6 +135,14 @@ final class BalanceController {
         if let raw = env["CHILK_DEMO_DUE"], let n = Need(rawValue: raw) {
             Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.makeDue(n) }
+            }
+        }
+        // CHILK_DEMO_FOCUS=<seconds>: focus mode 4 s after launch (the popover's path, any length ≥ 60 s).
+        if let seconds = env["CHILK_DEMO_FOCUS"].flatMap(Double.init) {
+            Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    if case .started = self?.startFocus(seconds: seconds) { self?.announceFocus() }
+                }
             }
         }
         // CHILK_DEMO_GUIDE=warmup|walk: a guided break 5 s after launch; CHILK_DEMO_GUIDE_STOP=<s>: «Прервать».
@@ -171,12 +189,24 @@ final class BalanceController {
     }
 
     private func apply(_ events: [BalanceEvent]) {
-        for event in events { apply(event) }
+        // The end of a focus with a request on screen: «Фокус закончился…» first, the request a moment later.
+        guard events.contains(.focusEnded), !isBusy() else {
+            for event in events { apply(event) }
+            return
+        }
+        for event in events { if case .ask = event { continue } else { apply(event) } }
+        Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.isBusy() else { return }        // a new conversation resumes it itself
+                self.resume()
+            }
+        }
     }
 
     private func apply(_ event: BalanceEvent) {
         if isBusy() {
             if case .nudge = event { onNudge() }
+            if event == .focusEnded { focusEndedUnsaid = true }     // said after the conversation
             return
         }
         switch event {
@@ -298,6 +328,10 @@ final class BalanceController {
             guard activity == nil, !sim.isTalking, !sim.isAsleep else { return }
             sim.say(Lines.jokes.randomElement()!, duration: 5)
             if Bool.random() { sim.perform(.wave) }
+
+        case .focusEnded:
+            guard activity == nil else { return }
+            sim.say(Lines.focusEnded.randomElement()!, duration: 4)
         }
     }
 
@@ -404,6 +438,104 @@ final class BalanceController {
             log("mode \(m.rawValue) refused")
             return false
         }
+    }
+
+    // MARK: Persuasion and focus (slice 4b, SPEC «Уговоры и фокус (В14)»)
+
+    var focusUntil: Date? { engine.state.focusUntil }
+    /// The focus ended while a conversation had the stage: its line comes after it (unless a request speaks first).
+    private var focusEndedUnsaid = false
+
+    private static func clock(_ d: Date) -> String { d.formatted(date: .omitted, time: .shortened) }
+    private static func iso(_ d: Date) -> String {
+        ISO8601DateFormatter.string(from: d, timeZone: .current, formatOptions: [.withInternetDateTime])
+    }
+
+    /// `chilk_defer`: Codex judged the reason, the engine holds the frame. The conversation owns the stage meanwhile.
+    func persuade(minutes: Int) -> JSON {
+        let need = engine.state.episode?.need
+        do {
+            let events = try engine.committing(Self.write) { try engine.persuade(minutes: minutes) }
+            lastSave = Date()
+            var granted = minutes
+            for case .deferred(_, let m) in events { granted = m }
+            log("persuaded \(need?.rawValue ?? "-") \(granted) min (asked \(minutes))")   // the reason stays out of logs
+            apply(events)
+            syncEscalation()
+            let back = Date().addingTimeInterval(Double(granted) * 60 / max(engine.config.timeScale, 1e-6))   // engine clock
+            return ["deferred": true, "need": .string(need?.rawValue ?? ""), "minutes": .number(Double(granted)),
+                    "cut": .bool(granted < minutes), "back": .string(Self.iso(back))]
+        } catch {
+            guard let refusal = error as? BalanceRefusal else {
+                log("persuasion not saved")
+                return ["deferred": false, "refused": "not_saved"]
+            }
+            let code = switch refusal {
+            case .nothingToDefer: "nothing_to_defer"
+            case .pauseInProgress: "pause_in_progress"
+            default: "limit_reached"
+            }
+            log("persuasion refused \(code)")
+            let snooze = engine.state.episode.map { engine.buttons(for: $0.need, stage: $0.stage).contains(.snooze) } ?? false
+            return ["deferred": false, "refused": .string(code), "snoozeButtonLeft": .bool(snooze)]
+        }
+    }
+
+    enum FocusOutcome: Equatable {
+        case started(until: Date, shortened: Bool)
+        case refused(BalanceRefusal)
+        case notSaved
+    }
+
+    /// The popover «Фокус…», `chilk_focus` and the acceptance hook. Says nothing itself: see `announceFocus`.
+    @discardableResult
+    func startFocus(seconds: TimeInterval) -> FocusOutcome {
+        do {
+            let start = try engine.committing(Self.write) { try engine.startFocus(seconds: seconds, now: Date()) }
+            lastSave = Date()
+            log("focus until \(Self.clock(start.until)) (asked \(Int(seconds / 60)) min\(start.shortened ? ", shortened" : ""))")
+            apply(start.events)
+            syncEscalation()
+            return .started(until: start.until, shortened: start.shortened)
+        } catch {
+            guard let refusal = error as? BalanceRefusal else {
+                log("focus not saved")
+                return .notSaved
+            }
+            log("focus refused \(refusal)")
+            return .refused(refusal)
+        }
+    }
+
+    /// «Фокус до 18:00…» at the edge, unless something else has the stage.
+    func announceFocus() {
+        guard let until = engine.state.focusUntil, !isBusy(), activity == nil, engine.state.episode?.phase != .showing else { return }
+        sim.say(Lines.focusOn(until: Self.clock(until)), duration: 3.5)
+    }
+
+    /// `chilk_focus`: the conversation says it.
+    func focusFromConversation(minutes: Int) -> JSON {
+        switch startFocus(seconds: Double(minutes) * 60) {
+        case .started(let until, let shortened):
+            return ["focus": true, "until": .string(Self.iso(until)), "untilLocal": .string(Self.clock(until)),
+                    "minutes": .number((until.timeIntervalSinceNow / 60).rounded()), "shortened": .bool(shortened)]
+        case .refused(let r):
+            return ["focus": false, "refused": .string(r == .focusSpent ? "focus_spent_today" : "escalation_in_progress")]
+        case .notSaved:
+            return ["focus": false, "refused": "not_saved"]
+        }
+    }
+
+    /// «Закончить» / `chilk_end_focus`: what piled up comes back at «настаивает» right away. `false` = no focus.
+    @discardableResult
+    func endFocus() -> Bool {
+        let events = engine.endFocus(now: Date())
+        guard !events.isEmpty else { return false }
+        save()
+        log("focus ended early")
+        apply(events)
+        syncEscalation()
+        return true
     }
 
     private func emergencyExit(reason: String, minutes: Int, held: Bool) -> Bool {

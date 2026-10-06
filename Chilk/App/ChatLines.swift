@@ -68,6 +68,12 @@ extension Lines {
             default: String(localized: "Перерыв")
             }
         case .remember: String(localized: "Запомнил")
+        case .deferRequest:
+            if let m = c.minutes, let need = Need(rawValue: s) { String(localized: "Отложил «\(requestName(need))» · \(m) мин") }
+            else { String(localized: "Отсрочка") }
+        case .focus:
+            if let at = c.at { String(localized: "Фокус до \(at.formatted(date: .omitted, time: .shortened))") } else { String(localized: "Фокус") }
+        case .endFocus: c.failed ? String(localized: "Закончить фокус") : String(localized: "Фокус закончен")
         }
         return c.failed ? String(localized: "\(title) — не вышло") : title
     }
@@ -85,6 +91,8 @@ extension Lines {
         case .water: "drop"
         case .takeBreak: "figure.cooldown"
         case .remember: "brain"
+        case .deferRequest: "clock.arrow.circlepath"
+        case .focus, .endFocus: "scope"
         }
     }
 

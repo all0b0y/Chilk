@@ -60,6 +60,12 @@ final class Actions {
                         : ["mode": .string(balance.mode.rawValue), "changed": false, "refused": "escalation_in_progress"]
                 }, breaks: { [weak balance] b in
                     balance?.queueBreak(b) ?? ["willStart": false]
+                }, persuade: { [weak balance] m in
+                    balance?.persuade(minutes: m) ?? ["deferred": false]
+                }, focus: { [weak balance] m in
+                    balance?.focusFromConversation(minutes: m) ?? ["focus": false]
+                }, endFocus: { [weak balance] in
+                    ["ended": .bool(balance?.endFocus() ?? false)]
                 })
         } catch {
             executor = nil

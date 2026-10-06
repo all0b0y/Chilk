@@ -32,7 +32,8 @@ extension Lines {
     static let no = String(localized: "Нет")
 
     /// [контекст] for Codex: only time, sitting time and the name the user gave him (В24), nothing about apps or windows.
-    static func context(sittingMinutes: Int, name: String? = nil, now: Date = Date()) -> String {
-        VoiceContext.text(sittingMinutes: sittingMinutes, now: now, name: name)
+    /// Slice 4b: plus the request on screen, its limits and the focus (`BalanceEngine.brief`), so Codex can judge.
+    static func context(sittingMinutes: Int, name: String? = nil, balance: BalanceBrief? = nil, now: Date = Date()) -> String {
+        VoiceContext.text(sittingMinutes: sittingMinutes, now: now, name: name, balance: balance)
     }
 }

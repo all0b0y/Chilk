@@ -24,8 +24,10 @@ final class TrayModel {
     var heroHere = false
     var timers: [TimerRow] = []
     var problem: Problem?
-    /// The last refusal of a softer mode («договор с собой»), shown under the card for a few seconds.
+    /// The last refusal of a softer mode («договор с собой») or of a focus, shown under the card for a few seconds.
     var refusal: String?
+    /// Focus mode until (slice 4b).
+    var focusUntil: Date?
     /// The Tools page (shared with the main window's «Инструменты»).
     let tools: ToolsModel
     var now = Date()
@@ -47,6 +49,13 @@ final class TrayModel {
     var openSettings: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
+    /// «Фокус…» → 1 / 2 / 3 h; the answer is a refusal line, `nil` = started.
+    var startFocus: (Int) -> String? = { _ in nil }
+    var endFocus: () -> Void = {}
+
+    func chooseFocus(hours: Int) {
+        refusal = startFocus(hours)
+    }
 
     func chooseMode(_ m: BalanceMode) {
         if setMode(m) {
@@ -86,6 +95,7 @@ struct TrayView: View {
                 Label(refusal, systemImage: "hand.raised").font(.callout).foregroundStyle(.secondary)
             }
             breaks
+            focusRow
             if !model.timers.isEmpty { timers }
             if let problem = model.problem { problemLine(problem) }
             Divider()
@@ -164,6 +174,33 @@ struct TrayView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
+    }
+
+    /// Slice 4b: «Фокус…» (1 / 2 / 3 h), or «Фокус до 18:00 · Закончить» while it runs.
+    private var focusRow: some View {
+        HStack(spacing: 6) {
+            if let until = model.focusUntil {
+                Image(systemName: "scope").foregroundStyle(Self.peach)
+                Text(Lines.focusRow(until.formatted(date: .omitted, time: .shortened))).font(.callout)
+                Spacer(minLength: 4)
+                Button(Lines.focusEnd) { model.endFocus() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            } else {
+                Menu {
+                    ForEach([1, 2, 3], id: \.self) { h in
+                        Button(Lines.focusHours(h)) { model.chooseFocus(hours: h) }
+                    }
+                } label: {
+                    Label(Lines.focusMenu, systemImage: "scope")
+                }
+                .menuStyle(.button)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+            }
+        }
+        .help(Lines.focusHelp)
     }
 
     private var timers: some View {

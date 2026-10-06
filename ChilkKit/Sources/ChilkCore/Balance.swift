@@ -50,6 +50,14 @@ public enum BalanceRefusal: Error, Equatable, Sendable {
     case badDuration
     /// No exits left: the button must be held for `BalanceConfig.emergencyHold` seconds.
     case holdRequired
+    /// Persuasion (slice 4b): no request to defer.
+    case nothingToDefer
+    /// Persuasion on the pause: only the emergency exit leaves it.
+    case pauseInProgress
+    /// The request's deferrals are spent, or its «Я занят» is used: only a break helps.
+    case deferralsSpent
+    /// Today's focus time (`BalanceConfig.focusPerDay`) is spent.
+    case focusSpent
 }
 
 /// One look at the user's situation, taken about once a second (all without extra permissions, spike 001).
@@ -116,6 +124,8 @@ public enum BalanceEvent: Equatable, Sendable {
     case released(Need, minutes: Int)
     /// Mood channel: time for a joke or a bigger antic.
     case mood
+    /// Focus mode is over (its time is up or the user ended it): what piled up comes back at «настаивает».
+    case focusEnded
 }
 
 /// Starting values (В11, В12, В17); everything is tunable later in settings.
@@ -161,6 +171,11 @@ public struct BalanceConfig: Sendable, Equatable {
     public var timeScale = 1.0
     /// Needs switched off in Settings (slice 5c): no pressure, no requests.
     public var needsOff: Set<Need> = []
+    /// Focus mode (slice 4b, decision 3): at most this long at a time and per day.
+    public var focusMax: TimeInterval = 3 * 3600
+    public var focusPerDay: TimeInterval = 4 * 3600
+    /// Persuasion (slice 4b, decision 4): the longest deferral of the 1st, 2nd, 3rd+ persuasion of a need per day.
+    public var persuasionMinutes = [60, 30, 15]
 
     public init() {}
 
@@ -242,6 +257,10 @@ public struct DayStats: Codable, Sendable, Equatable {
     public var exits: [EmergencyExit] = []
     /// «Конец дня» switched back on mid-day counts its budget from here, not from the morning (slice 5c).
     public var budgetFrom: TimeInterval = 0
+    /// Focus time granted today, in seconds (slice 4b); an early end gives the unused part back.
+    public var focus: TimeInterval = 0
+    /// Persuasions per need today (slice 4b): each next one may defer less.
+    public var persuaded: [Need: Int] = [:]
 
     public init(key: String) { self.key = key }
 }
@@ -280,6 +299,8 @@ public struct BalanceState: Codable, Sendable, Equatable {
     public var streak: TimeInterval = 0
     /// Settings → «Забота» (slice 5c). Kept with the engine's state, like the mode, so «договор с собой» has one owner.
     public var care = CareSettings()
+    /// Focus mode until this moment (slice 4b); survives a restart.
+    public var focusUntil: Date?
 }
 
 // Files written by older builds lack newer fields: every field falls back to its default instead of the whole
@@ -305,6 +326,7 @@ extension BalanceState {
         history = try field(.history, [])
         streak = try field(.streak, 0)
         care = (try? c.decodeIfPresent(CareSettings.self, forKey: .care)) ?? CareSettings()   // a bad care keeps the rest
+        focusUntil = (try? c.decodeIfPresent(Date.self, forKey: .focusUntil)) ?? nil
     }
 }
 
@@ -320,6 +342,8 @@ extension DayStats {
         busy = try c.decodeIfPresent(Int.self, forKey: .busy) ?? 0
         exits = try c.decodeIfPresent([EmergencyExit].self, forKey: .exits) ?? []
         budgetFrom = try c.decodeIfPresent(TimeInterval.self, forKey: .budgetFrom) ?? 0
+        focus = try c.decodeIfPresent(TimeInterval.self, forKey: .focus) ?? 0
+        persuaded = (try? c.decodeIfPresent([Need: Int].self, forKey: .persuaded)) ?? [:]
     }
 }
 
@@ -371,6 +395,34 @@ public final class BalanceEngine {
     /// «Договор с собой» (decision 20): while a request is on stage 3–4 nothing may soften care.
     public var settingsLocked: Bool { (state.episode?.stage ?? 0) >= 3 }
 
+    /// Focus mode is on (slice 4b): every request stays on stages 0–1 until `state.focusUntil`.
+    public var focusing: Bool { state.focusUntil != nil }
+
+    /// Focus time left for today, in seconds.
+    public var focusLeftToday: TimeInterval { max(0, config.focusPerDay - state.day.focus) }
+
+    /// The longest a persuasion may defer the request on screen now (slice 4b, decisions 2 and 4): the request's own
+    /// «Я занят» inside the shared deferral limit, and less with every persuasion of the same need today.
+    public func maxPersuasion() throws(BalanceRefusal) -> Int {
+        guard let e = state.episode else { throw .nothingToDefer }
+        guard e.stage < 4 else { throw .pauseInProgress }
+        guard let t = state.needs[e.need], !t.busyUsed, t.deferrals < config.maxDeferrals else { throw .deferralsSpent }
+        let done = state.day.persuaded[e.need] ?? 0
+        return config.persuasionMinutes[min(done, config.persuasionMinutes.count - 1)]
+    }
+
+    /// For Codex's [контекст] (slice 4b): the request on screen, its limits and the focus — aggregates only (В24).
+    public func brief() -> BalanceBrief {
+        var b = BalanceBrief(focusUntil: state.focusUntil, focusLeftMinutes: Int(focusLeftToday / 60))
+        guard let e = state.episode, let t = state.needs[e.need] else { return b }
+        b.need = e.need
+        b.stage = e.stage
+        b.deferralsLeft = max(0, config.maxDeferrals - t.deferrals)
+        b.persuadedToday = state.day.persuaded[e.need] ?? 0
+        b.maxMinutes = try? maxPersuasion()
+        return b
+    }
+
     /// Stage 4 is the pause: no buttons, only the emergency exit (the app draws it).
     public func buttons(for n: Need, stage: Int = 1) -> [Reaction] {
         guard stage < 4 else { return [] }
@@ -400,6 +452,7 @@ public final class BalanceEngine {
         let hourAgo = state.clock - 3600
         state.starts.removeAll { $0 <= hourAgo }
         rollDay(s.now, into: &out)
+        if let until = state.focusUntil, s.now >= until { finishFocus(into: &out) }
         if guided != nil {                         // the screen is dark and Chilk leads: neither work nor rest
             state.lastFront = s.frontApp
             return out
@@ -514,6 +567,81 @@ public final class BalanceEngine {
         state.episode = nil
         state.day.busy += 1
         return [.deferred(e.need, minutes: minutes)]
+    }
+
+    /// Persuaded by voice or in the chat (slice 4b, decisions 1, 2, 4): Codex chose `minutes` (15 / 30 / 60), the engine
+    /// holds the frame — it is this request's «Я занят», cut down to `maxPersuasion()`.
+    public func persuade(minutes: Int) throws(BalanceRefusal) -> [BalanceEvent] {
+        let most = try maxPersuasion()
+        guard config.busyMinutes.contains(minutes), let n = state.episode?.need else { throw .badDuration }
+        let events = deferBusy(minutes: min(minutes, most))
+        guard !events.isEmpty else { throw .deferralsSpent }
+        state.day.persuaded[n, default: 0] += 1
+        return events
+    }
+
+    // MARK: Focus mode (slice 4b, decision 3)
+
+    /// What `startFocus` granted.
+    public struct FocusStart: Equatable, Sendable {
+        public var until: Date
+        /// Cut to `focusMax` at a time or to what is left of today's `focusPerDay`.
+        public var shortened: Bool
+        public var events: [BalanceEvent]
+    }
+
+    /// Until the focus ends every request stays on stages 0–1 (a stage above comes down at once); what piles up comes
+    /// back at «настаивает». Refused on stages 3–4 («договор с собой») and when today's focus time is spent. A new focus
+    /// replaces the running one; the running one's unused time is given back first.
+    public func startFocus(seconds: TimeInterval, now: Date) throws(BalanceRefusal) -> FocusStart {
+        guard !settingsLocked else { throw .softeningDuringEscalation }
+        guard seconds >= 60 else { throw .badDuration }
+        let unused = state.focusUntil.map { max(0, $0.timeIntervalSince(now)) } ?? 0
+        let used = max(0, state.day.focus - unused)
+        let left = max(0, config.focusPerDay - used)
+        guard left >= 60 else { throw .focusSpent }
+        let granted = min(seconds, config.focusMax, left)
+        state.day.focus = used + granted
+        state.focusUntil = now.addingTimeInterval(granted)
+        var events: [BalanceEvent] = []
+        if var e = state.episode, e.stage > cap(e.need) {
+            e.stage = cap(e.need)
+            e.workOnStage = 0
+            state.episode = e
+            if e.phase == .showing { events.append(stageEvent(e, again: false)) }
+        }
+        return FocusStart(until: now.addingTimeInterval(granted), shortened: granted < seconds, events: events)
+    }
+
+    /// «Закончить» early: the unused time goes back to today's allowance; the debt is the same as at the end.
+    public func endFocus(now: Date) -> [BalanceEvent] {
+        guard let until = state.focusUntil else { return [] }
+        let unused = max(0, until.timeIntervalSince(now))
+        state.day.focus = max(0, state.day.focus - unused)
+        var out: [BalanceEvent] = []
+        finishFocus(into: &out)
+        return out
+    }
+
+    /// The debt of the focus: needs that came due start at «настаивает», the request on screen goes there at once.
+    private func finishFocus(into out: inout [BalanceEvent]) {
+        state.focusUntil = nil
+        out.append(.focusEnded)
+        for n in Need.allCases where !config.needsOff.contains(n) {
+            let due = n == .endOfDay ? (state.lastNow.map(endOfDayIsDue) ?? false) : pressure(n) >= 1   // or past midnight
+            if due { state.needs[n]?.debt = true }
+        }
+        guard var e = state.episode, e.stage < min(2, cap(e.need)) else { return }
+        e.stage = min(2, cap(e.need))
+        e.workOnStage = 0
+        e.nextAfter = nextStageDelay()
+        e.sinceBounce = 0
+        state.episode = e
+        markPushed(e.need)
+        if e.phase == .showing {
+            out.append(stageEvent(e, again: false))
+            out.append(.nudge)
+        }
     }
 
     private func react(_ r: Reaction) -> [BalanceEvent] {
@@ -696,6 +824,20 @@ public final class BalanceEngine {
         return events
     }
 
+    /// Persuasion and focus from a conversation (slice 4b): the change counts only once it is on disk — otherwise
+    /// a restart would hand the limits back. On a failed write the state is as before and the error goes up.
+    public func committing<T>(_ write: (BalanceState) throws -> Void, _ body: () throws -> T) throws -> T {
+        let before = state
+        do {
+            let result = try body()
+            try write(state)
+            return result
+        } catch {
+            state = before
+            throw error
+        }
+    }
+
     /// The prompt to show again after something else had the stage (a conversation), if any.
     public func currentPrompt() -> BalanceEvent? {
         guard let e = state.episode, e.phase == .showing else { return nil }
@@ -735,7 +877,7 @@ public final class BalanceEngine {
 
     // MARK: Rules
 
-    private func cap(_ n: Need) -> Int { min(n.stageCap, state.mode.cap) }
+    private func cap(_ n: Need) -> Int { min(n.stageCap, state.mode.cap, focusing ? 1 : 4) }
 
     private func threshold(_ n: Need) -> TimeInterval {
         let r = config.minutes(n)
@@ -847,11 +989,21 @@ public final class BalanceEngine {
     private func rollDay(_ now: Date, into out: inout [BalanceEvent]) {
         let key = dayKey(now)
         guard key != state.day.key else { return }
+        // A focus running across the day boundary belongs to the new day from the boundary on (not from this tick:
+        // after a restart the first tick can come hours later), and leaves the old day's record.
+        var carried: TimeInterval = 0
+        if let until = state.focusUntil {
+            let hour = Double(config.dayStartsAtHour) * 3600
+            let boundary = calendar.startOfDay(for: now.addingTimeInterval(-hour)).addingTimeInterval(hour)
+            carried = max(0, until.timeIntervalSince(boundary))
+            state.day.focus = max(0, state.day.focus - carried)
+        }
         if !state.day.key.isEmpty {
             state.history.append(state.day)
             if state.history.count > 35 { state.history.removeFirst(state.history.count - 35) }
         }
         state.day = DayStats(key: key)
+        state.day.focus = carried
         state.forceEndOfDay = false
         state.needs[.endOfDay] = NeedTrack(threshold: 0)
         if state.episode?.need == .endOfDay {

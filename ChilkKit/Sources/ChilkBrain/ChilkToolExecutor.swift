@@ -10,6 +10,9 @@ public final class ChilkToolExecutor {
     private let water: () throws -> JSON
     private let mode: (BalanceMode) -> JSON
     private let breaks: (ChilkBreak) -> JSON
+    private let persuade: (Int) -> JSON
+    private let focus: (Int) -> JSON
+    private let endFocus: () -> JSON
     public var entries: [LocalTimers.Entry] { store.timers.entries }
     public var ready: [LocalTimers.Entry] { store.timers.ready }
 
@@ -17,9 +20,13 @@ public final class ChilkToolExecutor {
                 status: @escaping () -> JSON = { [:] },
                 water: @escaping () throws -> JSON = { ["credited": false] },
                 mode: @escaping (BalanceMode) -> JSON = { _ in ["changed": false] },
-                breaks: @escaping (ChilkBreak) -> JSON = { _ in ["started": false] }) throws {
+                breaks: @escaping (ChilkBreak) -> JSON = { _ in ["started": false] },
+                persuade: @escaping (Int) -> JSON = { _ in ["deferred": false] },
+                focus: @escaping (Int) -> JSON = { _ in ["focus": false] },
+                endFocus: @escaping () -> JSON = { ["ended": false] }) throws {
         store = try LocalTimerStore(file: file)
         self.now = now; self.status = status; self.water = water; self.mode = mode; self.breaks = breaks
+        self.persuade = persuade; self.focus = focus; self.endFocus = endFocus
     }
 
     public func execute(name: String, arguments: JSON) -> CodexToolResult {
@@ -35,6 +42,9 @@ public final class ChilkToolExecutor {
             case .water: return .ok(try water())
             case .mode(let m): return .ok(mode(m))
             case .takeBreak(let b): return .ok(breaks(b))
+            case .deferRequest(let m): return .ok(persuade(m))
+            case .focus(let m): return .ok(focus(m))
+            case .endFocus: return .ok(endFocus())
             case .timers: return .ok(["timers": .array(entries.map(Self.describe))])
             case .cancel(let id): return .ok(["cancelled": .bool(try store.cancel(id: id))])
             case .timer(let seconds, let title):

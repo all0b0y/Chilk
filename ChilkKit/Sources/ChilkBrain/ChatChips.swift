@@ -24,6 +24,13 @@ public enum ChatChips {
             chip.subject = path.split(separator: "/").last.map(String.init)
         case .mode(let mode):
             chip.subject = mode.rawValue
+        case .deferRequest(let asked):
+            guard !chip.failed else { break }
+            chip.subject = result.value["need"]?.string
+            if case .number(let granted)? = result.value["minutes"] { chip.minutes = Int(granted) } else { chip.minutes = asked }
+        case .focus:
+            guard !chip.failed else { break }
+            chip.at = result.value["until"]?.string.flatMap(ChilkToolCatalog.timestamp)
         case .takeBreak(let b):
             switch b {
             case .eyeGym: chip.subject = "eyeGym"
@@ -47,7 +54,8 @@ public enum ChatChips {
     /// A call that went through but did nothing: water not credited, nothing cancelled, a softer mode or a break refused.
     private static func didNothing(_ value: JSON) -> Bool {
         value["credited"]?.bool == false || value["cancelled"]?.bool == false || value["willStart"]?.bool == false
-            || value["refused"] != nil
+            || value["refused"] != nil || value["deferred"]?.bool == false || value["focus"]?.bool == false
+            || value["ended"]?.bool == false
     }
 
     private static func kind(of name: String) -> ChatChip.Kind? {
@@ -62,6 +70,9 @@ public enum ChatChips {
         case "chilk_water": .water
         case "chilk_eye_gym", "chilk_warmup", "chilk_walk", "chilk_breathe": .takeBreak
         case "chilk_remember": .remember
+        case "chilk_defer": .deferRequest
+        case "chilk_focus": .focus
+        case "chilk_end_focus": .endFocus
         default: nil
         }
     }

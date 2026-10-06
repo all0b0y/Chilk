@@ -205,6 +205,28 @@ extension Lines {
 
     static let tooSoonWater = String(localized: "Ты же только что пил 🙂 Засчитаю чуть позже")
 
+    // MARK: Persuasion and focus (slice 4b)
+
+    /// The request in a chat chip: «Отложил «размяться» · 30 мин».
+    static func requestName(_ n: Need) -> String {
+        switch n {
+        case .water: String(localized: "попить")
+        case .stretch: String(localized: "размяться")
+        case .eyes: String(localized: "глаза")
+        case .walk: String(localized: "прогулку")
+        case .endOfDay: String(localized: "конец дня")
+        }
+    }
+
+    static func focusOn(until: String) -> String {
+        String(localized: "Фокус до \(until). Не мешаю — только тихонько напомню")
+    }
+
+    static let focusEnded: [String] = [
+        String(localized: "Фокус всё. Теперь моя очередь — кое-что набралось"),
+        String(localized: "Фокус закончился. Я снова слежу всерьёз"),
+    ]
+
     static let jokes: [String] = [
         String(localized: "Знаешь, почему у меня листик? Я расту над собой 🌱"),
         String(localized: "Я сегодня пробежал 0 километров. Зато красиво сидел у края"),

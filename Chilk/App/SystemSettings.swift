@@ -21,7 +21,14 @@ enum LoginItem {
     static func set(_ on: Bool) -> String? {
         do {
             if on {
+                // The record keeps the bundle path it was registered from (a build folder before the app was copied
+                // to /Applications): register again from here once, or login starts the old copy.
+                let key = "loginItemPath", here = Bundle.main.bundlePath
+                if SMAppService.mainApp.status == .enabled, UserDefaults.standard.string(forKey: key) != here {
+                    try? SMAppService.mainApp.unregister()
+                }
                 if SMAppService.mainApp.status != .enabled { try SMAppService.mainApp.register() }
+                UserDefaults.standard.set(here, forKey: key)
             } else if SMAppService.mainApp.status != .notRegistered {
                 try SMAppService.mainApp.unregister()
             }

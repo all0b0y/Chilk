@@ -14,6 +14,9 @@ final class SignalMonitor {
     /// back at the keyboard (idle = CHILK_FAKE_IDLE or 0.5 s). Lets the timer-bubble rule run without a person.
     private let fakeAwayUntil = ProcessInfo.processInfo.environment["CHILK_FAKE_AWAY_UNTIL"].flatMap(Double.init)
     private let launched = ProcessInfo.processInfo.systemUptime
+    /// CHILK_FAKE_FREE=1 (demo/acceptance only): no call, full screen or video — a demo instance next to the user's own
+    /// Chilk (whose ears hold the microphone) and a full-screen terminal still sees a user free to be asked.
+    private let fakeFree = ProcessInfo.processInfo.environment["CHILK_FAKE_FREE"] != nil
     /// Settings → apps (slice 5c): the user's categories on top of the automatic work / leisure.
     var rules: () -> AppRules = { AppRules() }
 
@@ -34,9 +37,9 @@ final class SignalMonitor {
             locked: locked || CGDisplayIsAsleep(CGMainDisplayID()) != 0,
             frontApp: front?.bundleIdentifier,
             category: rules().category(of: front?.bundleIdentifier, automatic: AppCatalog.category(of: front)),
-            fullscreen: isFullscreen(front),
-            inCall: assertions.call || microphoneInUseByOthers() || cameraInUse(),
-            video: assertions.video
+            fullscreen: !fakeFree && isFullscreen(front),
+            inCall: !fakeFree && (assertions.call || microphoneInUseByOthers() || cameraInUse()),
+            video: !fakeFree && assertions.video
         )
     }
 

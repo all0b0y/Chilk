@@ -75,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.warmups = warmups
         let profile = self.profile
         conversation.context = { [weak balance] in
-            Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name)
+            Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name,
+                          balance: balance?.engine.brief())
         }
         conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
@@ -203,6 +204,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settings.update { $0.launchAtLogin = true }
                 balance.log("launch at login on by default")
             }
+        } else if settings.settings.launchAtLogin == true, env["CHILK_STATE_DIR"] == nil {
+            _ = LoginItem.set(true)                         // follows the app if it moved (build folder → /Applications)
         }
         if env["CHILK_DEMO_TALK"] != nil {
             Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation] _ in
