@@ -118,7 +118,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.canEmote = { [weak conversation, weak chat, weak balance] in
             !(balance?.engine.slumped ?? false) && ((conversation?.canEmote ?? false) || (chat?.canEmote ?? false))
         }
-        actions.playEmote = { [weak balance] e, strong in balance?.emote(e, strong: strong, from: "Codex") }
+        actions.playEmote = { [weak balance] e, strong in balance?.queueEmote(e, strong: strong) }
+        conversation.takeEmote = { [weak balance] in balance?.takeQueuedEmote() }
+        conversation.playEmote = { [weak balance] e, strong in balance?.playBesideBubble(e, strong: strong) }
+        chat.takeEmote = { [weak balance] in balance?.takeQueuedEmote() }
+        chat.playEmote = { [weak balance] e, strong in balance?.playBesideBubble(e, strong: strong) }
         brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
         brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }
         chat.onTurnEnd = { [weak balance, weak hide] in hide?.applyPending(); balance?.resume() }

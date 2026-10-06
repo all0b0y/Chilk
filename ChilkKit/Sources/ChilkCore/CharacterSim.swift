@@ -220,6 +220,8 @@ public struct CharacterPose: Sendable, Equatable {
     public var passThrough = false
     /// «Лежит» (slice 6b): 0 = standing, 1 = on his side (eased).
     public var lying: Double = 0
+    /// 6b «измотан» (0…1): the deepest sag, half-closed eyes, heavy sighs, a slow sway — standing, no flip.
+    public var exhausted: Double = 0
     // Slice 6c
     /// On his back while laughing hard: extra rotation about the feet (radians, + = towards the edge).
     public var roll: Double = 0
@@ -420,8 +422,9 @@ public final class CharacterSim {
     public var bodyCenter: CGPoint {
         let ry = metrics.radiusY * (1 - squash.value * 0.22)
         let r = roll
-        let lie = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: ry, roll: r)
-        guard Lying.turned(lying: lieLevel, roll: r) else { return CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - ry) }
+        // «Измотан» (acceptance 2026-10-06) stands: only the laugh's fall (`roll`) turns him.
+        let lie = Lying.frame(lying: 0, tilt: tilt.value, rx: metrics.radiusX, ry: ry, roll: r)
+        guard Lying.turned(lying: 0, roll: r) else { return CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - ry) }
         return CGPoint(x: x.value + lie.dx, y: metrics.ground + hop.value + jumpY + lie.dy)
     }
 
@@ -440,8 +443,8 @@ public final class CharacterSim {
     public func contains(_ p: CGPoint) -> Bool {
         let c = bodyCenter
         var px = Double(p.x) - Double(c.x), py = Double(p.y) - Double(c.y)
-        if Lying.turned(lying: lieLevel, roll: roll) {          // into the turned body's own axes
-            let a = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: metrics.radiusY,
+        if Lying.turned(lying: 0, roll: roll) {                 // into the turned body's own axes
+            let a = Lying.frame(lying: 0, tilt: tilt.value, rx: metrics.radiusX, ry: metrics.radiusY,
                                 roll: roll).angle
             (px, py) = (px * cos(a) + py * sin(a), -px * sin(a) + py * cos(a))
         }
@@ -672,14 +675,30 @@ public final class CharacterSim {
 
     /// Slice 6c (decision 11): an emotion Codex asked for, played at once.
     public func emote(_ e: Emotion, strong: Bool) {
+        perform(Self.emotionAct(e, strong: strong))
+    }
+
+    /// The scene of each emotion (its length is how long the words' bubble must stay for it).
+    public nonisolated static func emotionAct(_ e: Emotion, strong: Bool) -> Act {
         switch e {
-        case .cheer: perform(.cheer)
-        case .laugh: perform(.laugh(strong: strong))
-        case .clown: perform(.clown)
-        case .offended: perform(.sulk)
-        case .dizzy: perform(.spin)
-        case .sad: perform(.mope)
+        case .cheer: .cheer
+        case .laugh: .laugh(strong: strong)
+        case .clown: .clown
+        case .offended: .sulk
+        case .dizzy: .spin
+        case .sad: .mope
         }
+    }
+
+    /// How long a bubble takes to show all its words (they arrive one by one: 0.45 s, then 0.08 s each, 0.2 s fade).
+    public nonisolated static func revealTime(_ text: String) -> Double {
+        0.65 + Double(max(0, text.split(whereSeparator: \.isWhitespace).count - 1)) * 0.08
+    }
+
+    /// Seconds until every word of the current bubble is on screen (0 when none shows).
+    public var bubbleRevealLeft: Double {
+        guard isTalking else { return 0 }
+        return max(0, Self.revealTime(bubbleText ?? "") - (time - bubbleAt))
     }
 
     /// An emotion is playing (the voice answer waits for it; a second one is not started over it).
@@ -755,9 +774,10 @@ public final class CharacterSim {
         if let a = act, a.isEmotion || a.isDance, !m.carried {
             x.target = min(x.target, a == .laugh(strong: true) ? metrics.peekX - 40 : metrics.peekX)
         }
-        let sag = sagLevel
+        let sag = postureSag
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08 - sag * 0.07
+            + lying * sin(t * .pi * 2 / 5.5 + phase) * 0.07              // «измотан»: a slow, heavy sway
         stepHiding(t: t)
         stepNightcap(t: t)
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
@@ -1001,6 +1021,8 @@ public final class CharacterSim {
 
     /// Tiredness as posture (6a, decision 3): nothing until ~half-way, full sag when the sprout is wilted.
     private var sagLevel: Double { min(1, max(0, (fatigue - 0.45) / 0.55)) }
+    /// The pose's sag: fatigue's, or deeper when «измотан» (6b) — lower than the most tired he is otherwise.
+    private var postureSag: Double { max(sagLevel, Lying.eased(lieLevel) * 1.35) }
 
     private func startJump(height: Double, duration: Double, to toX: Double? = nil) {
         jump = (time, duration, height, x.value, toX)
@@ -1290,7 +1312,7 @@ public final class CharacterSim {
         let lying = Lying.eased(lieLevel)
         let period = 3.6 + fatigue * 1.8 + sleepLevel * 1.6 + lying * 2.2
         let breathing = sin(t * .pi * 2 / period + phase) * (1 + sleepLevel * 0.6 + lying * 1.0)   // slow and heavy
-        let sag = sagLevel
+        let sag = postureSag
         // Slice 6a: tiredness no longer closes the eyes — only sleep, blinks and yawns do.
         var open = lid * (1 - sleepLevel) * (1 - lying * 0.5)          // lying: half-closed (6b)
         let m = mood
@@ -1318,7 +1340,7 @@ public final class CharacterSim {
         p.eyeScale = eyeScale.value
         p.eyeOpen = open
         p.leafAngle = leaf.value - inflate * 0.15
-        p.fatigue = fatigue
+        p.fatigue = max(fatigue, Lying.eased(lieLevel))       // «измотан»: the sprout wilts all the way
         p.sleep = sleepLevel
         p.sag = sag
         p.eyeStrain = strainShown
@@ -1345,7 +1367,8 @@ public final class CharacterSim {
                 p.scaleX *= c < 0 ? min(-0.08, c) : max(0.08, c)
             }
         }
-        p.lying = lying
+        p.lying = 0                                                     // no flip on his side any more
+        p.exhausted = lying
         if let a = puffAt, t - a < Self.puffLife {
             p.puffAge = t - a
             p.puffOrigin = puffOriginPoint

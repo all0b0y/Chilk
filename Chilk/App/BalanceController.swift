@@ -939,6 +939,30 @@ final class BalanceController {
         sim.emote(e, strong: strong)
     }
 
+    /// A Codex emotion waits for the answer's words (acceptance 2026-10-06, decision 11 revised): the bubble
+    /// explains the reaction, so the scene plays 0.2 s after the words are all on screen, the bubble staying.
+    private var queuedEmote: (emotion: Emotion, strong: Bool)?
+
+    func queueEmote(_ e: Emotion, strong: Bool) {
+        queuedEmote = (e, strong)
+        log("emote \(e.rawValue)\(strong ? " strong" : "") queued: after the words (Codex)")
+    }
+
+    /// The queued emotion with its scene's length; taking it empties the queue (a failed turn drops it).
+    func takeQueuedEmote() -> QueuedEmote? {
+        guard let q = queuedEmote else { return nil }
+        queuedEmote = nil
+        return QueuedEmote(emotion: q.emotion, strong: q.strong,
+                           seconds: CharacterSim.emotionAct(q.emotion, strong: q.strong).duration)
+    }
+
+    /// Beside the answer's bubble: the bubble is not cleared.
+    func playBesideBubble(_ e: Emotion, strong: Bool) {
+        guard !engine.slumped else { return log("emote \(e.rawValue) dropped: exhausted") }
+        log("emote \(e.rawValue)\(strong ? " strong" : "") (Codex, after the words)")
+        sim.emote(e, strong: strong)
+    }
+
     /// «Проверка ▸ Эмоции» and `CHILK_DEMO_EMOTE`: `laugh`, `laughStrong`, `clown`, `offended`, `dizzy`, `sad`.
     func emoteForCheck(_ key: String) {
         guard activity == nil, !isBusy(), !engine.slumped, hideout?.isHidden != true else {

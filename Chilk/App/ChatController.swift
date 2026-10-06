@@ -45,6 +45,10 @@ final class ChatController: NSObject, NSWindowDelegate {
     private(set) var posing = false
 
     /// Codex may show an emotion now: Chilk still thinks at the edge (no bubble came up meanwhile).
+    /// A Codex emotion of this turn waits for the words (6c, revised at acceptance).
+    var takeEmote: () -> QueuedEmote? = { nil }
+    var playEmote: (Emotion, Bool) -> Void = { _, _ in }
+
     var canEmote: Bool {
         guard posing, thinking, !sim.isTalking, case .think = sim.act else { return false }
         return true
@@ -154,10 +158,22 @@ final class ChatController: NSObject, NSWindowDelegate {
                 model.pending = nil
                 model.selected = id
                 log("chat: answered «\(answer)»")
+                if let q = takeEmote() {
+                    // 6c (revised at acceptance): the answer in a bubble at the edge first — it explains the
+                    // reaction — then the emotion 0.2 s after the words are all there; the bubble stays meanwhile.
+                    let words = Dialogue.preview(answer).text
+                    if case .think = sim.act { sim.stopAct() }
+                    let reveal = CharacterSim.revealTime(words)
+                    sim.say(words, duration: reveal + 0.2 + q.seconds + Dialogue.readingTime(words.count))
+                    try? await Task.sleep(for: .seconds(reveal + 0.2))
+                    playEmote(q.emotion, q.strong)
+                    try? await Task.sleep(for: .seconds(q.seconds))
+                }
             } catch {
                 model.pending = nil
                 model.draft = text
                 model.error = brain.problem ?? Lines.chatFailed
+                _ = takeEmote()
                 log("chat: brain error \(error)")
             }
         }

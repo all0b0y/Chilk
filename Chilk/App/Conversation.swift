@@ -11,6 +11,9 @@ final class Conversation {
     private(set) var phase: DialoguePhase = .idle
     /// Busy until he is back at the edge (including the farewell being read).
     var isActive: Bool { phase != .idle || closing }
+    /// A Codex emotion of this turn waits for the words (6c, revised at acceptance): taken once the reply shows.
+    var takeEmote: () -> QueuedEmote? = { nil }
+    var playEmote: (Emotion, Bool) -> Void = { _, _ in }
     /// Called when the stage is free again (balance shows its prompt again).
     var onEnd: (() -> Void)?
     /// «Лежит» (slice 6b): a ready line instead of listening — no Codex. `nil` = he talks.
@@ -331,7 +334,6 @@ final class Conversation {
             }
         case .thinking:
             if question != nil { return }                          // the question stays until answered
-            if sim.isEmoting { return }                            // 6c: the reaction first, the words after it
             if !Dialogue.partialReply(answer.get().text).isEmpty {
                 phase = .answering
                 sim.stopAct()
@@ -390,10 +392,7 @@ final class Conversation {
                 let raw = try await brain.ask(ClockCheck.question(question, context: context(), channel: .voice) + question) { partial in
                     answer.set(partial)
                 }
-                guard !Task.isCancelled else { return }
-                // 6c: an emotion Codex showed plays to the end before the words appear.
-                while sim.isEmoting, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
-                guard !Task.isCancelled, phase == .thinking || phase == .answering else { return }
+                guard !Task.isCancelled, phase == .thinking || phase == .answering else { _ = takeEmote(); return }
                 let reply = Dialogue.parse(raw.text)
                 let text = Dialogue.plain(reply.reply)
                 turns += 1
@@ -402,6 +401,15 @@ final class Conversation {
                 phase = .answering
                 sim.stopAct()
                 showReply(text)
+                if let q = takeEmote() {
+                    // The words first — they explain the reaction — then the emotion 0.2 s after they are all on
+                    // screen; the bubble stays over him while it plays (acceptance 2026-10-06, decision 11 revised).
+                    try? await Task.sleep(for: .seconds(sim.bubbleRevealLeft + 0.2))
+                    guard !Task.isCancelled, phase == .answering else { return }
+                    playEmote(q.emotion, q.strong)
+                    try? await Task.sleep(for: .seconds(q.seconds))
+                    guard !Task.isCancelled, phase == .answering else { return }
+                }
                 if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
@@ -410,6 +418,7 @@ final class Conversation {
             } catch {
                 guard !Task.isCancelled, phase != .idle else { return }
                 log("brain error: \(error)")
+                _ = takeEmote()
                 leave(saying: Lines.brainFailed, after: 3.5)
             }
         }

@@ -204,30 +204,47 @@ struct SlumpCharacterTests {
         }
     }
 
-    @Test func heLiesOnHisSideAtTheEdgeAndGetsUpSlowly() {
+    @Test func heStandsExhaustedAtTheEdgeAndStraightensUpSlowly() {
+        // Acceptance 2026-10-06 (decision 8, variant A): «измотан» instead of lying — no flip on his side.
         let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 21))
         run(sim, seconds: 1)
         let standing = sim.bodyCenter
         sim.slumped = true
         run(sim, seconds: 1.5)
-        #expect(sim.pose.lying > 0.99 && sim.pose.mood.slumped)
+        #expect(sim.pose.exhausted > 0.99 && sim.pose.mood.slumped)
+        #expect(sim.pose.lying == 0 && sim.pose.roll == 0)            // standing, not turned
         let c = sim.bodyCenter
-        #expect(Double(c.x) < Double(standing.x) - 30)                // head away from the edge: he lies into the screen
+        #expect(abs(Double(c.x) - Double(standing.x)) < 8)            // at his place by the edge
         #expect(sim.contains(c))
-        #expect(!sim.contains(CGPoint(x: c.x, y: c.y - m.radiusX - 8)))   // lying, he is not as tall as standing
-        var antics = 0, maxOpen = 0.0
+        var antics = 0, maxOpen = 0.0, minTilt = 9.0, maxTilt = -9.0
         run(sim, seconds: 60) {
             if $0.currentAntic != nil { antics += 1 }
             maxOpen = max(maxOpen, $0.pose.eyeOpen)
+            minTilt = min(minTilt, $0.pose.tilt); maxTilt = max(maxTilt, $0.pose.tilt)
         }
         #expect(antics == 0)
-        #expect(maxOpen < 0.6)                                       // half-closed eyes
+        #expect(maxOpen < 0.6)                                       // half-closed eyes (plain fatigue keeps them open)
+        #expect(maxTilt - minTilt > 0.08)                            // a slow sway
 
         sim.slumped = false
         run(sim, seconds: 0.6)
-        #expect(sim.pose.lying > 0.25 && sim.pose.lying < 0.9)         // slowly, not at once
+        #expect(sim.pose.exhausted > 0.25 && sim.pose.exhausted < 0.9)   // slowly, not at once
         run(sim, seconds: 2)
-        #expect(sim.pose.lying == 0 && !sim.pose.mood.slumped)
+        #expect(sim.pose.exhausted == 0 && !sim.pose.mood.slumped)
+    }
+
+    @Test func theWordsBubbleTakesItsTimeAndTheEmotionKnowsItsLength() {
+        let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 2))
+        #expect(abs(CharacterSim.revealTime("Ха") - 0.65) < 1e-9)
+        #expect(abs(CharacterSim.revealTime("раз два три четыре") - 0.89) < 1e-9)
+        sim.say("раз два три четыре", duration: 10)
+        #expect(abs(sim.bubbleRevealLeft - 0.89) < 1e-6)
+        run(sim, seconds: 0.5)
+        #expect(sim.bubbleRevealLeft > 0.3 && sim.bubbleRevealLeft < 0.45)
+        run(sim, seconds: 1)
+        #expect(sim.bubbleRevealLeft == 0)
+        #expect(CharacterSim.emotionAct(.laugh, strong: true) == .laugh(strong: true))
+        #expect(CharacterSim.emotionAct(.offended, strong: false).duration > 1)
     }
 
     @Test func hoveringOverHimLyingDoesNotMakeHimHop() {

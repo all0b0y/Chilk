@@ -62,6 +62,8 @@ struct RestSmoothnessTests {
         #expect(viewportChanges { $0.fallAsleep() } == 0)
         #expect(viewportChanges { $0.putOnNightcap() } == 0)
         #expect(viewportChanges { $0.wear(.lamp) } == 0)
+        #expect(viewportChanges { $0.slumped = true } == 0)                // «измотан»: no flip, no resize
+        #expect(viewportChanges(mirrored: true) { $0.slumped = true } == 0)
     }
 
     @Test func atRestEveryPartMovesSlowly() {
