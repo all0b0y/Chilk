@@ -19,6 +19,17 @@ public struct Mood: Sendable, Equatable {
     public var chewing = false
     /// «Лежит» (slice 6b): on his side, half-closed eyes, a frown.
     public var slumped = false
+    // Slice 6c: emotions from Codex and petting.
+    /// «Смеётся»: ^ ^ with tears, a «D» mouth.
+    public var laughing = false
+    /// The clown's stone face: heavy lids, a flat mouth, eyes on the user.
+    public var deadpan = false
+    /// «Обиделся» after the «><»: turned away towards the edge, a frown.
+    public var sulking = false
+    /// Being petted: ^ ^, a brighter blush.
+    public var petted = false
+    /// One eye shut for a moment when the petting ends.
+    public var winking = false
     public init() {}
 }
 
@@ -35,14 +46,18 @@ public enum Lying {
 
     /// `angle`: total rotation about the feet; `lift`: up (negative) so the body touches the floor; `dx`, `dy`: body
     /// centre from the feet; `halfHeight`: half the turned body's height. `rx`, `ry`: body radii with the scale.
-    public static func frame(lying: Double, tilt: Double, rx: Double, ry: Double)
+    /// `roll`: any other rotation about the feet that must rest on the floor (6c: on his back, laughing).
+    public static func frame(lying: Double, tilt: Double, rx: Double, ry: Double, roll: Double = 0)
         -> (angle: Double, lift: Double, dx: Double, dy: Double, halfHeight: Double) {
-        guard lying > 0.001 else { return (tilt, 0, 0, -ry, ry) }
-        let a = tilt + turn * lying
+        guard lying > 0.001 || abs(roll) > 0.001 else { return (tilt, 0, 0, -ry, ry) }
+        let a = tilt + turn * lying + roll
         let h = ((rx * sin(a)) * (rx * sin(a)) + (ry * cos(a)) * (ry * cos(a))).squareRoot()
         let lift = -(h - ry * cos(a))
         return (a, lift, ry * sin(a), lift - ry * cos(a), h)
     }
+
+    /// Whether the frame is turned enough to need the lifted plan (shadow and bubble follow the body).
+    public static func turned(lying: Double, roll: Double) -> Bool { lying > 0.001 || abs(roll) > 0.001 }
 }
 
 /// Little things Чилк does on his own, "по настроению", not on a timer the user can predict.
@@ -95,6 +110,18 @@ public enum Act: Sendable, Equatable {
     case hops
     /// «Ликует» (decision 6): vertical jumps on the spot, hands up, ^ ^, the leaves spin, confetti on the last jump.
     case cheer
+    // Slice 6c (decisions 12–14): emotions Codex asks for.
+    /// «Смеётся»: leans back and shakes, tears, a slapping hand, «ХА» from behind the edge; `strong` — on his back,
+    /// kicking his feet, then up again.
+    case laugh(strong: Bool)
+    /// The rare clown: a pause, a slow look, a red nose and a wig, a stone face, off again. Silent.
+    case clown
+    /// «Обиделся»: «><», «хмф» — then turned away.
+    case sulk
+    /// «Голова кругом»: the dizzy face of three pokes.
+    case spin
+    /// «Грустит»: the sad face, the sprout droops.
+    case mope
 
     public var duration: Double {
         switch self {
@@ -107,6 +134,19 @@ public enum Act: Sendable, Equatable {
         case .think(let s): s
         case .hops: 4.2
         case .cheer: 2.2
+        case .laugh(let strong): strong ? 3.6 : 2.5
+        case .clown: 3.5
+        case .sulk: 2.2
+        case .spin: 2.6
+        case .mope: 2.8
+        }
+    }
+
+    /// An emotion (slice 6c): he comes out to show it; petting and antics wait.
+    public var isEmotion: Bool {
+        switch self {
+        case .cheer, .laugh, .clown, .sulk, .spin, .mope: true
+        default: false
         }
     }
 }
@@ -162,6 +202,21 @@ public struct CharacterPose: Sendable, Equatable {
     public var passThrough = false
     /// «Лежит» (slice 6b): 0 = standing, 1 = on his side (eased).
     public var lying: Double = 0
+    // Slice 6c
+    /// On his back while laughing hard: extra rotation about the feet (radians, + = towards the edge).
+    public var roll: Double = 0
+    /// Seconds into the tears / the «ХА ХА ХА» of a laugh (nil = none); `haCount` words in all.
+    public var tearAge: Double?
+    public var haAge: Double?
+    public var haCount = 3
+    /// Kicking feet (seconds into the kicking), only on his back.
+    public var feet: Double?
+    /// The clown's red nose (0…1, scale) and wig (0…1, opacity) with its drop from above (points, negative = up).
+    public var clownNose: Double = 0
+    public var clownWig: Double = 0
+    public var wigDrop: Double = 0
+    /// The blush glows while he is petted (0…1).
+    public var blushHot: Double = 0
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -271,6 +326,15 @@ public final class CharacterSim {
     private var strainBlinked = false
     private var lieLevel = 0.0
     private var nextSigh = 0.0
+    // Slice 6c: petting.
+    private var strokeX = StrokeAxis(), strokeY = StrokeAxis()
+    private var reversals: [Double] = []
+    private var lastReversal = -99.0
+    private var pettingSince: Double?
+    private var pettingLean = 0.0
+    private var winkAt = -99.0
+    private var blushHotLevel = 0.0
+    private var clownGaze = (x: 0.0, y: 0.0)
 
     public static let calledDuration = 4.4
     public static let dizzyDuration = 2.6
@@ -294,6 +358,10 @@ public final class CharacterSim {
     public static let strainRise = 0.25, strainFall = 1.2
     /// «Лежит»: down in ~0.8 s, up slowly in ~1.5 s («медленно встаёт»).
     public static let lieDown = 0.8, getUp = 1.5
+    /// Petting (backlog item 2): this many turns of a stroke (each ≥ `strokeTravel` points) inside `pettingWindow`
+    /// seconds; it lasts while turns keep coming within `pettingHold`. Then a wink, if it lasted `winkAfter`.
+    public static let pettingTurns = 3, pettingWindow = 1.5, pettingHold = 0.9, strokeTravel = 10.0
+    public static let winkAfter = 1.0, winkDuration = 0.5
     nonisolated public static let confettiLife = 1.4
 
     public init(metrics: Metrics = .standard, rng: any RandomSource = SystemRandom()) {
@@ -310,8 +378,9 @@ public final class CharacterSim {
 
     public var bodyCenter: CGPoint {
         let ry = metrics.radiusY * (1 - squash.value * 0.22)
-        let lie = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: ry)
-        guard lieLevel > 0.001 else { return CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - ry) }
+        let r = roll
+        let lie = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: ry, roll: r)
+        guard Lying.turned(lying: lieLevel, roll: r) else { return CGPoint(x: x.value, y: metrics.ground + hop.value + jumpY - ry) }
         return CGPoint(x: x.value + lie.dx, y: metrics.ground + hop.value + jumpY + lie.dy)
     }
 
@@ -330,35 +399,43 @@ public final class CharacterSim {
     public func contains(_ p: CGPoint) -> Bool {
         let c = bodyCenter
         var px = Double(p.x) - Double(c.x), py = Double(p.y) - Double(c.y)
-        if lieLevel > 0.001 {                                   // into the turned body's own axes
-            let a = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: metrics.radiusY).angle
+        if Lying.turned(lying: lieLevel, roll: roll) {          // into the turned body's own axes
+            let a = Lying.frame(lying: Lying.eased(lieLevel), tilt: tilt.value, rx: metrics.radiusX, ry: metrics.radiusY,
+                                roll: roll).angle
             (px, py) = (px * cos(a) + py * sin(a), -px * sin(a) + py * cos(a))
         }
         let dx = px / metrics.radiusX
         let dy = py / metrics.radiusY
-        return dx * dx + dy * dy < 1.05 * 1.05
+        return dx * dx + dy * dy < hitScale * hitScale
     }
+
+    private var hitScale = 1.05
 
     public var mood: Mood {
         var m = Mood()
         m.called = time < calledUntil
-        m.dizzy = time < dizzyUntil
-        m.annoyed = time < annoyedUntil
+        m.dizzy = time < dizzyUntil || act == .spin
+        m.annoyed = time < annoyedUntil || (act == .sulk && time - actStart < 0.7)
         m.yawning = currentAntic == .yawn && time < anticUntil
         m.sleeping = sleepLevel > 0.6
         m.carried = isCarried
-        m.sad = isSad
+        m.sad = isSad || act == .mope
         m.slumped = lieLevel > 0.4
         if let a = act {
             let k = time - actStart
             m.cheering = a == .cheer && k < 1.7
             m.focused = a == .hops
+            if case .laugh = a { m.laughing = k < a.duration - 0.2 }
+            m.deadpan = a == .clown && k >= 1.7 && k < 3.2
+            m.sulking = a == .sulk && k >= 0.7
         }
         if currentAntic == .catchSpeck, time < anticUntil {
             let k = time - anticStart
             m.chomping = k >= 1.45 && k < 1.62
             m.chewing = k >= 1.62 && k < 2.6
         }
+        m.petted = pettingSince != nil
+        m.winking = time - winkAt < Self.winkDuration
         return m
     }
 
@@ -393,6 +470,7 @@ public final class CharacterSim {
         if jump != nil { return "jump" }
         if let c = confettiAt, time - c < Self.confettiLife { return "confetti" }
         if blinkStart != nil { return "blink" }
+        if m.winking || blushHotLevel > 0.01 { return "petting" }
         // A bubble needs 60 fps while it pops in (words arrive one by one) or out — not while it just stays.
         if time < bubbleUntil && (time - bubbleAt < 2 || bubbleUntil - time < 0.4) { return "bubble" }
         if isAsleep ? sleepLevel < 1 : sleepLevel > 0 { return "sleep transition" }
@@ -499,7 +577,23 @@ public final class CharacterSim {
         actStart = time
         actBeats = 0
         currentAntic = nil
+        if a.isEmotion { endPetting(wink: false) }
     }
+
+    /// Slice 6c (decision 11): an emotion Codex asked for, played at once.
+    public func emote(_ e: Emotion, strong: Bool) {
+        switch e {
+        case .cheer: perform(.cheer)
+        case .laugh: perform(.laugh(strong: strong))
+        case .clown: perform(.clown)
+        case .offended: perform(.sulk)
+        case .dizzy: perform(.spin)
+        case .sad: perform(.mope)
+        }
+    }
+
+    /// An emotion is playing (the voice answer waits for it; a second one is not started over it).
+    public var isEmoting: Bool { act?.isEmotion ?? false }
 
     public func stopAct() {
         props.subtract(actProps)
@@ -547,6 +641,7 @@ public final class CharacterSim {
         if slumped { currentAntic = nil }
 
         updateHover(pointer: pointer, center: center)
+        stepPetting(pointer: pointer, center: center, t: t, dt: dt)
 
         // Dragging speed is clamped: a fast flick must tilt him, not spin him (and keep him inside his paint bounds).
         let carry = min(Self.maxCarrySpeed, max(-Self.maxCarrySpeed, carryVelocity))
@@ -562,6 +657,10 @@ public final class CharacterSim {
             : (m.called ? metrics.outX
                : (standOut == .away ? stand : (isHovering ? min(metrics.peekX, stand) : stand)))
         if let h = hopX, !m.carried { x.target = h }              // between the hops he stays where he landed
+        // An emotion is shown out from behind the edge (6c); falling on his back needs a little more room.
+        if let a = act, a.isEmotion, !m.carried {
+            x.target = min(x.target, a == .laugh(strong: true) ? metrics.peekX - 40 : metrics.peekX)
+        }
         let sag = sagLevel
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08 - sag * 0.07
@@ -602,7 +701,8 @@ public final class CharacterSim {
 
         // Antics "по настроению". At night (and when tired) yawns win far more often. Not during acts; fewer when tired.
         if t >= anticUntil { currentAntic = nil }
-        if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && lieLevel == 0 && t > nextAntic {
+        if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && lieLevel == 0 && pettingSince == nil
+            && t > nextAntic {
             beginAntic(pickAntic(), at: t)
             nextAntic = t + rng.uniform(8, 15) * (1 + sag * 0.8)
         }
@@ -619,9 +719,14 @@ public final class CharacterSim {
         tilt.target = min(Self.maxTilt, max(-Self.maxTilt, tilt.target))
 
         // Leaf: droops with fatigue and sleep, sways in a breeze, lags behind body motion (follow-through).
-        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (isSad ? 0.3 : 0) + lying * 0.5
+        leaf.target = -0.06 + fatigue * 0.35 + sleepLevel * 0.22 + (m.sad ? 0.3 : 0) + lying * 0.5
             + sin(t * 0.9 + phase) * 0.07 * (1 - sleepLevel * 0.6) + sin(t * 2.3) * 0.025
         if case .think = act { leaf.target += sin((t - actStart) * 2.4) * 0.3 }
+        if pettingSince != nil {                                     // petted: the sprout sways happily, he leans in
+            leaf.target += sin(t * 7) * 0.22
+            tilt.target += pettingLean
+        }
+        if act == .clown, t - actStart >= 1.7 { leaf.target = -0.06; blinkAt = max(blinkAt, t + 1) }   // stone still
         leaf.velocity += -x.velocity * 0.0022 - (hop.velocity + jumpVelocity) * 0.0009 - carry * 0.0012
 
         // Blink: random 2.2–5.8 s, 20 % double. Not while dozing.
@@ -707,7 +812,53 @@ public final class CharacterSim {
             }
             lookX.target = -0.15
             lookY.target = -0.2
+        case .laugh(let strong):
+            // Bursts out, leans back towards the edge and shakes (the shake itself is in the pose); hard: on his back.
+            beat(0) { squash.impulse(4.5); hop.impulse(-140); leaf.impulse(6) }
+            if strong {
+                beat(0.5) { squash.impulse(-3) }
+                beat(0.85) { squash.impulse(5); leaf.impulse(-6) }          // lands on his back
+                beat(3.25) { hop.impulse(-150); leaf.impulse(5) }            // up again
+            }
+            let env = Self.envelope(k, length: a.duration, rise: 0.25, fall: 0.35)
+            tilt.target += (strong && k > 0.5 ? 0 : 0.24 * env) + sin(k * 30) * 0.035 * env
+            lookX.target = -0.1
+            lookY.target = -0.25
+        case .clown:
+            // A pause, a slow look at the user, nose, wig, a stone face (slice 6c, decision 13). Silent.
+            beat(0) { clownGaze = (lookX.value, lookY.value) }
+            let u = Self.ease((k - 0.35) / 0.6)
+            lookX.target = clownGaze.x * (1 - u)
+            lookY.target = clownGaze.y * (1 - u) + 0.05 * u
+            beat(1.65) { squash.impulse(2.5) }                                 // the wig lands
+            if k >= 1.7 && k < 3.2 { tilt.target = -0.02 }
+        case .sulk:
+            beat(0) { squash.impulse(5); leaf.impulse(-4) }                    // «хмф»
+            if k >= 0.7 { lookX.target = 0.9; lookY.target = -0.15; tilt.target += 0.12 }
+        case .spin:
+            beat(0) { squash.impulse(4); leaf.impulse(6) }
+        case .mope:
+            beat(0.6) { squash.impulse(-3) }                                   // a sigh
+            lookX.target = -0.1
+            lookY.target = 0.35
         }
+    }
+
+    /// 0 → 1 over `rise`, 1 → 0 over the last `fall` seconds of `length`.
+    static func envelope(_ k: Double, length: Double, rise: Double, fall: Double) -> Double {
+        min(1, max(0, k / rise), max(0, (length - k) / fall))
+    }
+
+    static func ease(_ u: Double) -> Double {
+        let c = min(1, max(0, u))
+        return c * c * (3 - 2 * c)
+    }
+
+    /// On his back while laughing hard (6c): over in 0.35 s, ~1.9 s down, up in 0.5 s. Towards the edge (+).
+    private var roll: Double {
+        guard act == .laugh(strong: true) else { return 0 }
+        let k = time - actStart
+        return 1.35 * (Self.ease((k - 0.5) / 0.35) - Self.ease((k - 2.75) / 0.5))
     }
 
     private var beatIndex = 0
@@ -806,6 +957,25 @@ public final class CharacterSim {
             let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
             return [Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true), Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]   // ＼(^o^)／
         }
+        if case .laugh(let strong) = act {
+            // Slaps the screen edge with his palm — not while on his back (the feet kick then).
+            let k = t - actStart
+            guard k > 0.25, k < (strong ? 0.5 : act!.duration - 0.3) else { return [] }
+            let slap = abs(sin((k - 0.25) * .pi / 0.34))                   // down on every beat
+            return [Hand(x: 0.98, y: 0.05 + slap * 0.4, angle: -0.5 + slap * 0.6)]
+        }
+        if act == .clown {
+            // The hand brings the nose up to his face, then goes back.
+            let k = t - actStart
+            let side = Hand(x: -1.0, y: 0.35, angle: 0.2), face = Hand(x: -0.12, y: 0.2, angle: -0.3)
+            func mix(_ a: Hand, _ b: Hand, _ u: Double) -> Hand {
+                let e = Self.ease(u)
+                return Hand(x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e, angle: a.angle + (b.angle - a.angle) * e)
+            }
+            if k >= 0.9 && k < 1.25 { return [mix(side, face, (k - 0.9) / 0.35)] }
+            if k >= 1.25 && k < 1.6 { return [mix(face, side, (k - 1.25) / 0.35)] }
+            return []
+        }
         guard currentAntic == .scratchLeaf, t < anticUntil else { return [] }
         let k = t - anticStart
         let side = Hand(x: -1.0, y: 0.3, angle: 0.2), stem = Hand(x: -0.3, y: -0.98, angle: -0.9)
@@ -853,7 +1023,7 @@ public final class CharacterSim {
             hoverLostAt = nil
             if !isHovering {
                 isHovering = true
-                if !isAsleep && !slumped { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"; lying, he does not
+                if !isAsleep && !slumped && !isEmoting { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"
             }
         } else {
             loseHover()
@@ -864,6 +1034,68 @@ public final class CharacterSim {
         guard isHovering else { return }
         if hoverLostAt == nil { hoverLostAt = time }
         if time - hoverLostAt! >= Self.hoverGrace { isHovering = false; hoverLostAt = nil }
+    }
+
+    // MARK: Petting (slice 6c, backlog item 2)
+
+    /// Turns of a stroke along one axis: a turn counts once the cursor went `strokeTravel` points one way and as far
+    /// back. Jitter never adds up to a turn.
+    struct StrokeAxis {
+        private var anchor: Double?
+        private var direction = 0
+
+        mutating func feed(_ v: Double, travel: Double) -> Bool {
+            guard let a = anchor else { anchor = v; return false }
+            let d = v - a
+            if direction == 0 {
+                if abs(d) >= travel { direction = d > 0 ? 1 : -1; anchor = v }
+                return false
+            }
+            if Double(direction) * d > 0 { anchor = v; return false }   // further the same way: the extreme moves
+            guard abs(d) >= travel else { return false }
+            direction = -direction
+            anchor = v
+            return true
+        }
+    }
+
+    private var canBePetted: Bool {
+        !isAsleep && sleepLevel < 0.05 && !isCarried && !slumped && lieLevel == 0 && act == nil && !eyesWide
+    }
+
+    private func stepPetting(pointer: CGPoint?, center: CGPoint, t: Double, dt: Double) {
+        hitScale = 1.15
+        let inside = pointer.map(contains) ?? false
+        hitScale = 1.05
+        if canBePetted, inside, let p = pointer {
+            let rx = Double(p.x) - Double(center.x), ry = Double(p.y) - Double(center.y)
+            let turnedX = strokeX.feed(rx, travel: Self.strokeTravel)
+            let turnedY = strokeY.feed(ry, travel: Self.strokeTravel)
+            if turnedX || turnedY { reversals.append(t); lastReversal = t }
+            pettingLean = max(-1, min(1, rx / metrics.radiusX)) * 0.09        // he leans into the hand
+        } else {
+            strokeX = StrokeAxis()
+            strokeY = StrokeAxis()
+        }
+        reversals.removeAll { t - $0 > Self.pettingWindow }
+        if pettingSince == nil, canBePetted, reversals.count >= Self.pettingTurns {
+            pettingSince = t
+            currentAntic = nil
+            leaf.impulse(4)
+            squash.impulse(-2)
+        }
+        if pettingSince != nil, !canBePetted || t - lastReversal > Self.pettingHold { endPetting(wink: canBePetted) }
+        let target = pettingSince != nil ? 1.0 : 0.0
+        blushHotLevel = target > blushHotLevel ? min(target, blushHotLevel + dt * 3) : max(target, blushHotLevel - dt * 2.5)
+    }
+
+    /// The petting is over; a wink if it lasted (never when an emotion or sleep cut it).
+    private func endPetting(wink: Bool) {
+        guard let since = pettingSince else { return }
+        if wink, time - since >= Self.winkAfter { winkAt = time; leaf.impulse(3) }
+        pettingSince = nil
+        reversals.removeAll()
+        pettingLean = 0
     }
 
     private func pickAntic() -> Antic {
@@ -928,6 +1160,50 @@ public final class CharacterSim {
         }
         p.passThrough = act == .hops
         p.lying = lying
+        // Slice 6c: the emotions' extras.
+        p.roll = roll
+        p.blushHot = blushHotLevel
+        if pettingSince != nil {                                         // melts a little
+            p.scaleY *= 0.97
+            p.scaleX *= 1.02
+        }
+        if let a = act {
+            let k = t - actStart
+            switch a {
+            case .laugh(let strong):
+                let env = Self.envelope(k, length: a.duration, rise: 0.2, fall: 0.3)
+                p.scaleY *= 1 + sin(k * 38) * 0.035 * env                   // shaking with laughter
+                p.scaleX *= 1 - sin(k * 38) * 0.022 * env
+                if !(strong && k > 0.5 && k < 3.25) { p.hop -= abs(sin(k * 12)) * 4 * env }   // chuckling bounces
+                if k > 0.2 && k < a.duration - 0.15 { p.tearAge = k - 0.2 }
+                p.haAge = k - 0.2
+                p.haCount = strong ? 6 : 3
+                if strong, k > 0.75, k < 2.9 { p.feet = k - 0.75 }
+            case .clown:
+                if k < 1.25 { p.clownNose = 0 }
+                else if k < 3.2 { p.clownNose = min(1, (k - 1.25) / 0.12) }
+                else { p.clownNose = max(0, 1 - (k - 3.2) / 0.15) }
+                if k >= 1.35 && k < 3.2 {
+                    p.clownWig = 1
+                    p.wigDrop = -40 * (1 - Self.ease((k - 1.35) / 0.3))
+                } else if k >= 3.2 {
+                    let u = min(1, (k - 3.2) / 0.28)
+                    p.clownWig = 1 - u
+                    p.wigDrop = -30 * Self.ease(u)
+                }
+                if k >= 1.7 && k < 3.2 {                                 // heavy lids, one slow blink
+                    let blink = max(0, 1 - abs(k - 2.55) / 0.22)
+                    p.eyeOpen = min(p.eyeOpen, 0.62 * (1 - blink))
+                }
+            case .sulk where k >= 0.7:
+                p.scaleX *= 1.04                                          // puffed up
+            case .mope:
+                p.scaleY *= 0.96
+                p.scaleX *= 1.03
+            default:
+                break
+            }
+        }
         p.mood = m
         p.calledAge = t - calledAt
         p.props = props

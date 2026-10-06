@@ -77,6 +77,9 @@ final class Conversation {
     /// He hears, thinks or answers by voice right now: a typed question waits.
     var voiceBusy: Bool { phase == .listening || phase == .thinking || phase == .answering }
 
+    /// Slice 6c: Codex may show an emotion now — he is thinking and no tool question is on screen.
+    var canEmote: Bool { phase == .thinking && question == nil && !closing }
+
     /// The user started typing while he waited for a spoken follow-up: the wait closes quietly, the text goes to
     /// the same thread («Решено по умолчанию»).
     func yieldToChat() {
@@ -328,11 +331,13 @@ final class Conversation {
             }
         case .thinking:
             if question != nil { return }                          // the question stays until answered
+            if sim.isEmoting { return }                            // 6c: the reaction first, the words after it
             if !Dialogue.partialReply(answer.get().text).isEmpty {
                 phase = .answering
                 sim.stopAct()
                 return tick()
             }
+            if sim.act == nil { sim.perform(.think(seconds: 120)) }  // the emotion is over, the answer is not yet
             dots = (dots + 1) % 12
             sim.updateBubble(String(repeating: "·", count: dots / 4 + 1))
         case .answering:
@@ -383,6 +388,9 @@ final class Conversation {
             do {
                 let raw = try await brain.ask(context() + question) { partial in answer.set(partial) }
                 guard !Task.isCancelled else { return }
+                // 6c: an emotion Codex showed plays to the end before the words appear.
+                while sim.isEmoting, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+                guard !Task.isCancelled, phase == .thinking || phase == .answering else { return }
                 let reply = Dialogue.parse(raw.text)
                 let text = Dialogue.plain(reply.reply)
                 turns += 1

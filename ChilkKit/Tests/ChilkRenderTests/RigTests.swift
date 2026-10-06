@@ -118,6 +118,24 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     mirrored = true; run(1)
     sim.clearBubble(); sim.slumped = false; run(2)
     mirrored = false
+    // Slice 6c: every emotion from Codex (the laughs and the clown on both edges), then petting and the wink.
+    sim.emote(.laugh, strong: false); run(2.6)
+    mirrored = true
+    sim.emote(.laugh, strong: true); run(3.7)
+    sim.emote(.clown, strong: false); run(3.6)
+    mirrored = false
+    sim.emote(.clown, strong: false); run(3.6)
+    for e in [Emotion.offended, .dizzy, .sad, .cheer] { sim.emote(e, strong: false); run(e == .cheer ? 2.3 : 2.9) }
+    run(1.2, pointer: CGPoint(x: Double(sim.bodyCenter.x) + 20, y: Double(sim.bodyCenter.y)))
+    for stroke in 0..<10 {                                         // strokes back and forth across him
+        for i in 1...18 {
+            let c = sim.bodyCenter
+            let d = (stroke % 2 == 0 ? -1.0 : 1.0) * (Double(i) / 18 - 0.5) * 40
+            sim.step(dt: 1.0 / 60, pointer: CGPoint(x: Double(c.x) + d, y: Double(c.y)))
+            visit(sim.pose, mirrored)
+        }
+    }
+    run(2, pointer: CGPoint(x: Double(sim.bodyCenter.x) + 20, y: Double(sim.bodyCenter.y)))
     sim.fatigue = 0.37
     mirrored = false
     run(20)
@@ -146,7 +164,10 @@ struct RigTests {
 
     @Test func partsStayInsideTheirBitmaps() {
         var failures: [String] = []
-        for part in allParts() {
+        let parts = allParts()
+        // The scenario reaches every part of slice 6c (otherwise this test would not check them).
+        for p in [Part.tear, .ha, .foot(lw: 1), .clownNose(lw: 1), .wig(lw: 1), .blushHot] { #expect(parts.contains(p), "\(p)") }
+        for part in parts {
             let r = part.bounds(metrics: m)
             let pad = 30.0, scale = 3.0
             let bmp = Bitmap(size: CGSize(width: r.width + pad * 2, height: r.height + pad * 2), scale: scale, yDown: true)
@@ -187,7 +208,7 @@ struct RigTests {
                 }
                 print("frame \(frame): mean \(d.mean) big \(d.bigShare)")
             }
-            if pose.bubble != nil {
+            if pose.bubble != nil || pose.haAge != nil {                // glyphs: the bubble's words, «ХА» (6c)
                 if d.mean > worstText.mean { worstText = (d.mean, max(worstText.big, d.bigShare), frame) }
                 worstText.big = max(worstText.big, d.bigShare)
             } else {
@@ -196,8 +217,10 @@ struct RigTests {
             }
         }
         #expect(compared > 40)
-        // Only resampling of the 3× part bitmaps may differ: tiny on average, a few edge pixels at most.
-        #expect(worst.mean < 0.5, "worst mean diff \(worst.mean) at frame \(worst.frame)")
+        // Only resampling of the 3× part bitmaps may differ: tiny on average, a few edge pixels at most. The clown's wig
+        // (6c) nearly doubles the outline length on screen, so thin resampled edges add up to ~0.51 there (checked on
+        // an amplified diff: edges only); strongly different pixels keep the old limit.
+        #expect(worst.mean < 0.55, "worst mean diff \(worst.mean) at frame \(worst.frame)")
         #expect(worst.big < 0.004, "share of strongly different pixels \(worst.big)")
         // Text glyphs are antialiased differently at 3× then downsampled (checked by eye: identical look).
         #expect(worstText.mean < 2, "bubble frames: worst mean diff \(worstText.mean) at frame \(worstText.frame)")

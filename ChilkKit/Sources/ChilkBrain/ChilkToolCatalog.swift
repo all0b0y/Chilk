@@ -36,6 +36,8 @@ public enum ChilkAction: Equatable, Sendable {
     /// Slice 4b: focus mode for `minutes` from now (the engine cuts it to 3 h / today's rest), or end it early.
     case focus(minutes: Int)
     case endFocus
+    /// Slice 6c: Chilk shows an emotion with his body (`strong` matters only for laugh).
+    case emote(Emotion, strong: Bool)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -83,6 +85,9 @@ public enum ChilkToolCatalog {
             tool("chilk_focus", "Focus mode, only on the user's request («важная работа до 18:00», «фокус на 2 часа», «не трогай меня час»): until it ends Chilk only shows and asks (stages 0–1), never insists, dims or pauses; afterwards everything that piled up comes back at once, more insistently. minutes from now (for «до 18:00» compute from the time in [контекст]). At most 3 h at a time and 4 h a day: shortened=true means less was granted — say until what time. A new focus replaces the running one. Refused: escalation_in_progress (not while Chilk dims or pauses the screen), focus_spent_today.",
                  ["minutes": ["type": "integer", "minimum": 1, "maximum": 720]]),
             tool("chilk_end_focus", "End the focus mode early, only on the user's request. ended=false: there was no focus.", [:]),
+            tool("chilk_emote", "Optional, your own choice: Chilk shows ONE emotion with his body at the screen edge, at once — before your words, so do not describe it in words. Only when it truly fits, not in every answer; at most one call per answer (a refused call still counts — then just answer in words). cheer: joy for the user's success or great news. laugh: something genuinely funny; strong=true only when it is hilarious (he falls over laughing). offended: playful offence at a tease. dizzy: too much, too confusing. sad: sad news. clown: EXTREMELY rare — utmost disappointment in someone or something else (a company, a person, a service), never in the user. strong matters only for laugh. Refused: not_now (the clown was shown recently; nothing replaces it), chilk_busy (Chilk cannot show it right now), one_per_answer.",
+                 ["emotion": ["type": "string", "enum": .array(Emotion.allCases.map { .string($0.rawValue) })],
+                  "strong": ["type": "boolean"]]),
         ]
     }()
 
@@ -243,6 +248,10 @@ public enum ChilkToolCatalog {
         case "chilk_end_focus":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .endFocus
+        case "chilk_emote":
+            guard Set(fields.keys) == ["emotion", "strong"], let raw = fields["emotion"]?.string,
+                  let emotion = Emotion(rawValue: raw), let strong = fields["strong"]?.bool else { throw ToolError.invalidArguments }
+            return .emote(emotion, strong: strong)
         case "chilk_mode":
             guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
                   let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }

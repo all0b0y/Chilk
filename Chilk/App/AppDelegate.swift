@@ -100,6 +100,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.chat = chat
         actions.memory = memory
         actions.onChip = { [weak chat] thread, chip in chat?.chip(chip, thread: thread) }
+        // Slice 6c: Codex's emotions play on the live Chilk at the edge — in a conversation (before the words) and
+        // for a chat turn while he thinks there; otherwise `chilk_busy`.
+        actions.canEmote = { [weak conversation, weak chat] in (conversation?.canEmote ?? false) || (chat?.canEmote ?? false) }
+        actions.playEmote = { [weak balance] e, strong in balance?.emote(e, strong: strong, from: "Codex") }
         brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
         brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }
         chat.onTurnEnd = { [weak balance] in balance?.resume() }
@@ -293,6 +297,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Выходка: ловит пылинку"), #selector(anticSpeck)))
         sub.addItem(item(String(localized: "Ликует"), #selector(cheerNow)))
         sub.addItem(item(String(localized: "Лежит"), #selector(slumpNow)))
+        // Slice 6c: Codex's emotions, played at once and past the limits (the clown's 14 days are not spent).
+        let emotions = NSMenuItem(title: String(localized: "Эмоции"), action: nil, keyEquivalent: "")
+        let emotionsMenu = NSMenu()
+        for (title, key) in [(String(localized: "Смеётся"), "laugh"), (String(localized: "Смеётся до упаду"), "laughStrong"),
+                             (String(localized: "Клоун"), "clown"), (String(localized: "Обиделся"), "offended"),
+                             (String(localized: "Голова кругом"), "dizzy"), (String(localized: "Грустит"), "sad")] {
+            let i = item(title, #selector(emoteNow(_:)))
+            i.representedObject = key
+            emotionsMenu.addItem(i)
+        }
+        emotions.submenu = emotionsMenu
+        sub.addItem(emotions)
         check.submenu = sub
         menu.addItem(check)
         menu.addItem(.separator())
@@ -321,6 +337,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func anticSpeck() { edge?.sim.startAntic(.catchSpeck) }
     @objc private func cheerNow() { balance?.cheer() }
     @objc private func slumpNow() { balance?.makeSlumped() }
+    @objc private func emoteNow(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String else { return }
+        balance?.emoteForCheck(key)
+    }
 
     /// Registers the call hotkey (replacing the current one). `false` = the system refused it; nothing is registered.
     @discardableResult

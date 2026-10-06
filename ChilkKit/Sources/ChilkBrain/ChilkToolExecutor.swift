@@ -38,6 +38,7 @@ public final class ChilkToolExecutor {
                 return .failure("File access is handled by the shared-folder tools")
             case .reminder, .reminders: return .failure("Apple Reminders are handled by the reminders tools")
             case .remember: return .failure("Memory is handled by the app")
+            case .emote: return .failure("Emotions are handled by the app")
             case .status: return .ok(status())
             case .water: return .ok(try water())
             case .mode(let m): return .ok(mode(m))

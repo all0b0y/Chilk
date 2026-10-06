@@ -37,6 +37,28 @@ func sim(_ setup: (CharacterSim) -> Void = { _ in }, seconds: Double, pointer: C
     return s.pose
 }
 
+/// Petting (slice 6c): the cursor strokes across him; `wink` — then rests until the wink.
+@MainActor
+func petted(wink: Bool) -> CharacterPose {
+    let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
+    for _ in 0..<60 { s.step(dt: 1.0 / 60, pointer: nil) }
+    for _ in 0..<72 { let c = s.bodyCenter; s.step(dt: 1.0 / 60, pointer: CGPoint(x: Double(c.x) + 20, y: Double(c.y))) }
+    for stroke in 0..<8 {
+        for i in 1...18 {
+            let c = s.bodyCenter
+            let d = (stroke % 2 == 0 ? -1.0 : 1.0) * (Double(i) / 18 - 0.5) * 40
+            s.step(dt: 1.0 / 60, pointer: CGPoint(x: Double(c.x) + d, y: Double(c.y)))
+        }
+    }
+    guard wink else { return s.pose }
+    for _ in 0..<200 {
+        let c = s.bodyCenter
+        s.step(dt: 1.0 / 60, pointer: CGPoint(x: Double(c.x) + 20, y: Double(c.y)))
+        if s.pose.mood.winking { for _ in 0..<12 { s.step(dt: 1.0 / 60, pointer: nil) }; break }
+    }
+    return s.pose
+}
+
 @MainActor
 func icon(into dir: URL) throws {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -102,6 +124,17 @@ func previews(into dir: URL) throws {
         ("30-getting-up", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42)); s.slumped = true
             for _ in 0..<120 { s.step(dt: 1.0 / 60, pointer: nil) }; s.slumped = false
             for _ in 0..<45 { s.step(dt: 1.0 / 60, pointer: nil) }; return s.pose }(), false),
+        // Slice 6c
+        ("31-laugh", sim({ $0.standOut = .docked; $0.emote(.laugh, strong: false) }, seconds: 1.1), false),
+        ("32-laugh-strong-back", sim({ $0.emote(.laugh, strong: true) }, seconds: 1.6), false),
+        ("33-laugh-left-edge", sim({ $0.emote(.laugh, strong: false) }, seconds: 0.9), true),
+        ("34-clown-nose", sim({ $0.emote(.clown, strong: false) }, seconds: 1.5), false),
+        ("35-clown-stone", sim({ $0.emote(.clown, strong: false) }, seconds: 2.2), false),
+        ("36-offended", sim({ $0.emote(.offended, strong: false) }, seconds: 1.4), false),
+        ("37-sad", sim({ $0.emote(.sad, strong: false) }, seconds: 1.5), false),
+        ("38-dizzy", sim({ $0.emote(.dizzy, strong: false) }, seconds: 1.0), false),
+        ("39-petted", petted(wink: false), false),
+        ("40-wink", petted(wink: true), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in

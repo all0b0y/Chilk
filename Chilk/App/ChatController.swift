@@ -41,6 +41,14 @@ final class ChatController: NSObject, NSWindowDelegate {
     var log: (String) -> Void = { _ in }
     /// A typed question is being answered: the balance waits, like for a conversation.
     private(set) var thinking = false
+    /// Slice 6c: this turn has Chilk thinking at the edge, so an emotion from Codex can play there.
+    private(set) var posing = false
+
+    /// Codex may show an emotion now: Chilk still thinks at the edge (no bubble came up meanwhile).
+    var canEmote: Bool {
+        guard posing, thinking, !sim.isTalking, case .think = sim.act else { return false }
+        return true
+    }
 
     init(store: ChatStore, brain: Brain, conversation: Conversation, ears: Ears, sim: CharacterSim) {
         self.store = store
@@ -125,13 +133,15 @@ final class ChatController: NSObject, NSWindowDelegate {
 
         thinking = true
         let pose = chilkFree()
+        posing = pose
         if pose { sim.perform(.think(seconds: 60)) }              // at the edge, no bubble (decision 13)
-        log("chat: typed question (\(text.count) chars)\(fresh ? ", clean thread" : "")\(plan.continuing != nil ? ", continues a chat" : "")")
+        log("chat: typed question (\(text.count) chars)\(fresh ? ", clean thread" : "")\(plan.continuing != nil ? ", continues a chat" : "")\(pose ? "" : ", Chilk busy at the edge")")
         let question = VoiceContext.chat(context()) + text
         Task {
             defer {
                 thinking = false
-                if pose { sim.stopAct() }
+                posing = false
+                if pose, case .think = sim.act { sim.stopAct() }  // an emotion (6c) plays to its end
                 onTurnEnd()
             }
             do {

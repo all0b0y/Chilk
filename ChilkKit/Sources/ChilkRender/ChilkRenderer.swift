@@ -17,12 +17,13 @@ public enum ChilkRenderer {
         out.reserveCapacity(24)
         let mirror: CGAffineTransform = mirrored ? CGAffineTransform(a: -1, b: 0, c: 0, d: 1, tx: m.width, ty: 0) : .identity
 
-        // «Лежит» (6b): turned onto his side about the feet and lifted back onto the floor; nothing changes standing.
-        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX * p.scaleX, ry: m.radiusY * p.scaleY)
+        // «Лежит» (6b) / on his back laughing (6c): turned about the feet and lifted back onto the floor.
+        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX * p.scaleX, ry: m.radiusY * p.scaleY, roll: p.roll)
+        let turned = Lying.turned(lying: p.lying, roll: p.roll)
         // Contact shadow: shrinks and fades while he is in the air.
         let lift = clamp(-p.hop / 70)
         out.append(Placement(slot: Slot.contactShadow, part: .contactShadow,
-                             transform: mirror.translatedBy(x: p.x + (p.lying > 0.001 ? lie.dx : 0), y: m.ground + 3)
+                             transform: mirror.translatedBy(x: p.x + (turned ? lie.dx : 0), y: m.ground + 3)
                                 .scaledBy(x: p.scaleX * (1 - lift * 0.35), y: 1 - lift * 0.35),
                              alpha: 1 - lift * 0.6))
 
@@ -36,6 +37,7 @@ public enum ChilkRenderer {
         }
         if let age = p.confettiAge { confettiPlacements(into: &out, age: age, origin: p.confettiOrigin, mirror: mirror) }
         if p.sleep > 0.3 { zPlacements(into: &out, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
+        if let age = p.haAge { haPlacements(into: &out, age: age, count: p.haCount, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let text = p.bubble, !text.isEmpty { bubblePlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: text) }
         return out
     }
@@ -45,6 +47,14 @@ public enum ChilkRenderer {
                                  lineScale lw: Double, base: CGAffineTransform) {
         let ox = p.lookX * m.radiusX * 0.14
         let oy = p.lookY * m.radiusY * 0.12
+        // Kicking feet while he lies on his back laughing (6c): out of his lower side, which then faces up, kicking.
+        if let k = p.feet {
+            for (i, at) in [(-0.92, 0.3, 1.25), (-0.74, 0.62, 0.95)].enumerated() {
+                let angle = at.2 + sin(k * 17 + Double(i) * .pi) * 0.4
+                let t = base.translatedBy(x: at.0 * m.radiusX, y: at.1 * m.radiusY).rotated(by: angle)
+                out.append(Placement(slot: Slot.foot + i, part: .foot(lw: lw), transform: t, alpha: 1))
+            }
+        }
         out.append(Placement(slot: Slot.body, part: .body(lw: lw, shine: !p.props.contains(.hat)), transform: base, alpha: 1))
 
         // Ears pop up while he listens (behind the head, springy, twitching with the voice).
@@ -64,6 +74,10 @@ public enum ChilkRenderer {
         }
         if p.props.contains(.hat) {
             out.append(Placement(slot: Slot.hat, part: .hat(lw: lw), transform: base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.86), alpha: 1))
+        }
+        if p.clownWig > 0.01 {                              // the clown's tufts; the sprout grows on the bald top
+            out.append(Placement(slot: Slot.wig, part: .wig(lw: lw),
+                                 transform: base.translatedBy(x: ox * 0.2, y: -m.radiusY * 0.78 + p.wigDrop), alpha: clamp(p.clownWig)))
         }
         if p.props.contains(.mug) {
             let k = p.mugLift
@@ -89,8 +103,11 @@ public enum ChilkRenderer {
 
         // Blush moves less than the eyes → parallax depth.
         for (i, s) in [-1.0, 1.0].enumerated() {
-            out.append(Placement(slot: Slot.blush + i, part: .blush,
-                                 transform: base.translatedBy(x: s * m.radiusX * 0.55 + ox * 0.55, y: m.radiusY * 0.14 + oy * 0.4), alpha: 1))
+            let t = base.translatedBy(x: s * m.radiusX * 0.55 + ox * 0.55, y: m.radiusY * 0.14 + oy * 0.4)
+            out.append(Placement(slot: Slot.blush + i, part: .blush, transform: t, alpha: 1))
+            if p.blushHot > 0.01 {                          // petted: the cheeks glow (6c)
+                out.append(Placement(slot: Slot.blushHot + i, part: .blushHot, transform: t, alpha: clamp(p.blushHot)))
+            }
         }
 
         let mood = p.mood
@@ -115,7 +132,15 @@ public enum ChilkRenderer {
                 part = .eyeAnnoyed(side: Int(s), lw: lw)
             } else if p.sleep > 0.5 {
                 part = .eyeSleep(lw: lw)
-            } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) || mood.cheering || mood.chomping {
+            } else if mood.winking && i == 0 {
+                part = .eyeHappy(lw: lw)                           // the wink after petting (6c)
+            } else if (mood.deadpan || mood.sad || mood.slumped || mood.sulking) && p.eyeOpen < 0.14 {
+                part = .eyeSleep(lw: lw)                           // a blink in a sad / stone mood is not a smile
+            } else if mood.deadpan {
+                part = .eyeLidded(lw: lw)                          // -_- (6c)
+                t = eye.scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
+            } else if p.eyeOpen < 0.14 || (mood.called && p.calledAge < 0.5) || mood.cheering || mood.chomping
+                        || mood.laughing || mood.petted {
                 part = .eyeHappy(lw: lw)
             } else if mood.sad {
                 part = .eyeOpen                                    // half-closed, looking down
@@ -126,6 +151,19 @@ public enum ChilkRenderer {
                     .scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
             }
             out.append(Placement(slot: Slot.eye + i, part: part, transform: t, alpha: 1))
+        }
+        // Tears of laughter fly sideways from the outer corners of the eyes (😂, 6c).
+        if let age = p.tearAge {
+            for (side, s) in [-1.0, 1.0].enumerated() {
+                for j in 0..<Part.tearsPerEye {
+                    let u = (age * 1.8 + Double(j) / Double(Part.tearsPerEye)).truncatingRemainder(dividingBy: 1)
+                    let a = min(1, u / 0.12) * (1 - u) * clamp(age / 0.2)
+                    guard a > 0.002 else { continue }
+                    let t = base.translatedBy(x: s * (ex + 9 + 30 * u) + ox, y: ey + oy - 2 - 12 * u + 30 * u * u)
+                        .rotated(by: s * (0.6 + u))
+                    out.append(Placement(slot: Slot.tear + side * Part.tearsPerEye + j, part: .tear, transform: t, alpha: a))
+                }
+            }
         }
 
         let mouth = base.translatedBy(x: ox * 0.8, y: m.radiusY * 0.2 + oy * 0.6)
@@ -141,19 +179,28 @@ public enum ChilkRenderer {
             mouthPart = .mouthO
         } else if mood.called || mood.yawning || mood.cheering || mood.chomping {
             mouthPart = .mouthOpen(yawn: mood.yawning)
+        } else if mood.laughing {
+            mouthT = mouth.translatedBy(x: 0, y: -1).scaledBy(x: 1.45, y: 1.5).translatedBy(x: 0, y: 1)
+            mouthPart = .mouthOpen(yawn: false)                         // a big «D»
         } else if mood.chewing {
             let r = 0.55 + 0.35 * abs(sin(p.time * 11))                // nom-nom
             mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: 0.8, y: r).translatedBy(x: 0, y: -1)
             mouthPart = .mouthO
-        } else if mood.focused {
+        } else if mood.focused || mood.deadpan {
             mouthPart = .mouthSmile(tired: 91, lw: lw)                  // a straight, busy line — not a smile
-        } else if mood.annoyed || mood.sad || mood.slumped {
+        } else if mood.annoyed || mood.sad || mood.slumped || mood.sulking {
             mouthPart = .mouthFrown(lw: lw)
         } else {
             let tired = clamp((p.fatigue - 0.45) / 0.55)
             mouthPart = .mouthSmile(tired: Int((tired * 100).rounded()), lw: lw)
         }
         out.append(Placement(slot: Slot.mouth, part: mouthPart, transform: mouthT, alpha: 1))
+        if p.clownNose > 0.01 {
+            let s = easeOutBack(clamp(p.clownNose))
+            out.append(Placement(slot: Slot.clownNose, part: .clownNose(lw: lw),
+                                 transform: base.translatedBy(x: ox * 0.8, y: -m.radiusY * 0.06 + oy * 0.6).scaledBy(x: s, y: s),
+                                 alpha: 1))
+        }
 
         for (i, h) in p.hands.prefix(2).enumerated() {
             let t = base.translatedBy(x: h.x * m.radiusX, y: h.y * m.radiusY).rotated(by: h.angle)
@@ -196,6 +243,27 @@ public enum ChilkRenderer {
         }
     }
 
+    /// «ХА ХА ХА» (6c): one word after another slides out from behind the screen edge, up and into the screen.
+    static func haPlacements(into out: inout [Placement], age: Double, count: Int, pose p: CharacterPose, metrics m: Metrics,
+                             mirror: CGAffineTransform, mirrored: Bool) {
+        let life = 1.3
+        let width = TextKit.width("ХА", font: TextKit.haFont)
+        let rows = [0.0, 18, 7, 25, 3, 14]
+        for j in 0..<min(count, Part.haWords) {
+            let a = age - Double(j) * 0.38
+            guard a >= 0, a < life else { continue }
+            let alpha = min(1, a / 0.12) * min(1, (life - a) / 0.35)
+            guard alpha > 0.002 else { continue }
+            let x = m.width - a * 110
+            let y = m.ground - m.radiusY * 2 - 6 - rows[j % rows.count] - a * 30
+            let scale = 0.85 + 0.25 * min(1, a * 5)
+            var t = mirror.translatedBy(x: x, y: y)
+            if mirrored { t = t.scaledBy(x: -1, y: 1).translatedBy(x: -width * scale, y: 0) }   // never backwards
+            t = t.scaledBy(x: scale, y: scale).rotated(by: j % 2 == 0 ? -0.15 : 0.12)
+            out.append(Placement(slot: Slot.ha + j, part: .ha, transform: t, alpha: alpha))
+        }
+    }
+
     /// Bubble pops out of him (scale from the tail, easeOutBack); words arrive one by one (offset & delay).
     static func bubblePlacements(into out: inout [Placement], pose p: CharacterPose, metrics m: Metrics,
                                  mirrored: Bool, text: String) {
@@ -207,9 +275,10 @@ public enum ChilkRenderer {
         let layout = BubbleLayout.of(text, buttons: p.buttons, maxTextWidth: m.width - 20 - 28)
         let bw = layout.width, bh = layout.height
         // Above the body as it stands — or lies (6b: lower and wider, its centre further from the edge).
-        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY)
-        let cx = p.x + (p.lying > 0.001 ? lie.dx : 0)
-        let top = m.ground + p.hop - (p.lying > 0.001 ? 2 * lie.halfHeight : m.radiusY * 2)
+        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY, roll: p.roll)
+        let turned = Lying.turned(lying: p.lying, roll: p.roll)
+        let cx = p.x + (turned ? lie.dx : 0)
+        let top = m.ground + p.hop - (turned ? 2 * lie.halfHeight : m.radiusY * 2)
         var bx = min(max(cx - bw - 14, 10), m.width - bw - 10)
         let by = min(max(top - (46 - 28 * p.lying) - bh, 10), m.height)   // above the sprout (lying: it points sideways)
         var tailX = min(cx - 22, bx + bw - 18)
@@ -261,8 +330,11 @@ public enum ChilkRenderer {
         for p in placements.sorted(by: { $0.slot < $1.slot }) where p.alpha > 0 {
             ctx.saveGState()
             ctx.concatenate(p.transform)
-            if p.alpha < 1 { ctx.setAlpha(p.alpha) }
+            // A part fades as one piece, like its layer in the rig: overlapping fills inside it (the wig's puffs)
+            // must not each get the alpha and darken where they overlap.
+            if p.alpha < 1 { ctx.setAlpha(p.alpha); ctx.beginTransparencyLayer(auxiliaryInfo: nil) }
             p.part.draw(in: ctx, metrics: m, palette: palette)
+            if p.alpha < 1 { ctx.endTransparencyLayer() }
             ctx.restoreGState()
         }
     }

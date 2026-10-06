@@ -1,7 +1,9 @@
 import AppKit
 import ChilkCore
 import ChilkRender
+import ImageIO
 import QuartzCore
+import UniformTypeIdentifiers
 
 /// Layer-hosting view for the edge panel. By default Чилк is a `LayerRig` (one CALayer per part, moved by
 /// transforms, composited on the GPU). `vector: true` (env `CHILK_CG_RENDER=1`) keeps the old CPU path —
@@ -72,6 +74,26 @@ final class CharacterView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    /// Acceptance only (CHILK_DEMO_EDGE_SNAPSHOT, slice 6c): the live layers as they are now, over a stand-in
+    /// wallpaper, to a PNG — no Screen Recording needed.
+    @MainActor
+    func snapshot(to url: URL) {
+        let size = host.bounds.size, scale = 2.0
+        guard size.width > 0, size.height > 0,
+              let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale), bitsPerComponent: 8,
+                                  bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return }
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.setFillColor(CGColor(srgbRed: 0.98, green: 0.95, blue: 0.89, alpha: 1))
+        ctx.fill(CGRect(origin: .zero, size: size))
+        host.render(in: ctx)
+        guard let image = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, image, nil)
+        CGImageDestinationFinalize(dest)
+    }
     override func mouseDown(with event: NSEvent) { onMouseDown?(event) }
     override func mouseDragged(with event: NSEvent) { onMouseDragged?(event) }
     override func mouseUp(with event: NSEvent) { onMouseUp?(event) }

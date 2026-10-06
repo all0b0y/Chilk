@@ -89,6 +89,33 @@ final class Actions {
     var onChip: (String, ChatChip) -> Void = { _, _ in }
     /// Chilk's memory (slice 5b, decision 17).
     var memory: MemoryStore?
+    /// Slice 6c (decisions 11–13): the limits of `chilk_emote`; the clown's date is kept in `emotes.json`.
+    private var emotes = EmoteGate(book: EmoteBook.load(from: Actions.emotesFile))
+    private static var emotesFile: URL { AppState.directory.appendingPathComponent("emotes.json") }
+    /// Set by the app: Chilk can show an emotion right now (thinking in a conversation, or posing for a chat turn).
+    var canEmote: () -> Bool = { false }
+    /// Set by the app: show it (he comes out from behind the edge by himself).
+    var playEmote: (Emotion, Bool) -> Void = { _, _ in }
+
+    private func emote(_ call: CodexToolCall) -> CodexToolResult {
+        guard case .emote(let e, let strong)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
+        else { return .failure("Invalid arguments: {emotion: cheer|laugh|clown|offended|dizzy|sad, strong: true|false}") }
+        switch emotes.request(e, turn: call.turnId, now: Date(), stageFree: canEmote()) {
+        case .play:
+            if e == .clown {
+                do { try emotes.book.save(to: Self.emotesFile) } catch { balance?.log("emote: clown date not saved") }
+            }
+            playEmote(e, strong)
+            return .ok(["played": true])
+        case .onePerAnswer:
+            return .failure("one_per_answer: only one emotion per answer. Nothing was shown; just answer in words.")
+        case .clownResting:
+            return .failure("not_now: the clown is resting. Nothing was shown and no other emotion replaces it; "
+                            + "just answer in words.")
+        case .busy:
+            return .failure("chilk_busy: Chilk cannot show it right now. Nothing was shown; just answer in words.")
+        }
+    }
 
     private func remember(_ call: CodexToolCall) -> CodexToolResult {
         guard case .remember(let fact, let asked)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
@@ -115,6 +142,8 @@ final class Actions {
         let result: CodexToolResult
         if call.name == "chilk_remember" {
             result = remember(call)
+        } else if call.name == "chilk_emote" {
+            result = emote(call)
         } else if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
         } else if ChilkReminderExecutor.handles(call.name) {

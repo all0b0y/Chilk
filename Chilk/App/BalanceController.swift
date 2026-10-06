@@ -156,6 +156,14 @@ final class BalanceController {
                 MainActor.assumeIsolated { self?.makeSlumped() }
             }
         }
+        // CHILK_DEMO_EMOTE=laugh,clown,… (acceptance): one emotion every 5 s from 3 s after launch.
+        if let list = env["CHILK_DEMO_EMOTE"] {
+            for (i, key) in list.split(separator: ",").map(String.init).enumerated() {
+                Timer.scheduledTimer(withTimeInterval: 3 + Double(i) * 5, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.emoteForCheck(key) }
+                }
+            }
+        }
         // CHILK_DEMO_FOCUS=<seconds>: focus mode 4 s after launch (the popover's path, any length ≥ 60 s).
         if let seconds = env["CHILK_DEMO_FOCUS"].flatMap(Double.init) {
             Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
@@ -808,6 +816,25 @@ final class BalanceController {
         if engine.state.episode?.phase != .showing { sim.standOut = .peek }
         sim.perform(.cheer)
         settle(after: Act.cheer.duration + 0.4)
+    }
+
+    // MARK: Emotions (slice 6c)
+
+    /// An emotion on the live Chilk. From Codex the conversation or the chat owns the stage: the thinking dots go,
+    /// the words come after the scene. He comes out from behind the edge by himself and goes back.
+    func emote(_ e: Emotion, strong: Bool, from source: String) {
+        log("emote \(e.rawValue)\(strong ? " strong" : "") (\(source))")
+        sim.clearBubble()
+        sim.emote(e, strong: strong)
+    }
+
+    /// «Проверка ▸ Эмоции» and `CHILK_DEMO_EMOTE`: `laugh`, `laughStrong`, `clown`, `offended`, `dizzy`, `sad`.
+    func emoteForCheck(_ key: String) {
+        guard activity == nil, !isBusy(), !engine.slumped else { return log("emote \(key) skipped: busy") }
+        let strong = key == "laughStrong"
+        guard let e = Emotion(rawValue: strong ? "laugh" : key) else { return }
+        hideBubble()
+        emote(e, strong: strong, from: "check")
     }
 
     private func takeReturnLine() -> String? {

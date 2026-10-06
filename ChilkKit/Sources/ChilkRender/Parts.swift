@@ -45,9 +45,26 @@ public enum Part: Hashable, Sendable {
     case speck
     /// One confetti piece; `index` picks colour and shape.
     case confetti(index: Int)
+    // Slice 6c
+    /// A tear drop of laughter (😂), flying sideways from an eye.
+    case tear
+    /// «ХА» coming out from behind the screen edge while he laughs.
+    case ha
+    /// A little foot, kicking while he lies on his back laughing; base at the origin, pointing down.
+    case foot(lw: Double)
+    /// The clown's red nose.
+    case clownNose(lw: Double)
+    /// The clown's wig: rainbow tufts on both sides of the head, the top bald (the sprout grows there).
+    case wig(lw: Double)
+    /// The blush glowing while he is petted (over the usual one).
+    case blushHot
+    /// The clown's stone face: the lower part of an eye under a flat heavy lid (-_-).
+    case eyeLidded(lw: Double)
 
     public static let waveFrames = 24
     public static let confettiPieces = 8
+    public static let tearsPerEye = 3
+    public static let haWords = 6
 
     /// Parts that exist only for one speech bubble (bounded cache eviction).
     public var isTransient: Bool {
@@ -73,26 +90,32 @@ public enum Slot {
     public static let contactShadow = 0
     public static let ear = 1           // +0, +1 — behind the head
     public static let arm = 3           // +0, +1 — raised arms grow from behind the body
-    public static let backpack = 5      // behind him
-    public static let body = 6
-    public static let strap = 7
-    public static let hat = 8           // the sprout grows through it
-    public static let stem = 9
-    public static let leaf = 10         // +0, +1
-    public static let blush = 12        // +0, +1
-    public static let eyeBag = 14       // +0, +1 — under the eyes
-    public static let eye = 16          // +0, +1
-    public static let mouth = 18
-    public static let hand = 19         // +0, +1 — a mitten in front of the body
-    public static let mug = 21
-    public static let speck = 22
-    public static let confetti = 23     // +0…+7
-    public static let z = 31            // +0…+2
-    public static let bubbleBox = 34
-    public static let bubbleTail = 35
-    public static let bubbleStroke = 36
-    public static let button = 37       // +index
-    public static let word = 49         // +index
+    public static let foot = 5          // +0, +1 — kicking feet grow from behind the body (6c)
+    public static let backpack = 7      // behind him
+    public static let body = 8
+    public static let strap = 9
+    public static let hat = 10          // the sprout grows through it
+    public static let wig = 11          // the clown's tufts (6c); the sprout grows on the bald top
+    public static let stem = 12
+    public static let leaf = 13         // +0, +1
+    public static let blush = 15        // +0, +1
+    public static let blushHot = 17     // +0, +1 — petted (6c)
+    public static let eyeBag = 19       // +0, +1 — under the eyes
+    public static let eye = 21          // +0, +1
+    public static let tear = 23         // +0…+5 — 3 per eye (6c)
+    public static let mouth = 29
+    public static let clownNose = 30    // (6c)
+    public static let hand = 31         // +0, +1 — a mitten in front of the body
+    public static let mug = 33
+    public static let speck = 34
+    public static let confetti = 35     // +0…+7
+    public static let z = 43            // +0…+2
+    public static let ha = 46           // +0…+5 — «ХА» (6c)
+    public static let bubbleBox = 52
+    public static let bubbleTail = 53
+    public static let bubbleStroke = 54
+    public static let button = 55       // +index
+    public static let word = 67         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -174,6 +197,22 @@ extension Part {
             return box(-3.2, -3.2, 6.4, 6.4, margin: 1)
         case .confetti:
             return box(-3.5, -2.2, 7, 4.4, margin: 1)
+        case .tear:
+            return box(-3.2, -4.5, 6.4, 8.5, margin: 1.5)
+        case .ha:
+            let (w, ascent, descent) = TextKit.metrics("ХА", font: TextKit.haFont)
+            return box(0, -ascent, w, ascent + descent, margin: 4)
+        case .foot(let lw):
+            return box(-6, -2, 12, 27, margin: max(4.5, 2.6 * lw / 2) + 1.5)
+        case .clownNose(let lw):
+            return box(-7.5, -7.5, 15, 15, margin: max(4.5, 2.6 * lw / 2) + 1.5)
+        case .wig(let lw):
+            let r = Props.wigPuffs.reduce(CGRect.null) { $0.union(CGRect(x: $1.x - $1.r, y: $1.y - $1.r, width: $1.r * 2, height: $1.r * 2)) }
+            return box(r.minX, r.minY, r.width, r.height, margin: max(5.5, 2.6 * lw / 2 + 1.5))
+        case .blushHot:
+            return box(-11, -7, 22, 14, margin: 1.5)
+        case .eyeLidded(let lw):
+            return box(-7.5, -2, 15, 11.5, margin: 3 * lw / 2 + 1.5)
         }
     }
 
@@ -454,6 +493,62 @@ extension Part {
             let r = i % 3 == 0 ? CGRect(x: -2.2, y: -2.2, width: 4.4, height: 4.4) : CGRect(x: -3.5, y: -1.6, width: 7, height: 3.2)
             ctx.addPath(CGPath(roundedRect: r, cornerWidth: 1, cornerHeight: 1, transform: nil))
             ctx.fillPath()
+
+        case .tear:                                         // a light-blue drop with a white rim (any wallpaper)
+            let drop = CGMutablePath()
+            drop.move(to: CGPoint(x: 0, y: -4.5))
+            drop.addCurve(to: CGPoint(x: 0, y: 4), control1: CGPoint(x: 4.2, y: -0.5), control2: CGPoint(x: 3.6, y: 4))
+            drop.addCurve(to: CGPoint(x: 0, y: -4.5), control1: CGPoint(x: -3.6, y: 4), control2: CGPoint(x: -4.2, y: -0.5))
+            ctx.addPath(drop)
+            ctx.setStrokeColor(RGBA(1, 1, 1, 0.9).cgColor)
+            ctx.setLineWidth(1.6)
+            ctx.strokePath()
+            ctx.addPath(drop)
+            ctx.setFillColor(Props.tearBlue)
+            ctx.fillPath()
+
+        case .ha:                                           // bold «ХА» with a white sticker outline
+            TextKit.drawStroke("ХА", font: TextKit.haFont, color: RGBA.white.cgColor, width: 5, in: ctx)
+            TextKit.draw("ХА", font: TextKit.haFont, color: outline, in: ctx)
+
+        case .foot(let lw):                                 // a stubby foot in the body colour
+            let foot = CGPath(roundedRect: CGRect(x: -6, y: -2, width: 12, height: 27), cornerWidth: 6, cornerHeight: 6, transform: nil)
+            Props.sticker(ctx, foot, fill: p.body.cgColor, outline: outline, lw: 2.6 * lw)
+
+        case .clownNose(let lw):
+            let nose = CGPath(ellipseIn: CGRect(x: -7.5, y: -7.5, width: 15, height: 15), transform: nil)
+            Props.sticker(ctx, nose, fill: Props.noseRed, outline: outline, lw: 2.6 * lw)
+            ctx.setFillColor(RGBA(1, 1, 1, 0.8).cgColor)
+            ctx.fillEllipse(in: CGRect(x: -4, y: -4.6, width: 4, height: 3))
+
+        case .wig(let lw):                                  // curly tufts: overlapping puffs, each outlined
+            let all = CGMutablePath()
+            for puff in Props.wigPuffs { all.addEllipse(in: CGRect(x: puff.x - puff.r, y: puff.y - puff.r, width: puff.r * 2, height: puff.r * 2)) }
+            ctx.addPath(all)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()                                // the sticker die-cut border around the whole wig
+            for (i, puff) in Props.wigPuffs.enumerated() {
+                let c = CGPath(ellipseIn: CGRect(x: puff.x - puff.r, y: puff.y - puff.r, width: puff.r * 2, height: puff.r * 2), transform: nil)
+                Props.sticker(ctx, c, fill: Props.wigColors[i % Props.wigColors.count], outline: outline, lw: 2.4 * lw, border: false)
+            }
+
+        case .blushHot:
+            ctx.setFillColor(Props.blushHot)
+            ctx.fillEllipse(in: CGRect(x: -11, y: -7, width: 22, height: 14))
+
+        case .eyeLidded(let lw):                            // the eye's lower half under a straight lid
+            let r = 7.2
+            ctx.saveGState()
+            ctx.clip(to: CGRect(x: -r, y: 0, width: r * 2, height: r * 1.3))
+            ctx.setFillColor(outline)
+            ctx.fillEllipse(in: CGRect(x: -r * 0.8, y: -r * 1.25, width: r * 1.6, height: r * 2.5))
+            ctx.restoreGState()
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(3 * lw)
+            ctx.move(to: CGPoint(x: -6.5, y: 0.5))
+            ctx.addLine(to: CGPoint(x: 6.5, y: 0.5))
+            ctx.strokePath()
         }
     }
 }
@@ -474,6 +569,17 @@ enum Props {
     static let bagLavender = RGBA.hex(0x9580D4).cgColor
     /// Peach, leaf, lavender, sun, mint, pink.
     static let confetti = ([0xFF9A7A, 0x7FCB55, 0xA78BEA, 0xFFC93C, 0x5CCFB8, 0xFF7E95] as [UInt32]).map { RGBA.hex($0).cgColor }
+    // Slice 6c
+    static let tearBlue = RGBA.hex(0x7CC8F2).cgColor
+    static let noseRed = RGBA.hex(0xF0404A).cgColor
+    static let blushHot = RGBA.hex(0xFF6F8E, alpha: 0.85).cgColor
+    /// Top to bottom on each side: red, orange, green, blue — the 🤡 tufts in Chilk's palette.
+    static let wigColors = ([0xFF5A5F, 0xFFB347, 0x7FCB55, 0x5DADEC] as [UInt32]).map { RGBA.hex($0).cgColor }
+    /// Puff centres and radii around the wig origin (the top of his head); the top stays bald for the sprout.
+    static let wigPuffs: [(x: Double, y: Double, r: Double)] = [
+        (-33, -5, 12), (-46, 5, 13), (-54, 18, 13), (-57, 31, 11.5),
+        (33, -5, 12), (46, 5, 13), (54, 18, 13), (57, 31, 11.5),
+    ]
 
     static func strapPath(_ m: Metrics) -> CGPath {
         let p = CGMutablePath()
@@ -519,6 +625,7 @@ enum TextKit {
     nonisolated(unsafe) static let bubbleFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 14, nil)!
     nonisolated(unsafe) static let zFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 15, nil)!
     nonisolated(unsafe) static let buttonFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 12, nil)!
+    nonisolated(unsafe) static let haFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 20, nil)!
 
     static func line(_ s: String, font: CTFont, color: CGColor) -> CTLine {
         CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [
@@ -546,7 +653,24 @@ enum TextKit {
         CTLineDraw(line(s, font: font, color: color), ctx)
         ctx.restoreGState()
     }
+
+    /// Only the outline of the glyphs, `width` points wide (a sticker border behind the filled text).
+    static func drawStroke(_ s: String, font: CTFont, color: CGColor, width: Double, in ctx: CGContext) {
+        let size = CTFontGetSize(font)
+        let attributed = NSAttributedString(string: s, attributes: [
+            NSAttributedString.Key(kCTFontAttributeName as String): font,
+            NSAttributedString.Key(kCTStrokeColorAttributeName as String): color,
+            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): width / size * 100,
+        ])
+        ctx.saveGState()
+        ctx.setLineJoin(.round)
+        ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        ctx.textPosition = .zero
+        CTLineDraw(CTLineCreateWithAttributedString(attributed), ctx)
+        ctx.restoreGState()
+    }
 }
+
 
 /// Word-wrapped speech bubble with optional buttons, measured once per text.
 struct BubbleLayout: Sendable {

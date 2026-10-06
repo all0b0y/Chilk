@@ -344,7 +344,26 @@ final class EdgeController: NSObject {
         CATransaction.setDisableActions(true)
         if panel.frame != frame { panel.setFrame(frame, display: false) }
         view.show(plan: plan, viewport: viewport)
+        demoSnapshot()
         CATransaction.commit()
+    }
+
+    /// Acceptance only: CHILK_DEMO_EDGE_SNAPSHOT=/dir writes the live rig every 0.3 s while an emotion plays or he is
+    /// petted (slice 6c), at most 200 frames.
+    private lazy var edgeSnapshots: URL? = env["CHILK_DEMO_EDGE_SNAPSHOT"].map { URL(fileURLWithPath: $0, isDirectory: true) }
+    private var lastEdgeSnapshot = 0.0
+    private var edgeSnapshotCount = 0
+
+    private func demoSnapshot() {
+        guard let dir = edgeSnapshots, edgeSnapshotCount < 200 else { return }
+        let m = sim.pose.mood
+        guard sim.isEmoting || m.petted || m.winking else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastEdgeSnapshot >= 0.3 else { return }
+        lastEdgeSnapshot = now
+        edgeSnapshotCount += 1
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        view.snapshot(to: dir.appending(path: String(format: "edge-%03d.png", edgeSnapshotCount)))
     }
 
     // MARK: Geometry
