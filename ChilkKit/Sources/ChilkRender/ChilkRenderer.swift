@@ -38,6 +38,7 @@ public enum ChilkRenderer {
         if let age = p.confettiAge { confettiPlacements(into: &out, age: age, origin: p.confettiOrigin, mirror: mirror) }
         if p.sleep > 0.3 { zPlacements(into: &out, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let age = p.haAge { haPlacements(into: &out, age: age, count: p.haCount, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
+        if let age = p.puffAge { puffPlacements(into: &out, age: age, origin: p.puffOrigin, mirror: mirror) }
         if let text = p.bubble, !text.isEmpty { bubblePlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: text) }
         return out
     }
@@ -240,6 +241,22 @@ public enum ChilkRenderer {
             if mirrored { t = t.scaledBy(x: -1, y: 1) }   // letters must never read backwards
             t = t.scaledBy(x: size, y: size).rotated(by: -0.25)
             out.append(Placement(slot: Slot.z + i, part: .z, transform: t, alpha: alpha))
+        }
+    }
+
+    /// «пф!» (6d): a little cloud bursts out of the screen edge where he vanished, into the screen, and fades.
+    static func puffPlacements(into out: inout [Placement], age: Double, origin o: CGPoint, mirror: CGAffineTransform) {
+        let u = clamp(age / CharacterSim.puffLife)
+        let spread = 1 - (1 - u) * (1 - u)                        // fast out, then slow
+        let angles = [Double.pi, .pi * 0.78, .pi * 1.22, .pi * 0.6, .pi * 1.4]
+        for i in 0..<Part.puffs {
+            let a = angles[i % angles.count]
+            let d = (16 + Double(i % 3) * 6) * spread + 4
+            let s = 0.55 + 0.6 * spread
+            let alpha = 1 - u * u
+            guard alpha > 0.002 else { continue }
+            let t = mirror.translatedBy(x: Double(o.x) + cos(a) * d, y: Double(o.y) + sin(a) * d).scaledBy(x: s, y: s)
+            out.append(Placement(slot: Slot.puff + i, part: .puff(index: i), transform: t, alpha: alpha))
         }
     }
 

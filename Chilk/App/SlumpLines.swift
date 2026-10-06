@@ -3,6 +3,8 @@ import Foundation
 /// «Лежит» (slice 6b, decisions 8–9): the user's own words for him, and the little shake-up at the edge.
 extension Lines {
     static let slumpHelp = String(localized: "Помоги мне… сделай хоть что-нибудь")
+    /// Slice 6d, decision 19: hidden, he decided to come out for the request.
+    static let stayOut = String(localized: "Не, я тут посижу. Нам надо поговорить")
     static let slumpLater = String(localized: "Сделаешь — поговорим потом")
     /// What he answers to a call or a chat message while he lies (no Codex).
     static var slumpRefusal: String { [slumpHelp, slumpLater].randomElement()! }

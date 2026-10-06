@@ -36,6 +36,9 @@ final class EdgeController: NSObject {
     /// Bubble buttons and clicks on the body go to the balance controller.
     var onButton: ((Int) -> Void)?
     var onPoke: (() -> Void)?
+    /// Slice 6d: released with more than half of him behind the edge / a hidden Chilk dragged back onto the screen.
+    var onHideDrop: (() -> Void)?
+    var onPullOut: (() -> Void)?
     private var pressedButton: Int?
     private struct Flight {
         var start: CFTimeInterval
@@ -251,7 +254,9 @@ final class EdgeController: NSObject {
         if d.moved {
             let screen = home.frame
             var origin = CGPoint(x: m.x - d.grabOffset.x, y: m.y - d.grabOffset.y)
-            origin.x = min(max(origin.x, screen.minX - metrics.sceneSize.width / 2), screen.maxX - metrics.sceneSize.width / 2)
+            // Most of him can go behind either edge (6d: more than half hides him), a sliver stays to grab.
+            let range = EdgePlacement.carryRangeX(screen: screen, panelWidth: metrics.sceneSize.width, radiusX: metrics.radiusX)
+            origin.x = min(max(origin.x, range.lowerBound), range.upperBound)
             origin.y = min(max(origin.y, screen.minY), screen.maxY - metrics.sceneSize.height)
             carryVelocity = Double(origin.x - d.lastX) * 60
             d.lastX = origin.x
@@ -275,8 +280,21 @@ final class EdgeController: NSObject {
             sim.isCarried = false
             // He is centred, so the panel centre is his position: the nearer edge wins.
             placement = .dropped(panelOrigin: sceneOrigin, panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
+            let centreX = sceneOrigin.x + metrics.sceneSize.width / 2
+            if EdgePlacement.hidingEdge(bodyCenterX: centreX, visibleFrame: visibleFrame) != nil {
+                // Slice 6d: behind the edge. Re-anchor at his usual panel place (so the «пф!» is at the real screen
+                // edge), then he dives the rest of the way.
+                let standard = placement.panelOrigin(panelSize: metrics.sceneSize, visibleFrame: visibleFrame)
+                let mirrored = placement.edge == .left
+                let local = Double(mirrored ? standard.x + metrics.sceneSize.width - centreX : centreX - standard.x)
+                _ = reframe(to: local, mirrored: mirrored)
+                originX.velocity = 0
+                onHideDrop?()
+                return
+            }
             _ = reframe(to: metrics.dockX, mirrored: placement.edge == .left)
             originX.velocity = carryVelocity * 0.5   // a little fling towards the edge
+            if sim.hidden { onPullOut?() }
         } else {
             sim.poke()
             onPoke?()
@@ -357,13 +375,24 @@ final class EdgeController: NSObject {
     private func demoSnapshot() {
         guard let dir = edgeSnapshots, edgeSnapshotCount < 200 else { return }
         let m = sim.pose.mood
-        guard sim.isEmoting || m.petted || m.winking else { return }
+        // 6d: also while he peeks from behind the edge, the «пф!» is in the air, or hidden he is out for a while.
+        let hidingShown = sim.standOut == .lurk || sim.pose.puffAge != nil || (sim.hidden && !sim.isHiddenHome)
+        guard sim.isEmoting || m.petted || m.winking || hidingShown else { return }
         let now = CACurrentMediaTime()
         guard now - lastEdgeSnapshot >= 0.3 else { return }
         lastEdgeSnapshot = now
         edgeSnapshotCount += 1
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         view.snapshot(to: dir.appending(path: String(format: "edge-%03d.png", edgeSnapshotCount)))
+        // 6d: where he is — the layer snapshot has no screen edge in it.
+        let line = String(format: "%03d x=%.0f width=%.0f standOut=%@ hiddenHome=%d puff=%d act=%@\n", edgeSnapshotCount,
+                          sim.positionX, metrics.width, "\(sim.standOut)", sim.isHiddenHome ? 1 : 0,
+                          sim.pose.puffAge != nil ? 1 : 0, "\(sim.act.map { "\($0)" } ?? "-")")
+        if let h = try? FileHandle(forWritingTo: dir.appending(path: "frames.txt")) {
+            h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close()
+        } else {
+            try? Data(line.utf8).write(to: dir.appending(path: "frames.txt"))
+        }
     }
 
     // MARK: Geometry

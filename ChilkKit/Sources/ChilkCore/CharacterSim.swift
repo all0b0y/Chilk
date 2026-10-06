@@ -81,8 +81,9 @@ public enum Antic: CaseIterable, Sendable {
 /// How far out from behind the screen edge he stands (ladder stages, activities). `center`: stage 3–4, he has
 /// left the edge and stands in the middle of the screen (the app moves the window; he is centred in it).
 /// `away`: entirely behind the edge — he went into the tray popover (slice 5a).
+/// `lurk`: hidden behind the edge, he leans out to peek (slice 6d).
 public enum StandOut: Sendable, Equatable {
-    case docked, peek, out, center, away
+    case docked, peek, out, center, away, lurk
 }
 
 /// Things he can hold or wear. Order = drawing order (behind → front).
@@ -217,6 +218,9 @@ public struct CharacterPose: Sendable, Equatable {
     public var wigDrop: Double = 0
     /// The blush glows while he is petted (0…1).
     public var blushHot: Double = 0
+    /// Slice 6d: the «пф!» puff when he dives behind the edge — seconds since, and where (scene coordinates).
+    public var puffAge: Double?
+    public var puffOrigin: CGPoint = .zero
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -265,6 +269,9 @@ public final class CharacterSim {
     public var isSad = false
     /// «Лежит» (slice 6b): every need of the user is empty — he lies on his side at the edge until a rest.
     public var slumped = false
+    /// Slice 6d: he lives behind the screen edge — `standOut == .docked` («home») is then out of sight, `.lurk` peeks.
+    /// Everything that brings him out (`.peek`, `.out`, `.center`, a call) still does, and home is behind the edge again.
+    public var hidden = false
     public var hoveredButton: Int?
     /// Listening to the user: little ears pop up; `hearing` (0…1, voice level) makes them twitch.
     public var listening = false
@@ -335,6 +342,13 @@ public final class CharacterSim {
     private var winkAt = -99.0
     private var blushHotLevel = 0.0
     private var clownGaze = (x: 0.0, y: 0.0)
+    // Slice 6d
+    private var wasHome = false
+    private var diveAt = -99.0
+    private var diveFrom = 0.0
+    private var puffPending = false
+    private var puffAt: Double?
+    private var puffOriginPoint = CGPoint.zero
 
     public static let calledDuration = 4.4
     public static let dizzyDuration = 2.6
@@ -363,6 +377,9 @@ public final class CharacterSim {
     public static let pettingTurns = 3, pettingWindow = 1.5, pettingHold = 0.9, strokeTravel = 10.0
     public static let winkAfter = 1.0, winkDuration = 0.5
     nonisolated public static let confettiLife = 1.4
+    nonisolated public static let puffLife = 0.6
+    /// Diving behind the edge: slowly, then a dash (ease-in), leaning in so the sprout goes last.
+    public static let diveDuration = 0.8
 
     public init(metrics: Metrics = .standard, rng: any RandomSource = SystemRandom()) {
         self.metrics = metrics
@@ -441,6 +458,21 @@ public final class CharacterSim {
 
     public var isNight: Bool { hourOfDay >= 23 || hourOfDay < 6 }
 
+    /// Slice 6d: at home behind the edge — out of sight (a call or being carried brings him out).
+    public var isHiddenHome: Bool { hidden && standOut == .docked && time >= calledUntil && !isCarried }
+
+    /// Hidden and peeking or at home: hovering does not pull him out, petting and antics wait.
+    private var tucked: Bool { hidden && (standOut == .docked || standOut == .lurk) && time >= calledUntil && !isCarried }
+
+    /// At launch, hidden: already behind the edge, no dive and no puff.
+    public func snapHidden() {
+        guard hidden else { return }
+        x.value = metrics.awayX
+        x.target = metrics.awayX
+        x.velocity = 0
+        wasHome = true
+    }
+
     /// Breathing exercise: which half of the breath and how far into it (0…1).
     public var breath: (inhaling: Bool, progress: Double, count: Int)? {
         guard case .breathe = act else { return nil }
@@ -469,6 +501,7 @@ public final class CharacterSim {
         if let a = currentAntic { return "antic \(a)" }
         if jump != nil { return "jump" }
         if let c = confettiAt, time - c < Self.confettiLife { return "confetti" }
+        if let p = puffAt, time - p < Self.puffLife { return "puff" }
         if blinkStart != nil { return "blink" }
         if m.winking || blushHotLevel > 0.01 { return "petting" }
         // A bubble needs 60 fps while it pops in (words arrive one by one) or out — not while it just stays.
@@ -651,11 +684,14 @@ public final class CharacterSim {
         case .out: metrics.outX
         case .center: metrics.carryX
         case .away: metrics.awayX
+        case .lurk: metrics.lurkX
         }
         // A call brings him out even from behind the edge (the tray then takes him back from the popover).
         x.target = m.carried || standOut == .center ? metrics.carryX
             : (m.called ? metrics.outX
                : (standOut == .away ? stand : (isHovering ? min(metrics.peekX, stand) : stand)))
+        // Slice 6d: hidden, home is behind the edge and a peek stays there — hovering does not pull him out.
+        if tucked { x.target = standOut == .lurk ? metrics.lurkX : metrics.awayX }
         if let h = hopX, !m.carried { x.target = h }              // between the hops he stays where he landed
         // An emotion is shown out from behind the edge (6c); falling on his back needs a little more room.
         if let a = act, a.isEmotion, !m.carried {
@@ -664,6 +700,7 @@ public final class CharacterSim {
         let sag = sagLevel
         tilt.target = (m.called ? 0 : -0.1) - x.velocity * 0.0011 - carry * 0.0006
             + (m.dizzy ? sin(t * 9) * 0.12 : 0) + sleepLevel * 0.08 - sag * 0.07
+        stepHiding(t: t)
         eyeScale.target = m.carried ? 1.28 : (eyesWide ? 1.25 : (isHovering ? 1.18 : (m.called || listening ? 1.1 : 1)))
         ears.target = listening ? 1 : 0
 
@@ -702,7 +739,7 @@ public final class CharacterSim {
         // Antics "по настроению". At night (and when tired) yawns win far more often. Not during acts; fewer when tired.
         if t >= anticUntil { currentAntic = nil }
         if !m.called && !m.dizzy && !m.carried && !drowsy && act == nil && lieLevel == 0 && pettingSince == nil
-            && t > nextAntic {
+            && !tucked && t > nextAntic {
             beginAntic(pickAntic(), at: t)
             nextAntic = t + rng.uniform(8, 15) * (1 + sag * 0.8)
         }
@@ -871,6 +908,7 @@ public final class CharacterSim {
         case .out: metrics.outX
         case .center: metrics.carryX
         case .away: metrics.awayX
+        case .lurk: metrics.lurkX
         }
     }
 
@@ -1023,7 +1061,7 @@ public final class CharacterSim {
             hoverLostAt = nil
             if !isHovering {
                 isHovering = true
-                if !isAsleep && !slumped && !isEmoting { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"
+                if !isAsleep && !slumped && !isEmoting && !tucked { hop.impulse(-240); leaf.impulse(5) }   // "выпрыгивает"
             }
         } else {
             loseHover()
@@ -1060,7 +1098,44 @@ public final class CharacterSim {
     }
 
     private var canBePetted: Bool {
-        !isAsleep && sleepLevel < 0.05 && !isCarried && !slumped && lieLevel == 0 && act == nil && !eyesWide
+        !isAsleep && sleepLevel < 0.05 && !isCarried && !slumped && lieLevel == 0 && act == nil && !eyesWide && !tucked
+    }
+
+    // MARK: Hiding (slice 6d)
+
+    /// Home behind the edge: dives in leaning towards the screen (the sprout disappears last) with a «пф!» as he
+    /// vanishes; leaving home he hops out. Peeking, he leans out from behind the edge.
+    private func stepHiding(t: Double) {
+        let home = isHiddenHome
+        if home && !wasHome {
+            diveAt = t
+            diveFrom = x.value
+            puffPending = true
+            currentAntic = nil
+        } else if !home && wasHome {
+            hop.impulse(-240)
+            leaf.impulse(5)
+            puffPending = false
+        }
+        wasHome = home
+        let k = t - diveAt
+        if home, k < Self.diveDuration {
+            // A scripted slide (a spring would snap him away in ~0.2 s): slow at first, then a dash behind the edge.
+            let u = k / Self.diveDuration
+            let to = metrics.awayX
+            x.value = diveFrom + (to - diveFrom) * u * u
+            x.velocity = 2 * (to - diveFrom) * u / Self.diveDuration
+            x.target = x.value
+            tilt.target -= 0.5 * Self.envelope(k, length: Self.diveDuration, rise: 0.15, fall: 0.25)
+        }
+        // The puff comes once he is out of sight (leaning in, his drawn body is ~25 pt further in than `x`).
+        if home, puffPending, x.value - metrics.radiusX * 1.15 >= metrics.width {
+            puffPending = false
+            puffAt = t
+            let c = bodyCenter
+            puffOriginPoint = CGPoint(x: metrics.width - 2, y: Double(c.y) - metrics.radiusY * 0.4)
+        }
+        if tucked, standOut == .lurk { tilt.target -= 0.42 }                 // leaning out from behind the edge
     }
 
     private func stepPetting(pointer: CGPoint?, center: CGPoint, t: Double, dt: Double) {
@@ -1160,6 +1235,10 @@ public final class CharacterSim {
         }
         p.passThrough = act == .hops
         p.lying = lying
+        if let a = puffAt, t - a < Self.puffLife {
+            p.puffAge = t - a
+            p.puffOrigin = puffOriginPoint
+        }
         // Slice 6c: the emotions' extras.
         p.roll = roll
         p.blushHot = blushHotLevel
@@ -1211,7 +1290,7 @@ public final class CharacterSim {
         p.earsUp = max(0, ears.value)
         p.earWiggle = listening ? sin(t * 22) * 0.14 * min(1, hearing) : 0
         p.earsDroop = earsDroop
-        if t < bubbleUntil, let text = bubbleText {
+        if t < bubbleUntil, let text = bubbleText, !isHiddenHome {     // 6d: no bubble from behind the edge
             p.bubble = text
             p.bubbleAge = t - bubbleAt
             p.bubbleRemaining = bubbleUntil - t

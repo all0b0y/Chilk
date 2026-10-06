@@ -38,6 +38,8 @@ public enum ChilkAction: Equatable, Sendable {
     case endFocus
     /// Slice 6c: Chilk shows an emotion with his body (`strong` matters only for laugh).
     case emote(Emotion, strong: Bool)
+    /// Slice 6d: hide behind the screen edge (`true`) or come back out for good (`false`), when the conversation closes.
+    case hide(Bool)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -52,7 +54,7 @@ public enum ChilkToolCatalog {
             tool("chilk_water", "Credit water ONLY when the user confirms they drank it. Do not credit a promise.", [:]),
             tool("chilk_timer", "Create a local Chilk timer. App must run; overdue notices return on next launch.",
                  ["seconds": ["type": "integer", "minimum": 1, "maximum": 31622400], "title": title]),
-            tool("chilk_schedule", "Schedule a short prepared message in Chilk at an explicit ISO-8601 timestamp with timezone. Not Apple Reminders; app must run.",
+            tool("chilk_schedule", "Schedule a short prepared message in Chilk at an explicit ISO-8601 timestamp with timezone. Not Apple Reminders; app must run. An hour 1–12 said without утра/дня/вечера/ночи is ambiguous: ask first (03:00 or 15:00?), never guess; refused with ambiguous_time / ambiguous_day otherwise.",
                  ["at": ["type": "string", "maxLength": 64], "title": title,
                   "message": ["type": "string", "minLength": 1, "maxLength": 240]]),
             tool("chilk_timers", "List local Chilk timers with exact ids and deadlines; use before cancelling an ambiguous name.", [:]),
@@ -68,7 +70,7 @@ public enum ChilkToolCatalog {
                   "reason": ["type": "string", "minLength": 1, "maxLength": 120]]),
             tool("chilk_cancel_timer", "Cancel one local Chilk timer by its exact id, only on the user's request.",
                  ["id": ["type": "string", "minLength": 1, "maxLength": 128]]),
-            tool("chilk_reminder", "Create an Apple Reminders reminder for the user in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Explicit future ISO-8601 timestamp with timezone. Creates only: no editing, completing or deleting.",
+            tool("chilk_reminder", "Create an Apple Reminders reminder for the user in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Explicit future ISO-8601 timestamp with timezone. An hour 1–12 said without утра/дня/вечера/ночи is ambiguous: ask first (03:00 or 15:00?), never guess; refused with ambiguous_time / ambiguous_day otherwise. Creates only: no editing, completing or deleting.",
                  ["at": ["type": "string", "maxLength": 64], "title": ["type": "string", "minLength": 1, "maxLength": 120]]),
             tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (title, due). Other lists are never read.", [:]),
             tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
@@ -88,6 +90,8 @@ public enum ChilkToolCatalog {
             tool("chilk_emote", "Optional, your own choice: Chilk shows ONE emotion with his body at the screen edge, at once — before your words, so do not describe it in words. Only when it truly fits, not in every answer; at most one call per answer (a refused call still counts — then just answer in words). cheer: joy for the user's success or great news. laugh: something genuinely funny; strong=true only when it is hilarious (he falls over laughing). offended: playful offence at a tease. dizzy: too much, too confusing. sad: sad news. clown: EXTREMELY rare — utmost disappointment in someone or something else (a company, a person, a service), never in the user. strong matters only for laugh. Refused: not_now (the clown was shown recently; nothing replaces it), chilk_busy (Chilk cannot show it right now), one_per_answer.",
                  ["emotion": ["type": "string", "enum": .array(Emotion.allCases.map { .string($0.rawValue) })],
                   "strong": ["type": "boolean"]]),
+            tool("chilk_hide", "Only on the user's request: hidden=true — Chilk hides behind the screen edge («спрячься», «уйди за край»); hidden=false — he comes back out for good («выходи», «вернись», «не прячься»). It happens when the conversation closes; just say it briefly. [контекст] says whether he is hidden now. While hidden he still counts breaks and peeks out now and then. changed=false: he already was.",
+                 ["hidden": ["type": "boolean"]]),
         ]
     }()
 
@@ -252,6 +256,9 @@ public enum ChilkToolCatalog {
             guard Set(fields.keys) == ["emotion", "strong"], let raw = fields["emotion"]?.string,
                   let emotion = Emotion(rawValue: raw), let strong = fields["strong"]?.bool else { throw ToolError.invalidArguments }
             return .emote(emotion, strong: strong)
+        case "chilk_hide":
+            guard Set(fields.keys) == ["hidden"], let hidden = fields["hidden"]?.bool else { throw ToolError.invalidArguments }
+            return .hide(hidden)
         case "chilk_mode":
             guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
                   let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }

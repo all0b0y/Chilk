@@ -31,4 +31,19 @@ public struct EdgePlacement: Codable, Equatable, Sendable {
         let fraction = span > 0 ? Double((panelOrigin.y - visibleFrame.minY) / span) : 0
         return EdgePlacement(edge: edge, verticalFraction: fraction)
     }
+
+    /// Slice 6d (decision 17): released with more than half of the body beyond an edge of the visible frame, he hides
+    /// behind that edge; otherwise `nil` (he goes back to the nearer edge as before).
+    public static func hidingEdge(bodyCenterX: CGFloat, visibleFrame: CGRect) -> Edge? {
+        if bodyCenterX > visibleFrame.maxX { return .right }
+        if bodyCenterX < visibleFrame.minX { return .left }
+        return nil
+    }
+
+    /// Where the panel origin may go while he is carried (centred in the panel): most of the body can be pushed behind
+    /// either edge of the screen, a sliver stays to grab him back.
+    public static func carryRangeX(screen: CGRect, panelWidth: CGFloat, radiusX: Double) -> ClosedRange<CGFloat> {
+        let beyond = CGFloat(radiusX * 0.85)
+        return (screen.minX - panelWidth / 2 - beyond)...(screen.maxX - panelWidth / 2 + beyond)
+    }
 }

@@ -66,6 +66,8 @@ final class Actions {
                     balance?.focusFromConversation(minutes: m) ?? ["focus": false]
                 }, endFocus: { [weak balance] in
                     ["ended": .bool(balance?.endFocus() ?? false)]
+                }, hide: { [weak balance] hidden in
+                    balance?.hideout?.request(hidden) ?? ["changed": false]
                 })
         } catch {
             executor = nil
@@ -140,7 +142,9 @@ final class Actions {
                             + "tell the user it is switched off there.")
         }
         let result: CodexToolResult
-        if call.name == "chilk_remember" {
+        if let refused = ClockCheck.refusal(for: call) {
+            result = refused                                     // 6d+: «в 3» — ночи или дня? Ask first.
+        } else if call.name == "chilk_remember" {
             result = remember(call)
         } else if call.name == "chilk_emote" {
             result = emote(call)

@@ -136,7 +136,7 @@ final class ChatController: NSObject, NSWindowDelegate {
         posing = pose
         if pose { sim.perform(.think(seconds: 60)) }              // at the edge, no bubble (decision 13)
         log("chat: typed question (\(text.count) chars)\(fresh ? ", clean thread" : "")\(plan.continuing != nil ? ", continues a chat" : "")\(pose ? "" : ", Chilk busy at the edge")")
-        let question = VoiceContext.chat(context()) + text
+        let question = ClockCheck.question(text, context: VoiceContext.chat(context())) + text
         Task {
             defer {
                 thinking = false

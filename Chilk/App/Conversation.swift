@@ -386,7 +386,9 @@ final class Conversation {
             }
             let asked = now
             do {
-                let raw = try await brain.ask(context() + question) { partial in answer.set(partial) }
+                let raw = try await brain.ask(ClockCheck.question(question, context: context()) + question) { partial in
+                    answer.set(partial)
+                }
                 guard !Task.isCancelled else { return }
                 // 6c: an emotion Codex showed plays to the end before the words appear.
                 while sim.isEmoting, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }

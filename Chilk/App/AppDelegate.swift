@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phrases: PhraseBatches?
     private var tray: Tray?
     private var greeting: FirstMeeting?
+    private var hide: HideController?
     private let switches = ToolSwitchStore()
     private let profile = ProfileStore()
     private let chats = ChatStore()
@@ -47,6 +48,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.presence = presence
         let balance = BalanceController(sim: edge.sim, edge: edge, presence: presence, settings: settings)
         self.balance = balance
+        // Slice 6d: hidden behind the screen edge (survives a relaunch).
+        let hide = HideController(sim: edge.sim)
+        hide.log = { [weak balance] in balance?.log($0) }
+        ClockCheck.log = { [weak balance] in balance?.log($0) }
+        if hide.isHidden { balance.log("hidden at launch") }
+        self.hide = hide
+        balance.hideout = hide
+        edge.onHideDrop = { [weak hide] in hide?.hide("dragged") }
+        edge.onPullOut = { [weak hide] in hide?.show("dragged out") }
         let actions = Actions(balance: balance, sim: edge.sim)
         self.actions = actions
         let switches = self.switches
@@ -74,11 +84,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         warmups.log = { [weak balance] in balance?.log($0) }
         balance.warmups = warmups
         let profile = self.profile
-        conversation.context = { [weak balance] in
+        conversation.context = { [weak balance, weak hide] in
             Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name,
-                          balance: balance?.engine.brief())
+                          balance: balance?.engine.brief(), hidden: hide?.isHidden ?? false)
         }
-        conversation.onEnd = { [weak balance, weak ears] in balance?.resume(); ears?.resume() }
+        conversation.onEnd = { [weak balance, weak ears, weak hide] in hide?.applyPending(); balance?.resume(); ears?.resume() }
         conversation.refusal = { [weak balance] in balance?.refusal() }        // «лежит» (6b)
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
 
@@ -106,7 +116,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.playEmote = { [weak balance] e, strong in balance?.emote(e, strong: strong, from: "Codex") }
         brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
         brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }
-        chat.onTurnEnd = { [weak balance] in balance?.resume() }
+        chat.onTurnEnd = { [weak balance, weak hide] in hide?.applyPending(); balance?.resume() }
         memory.onChange.append { [weak brain] in brain?.memoryChanged() }
         conversation.onTurn = { [weak chat] question, answer, thread in
             chat?.recordVoice(question: question, answer: answer, thread: thread)
@@ -148,6 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let edge else { return false }
             return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
                 && !(tray?.holdsChilk ?? true) && !(greeting?.isActive ?? true) && !edge.sim.isTalking
+                && !edge.sim.hidden                           // 6d: hidden, no thinking pose (and no emotions)
         }
         actions.conversationActive = { [weak conversation, weak tray, weak greeting] in
             (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
@@ -161,6 +172,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
                 && !(greeting?.isActive ?? true) && !edge.sim.isTalking && edge.sim.standOut == .docked
         }
+        hide.canPeek = { [weak tray, weak chat, weak edge] in
+            (tray?.isFree() ?? false) && !(tray?.holdsChilk ?? true) && !(chat?.thinking ?? true) && edge?.sim.act == nil
+        }
+        hide.onShown = { [weak balance] in balance?.resume() }
         balance.onNudge = { [weak tray] in tray?.nudge() }
         actions.onDue = { [weak tray] in tray?.nudge() }
 
@@ -179,7 +194,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         ears.onDisabled = { [weak conversation] in conversation?.muteEars() }
         ears.onError = { [weak conversation] in conversation?.muteEars() }
-        ears.notice = { [weak edge, weak conversation] line in
+        ears.notice = { [weak edge, weak conversation, weak hide, weak balance] line in
+            // 6d: hidden, an ears notice («Учусь слышать…» at launch) must not pull him out — the tray shows it.
+            if hide?.isHidden == true { balance?.log("ears notice while hidden: \(line)"); return }
             if conversation?.isActive != true { edge?.sim.call(line: line) }
         }
         ears.log = { [weak balance] in balance?.log($0) }
@@ -193,10 +210,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; in the greeting = next line;
         // otherwise the balance poke.
-        edge.onPoke = { [weak conversation, weak actions, weak greeting, weak balance] in
+        edge.onPoke = { [weak conversation, weak actions, weak greeting, weak balance, weak hide] in
             if conversation?.clicked() == true { return }
             if actions?.clicked() == true { return }
             if greeting?.clicked() == true { return }
+            if hide?.clicked() == true { return }                 // 6d: a click on him peeking = out for good
             balance?.poked()
         }
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
@@ -269,7 +287,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// «Позвать Чилка», «Проверка ▸» for acceptance, «О Чилке», «Выйти». Everything else is in the popover.
     private func trayMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.label, #selector(callChilk)))
+        if hide?.isHidden == true {
+            menu.addItem(item(String(localized: "Позвать Чилка"), #selector(showChilk)))       // 6d: just comes out
+        } else {
+            menu.addItem(item(String(localized: "Позвать Чилка") + "  " + Hotkey.label, #selector(callChilk)))
+            menu.addItem(item(String(localized: "Спрятать Чилка"), #selector(hideChilk)))
+        }
         menu.addItem(.separator())
 
         // Manual acceptance helpers.
@@ -297,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sub.addItem(item(String(localized: "Выходка: ловит пылинку"), #selector(anticSpeck)))
         sub.addItem(item(String(localized: "Ликует"), #selector(cheerNow)))
         sub.addItem(item(String(localized: "Лежит"), #selector(slumpNow)))
+        if hide?.isHidden == true { sub.addItem(item(String(localized: "Выглянуть"), #selector(peekNow))) }
         // Slice 6c: Codex's emotions, played at once and past the limits (the clown's 14 days are not spent).
         let emotions = NSMenuItem(title: String(localized: "Эмоции"), action: nil, keyEquivalent: "")
         let emotionsMenu = NSMenu()
@@ -320,6 +344,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func callChilk() { conversation?.trigger() }
+    @objc private func showChilk() { hide?.show("tray") }
+    @objc private func hideChilk() { hide?.hide("tray") }
+    @objc private func peekNow() { hide?.look(seconds: 2, why: "check") }
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)

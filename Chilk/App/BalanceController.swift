@@ -72,6 +72,10 @@ final class BalanceController {
 
     /// While Чилк talks with the user the stage is theirs: balance keeps counting but shows nothing.
     var isBusy: () -> Bool = { false }
+    /// Slice 6d: hidden behind the edge (set by the app).
+    weak var hideout: HideController?
+    /// The request he chose not to come out for (decision 19): shown again after a conversation only quietly.
+    private var quietRequest: String?
     /// Stage ≥ 2 insists: the tray icon wiggles (slice 5a; was the Dock bounce). Also while the stage is busy.
     var onNudge: () -> Void = {}
 
@@ -101,10 +105,14 @@ final class BalanceController {
             pendingBreak = nil
             if Date().timeIntervalSince(at) < 300 { return startBreak(b) }
         }
-        if engine.slumped, !stageThreeOrMore, activity == nil { return showSlump() }   // «Помоги мне…» comes back
+        if engine.slumped, !stageThreeOrMore, activity == nil {                    // «Помоги мне…» comes back
+            if hideout?.isHidden == true, quietRequest == "slumped" { return }
+            return showSlump()
+        }
         let focusLine = focusEndedUnsaid
         focusEndedUnsaid = false
         if let prompt = engine.currentPrompt() {
+            if hideout?.isHidden == true, let key = Self.requestKey(prompt), key == quietRequest { return }   // still quiet
             apply(prompt)
         } else if focusLine {
             apply(.focusEnded)
@@ -189,6 +197,7 @@ final class BalanceController {
         }
         lastSignals = s
         let events = engine.tick(s)
+        hideout?.tick(s)
         if logURL != nil {
             if ticks % 10 == 0 {
                 log(String(format: "signals idle=%.0fs locked=%d front=%@ %@ fullscreen=%d call=%d video=%d | water %.0f%% stretch %.0f%% eyes %.0f%% walk %.0f%% day %.0f%% | eyes strain %.2f",
@@ -243,6 +252,7 @@ final class BalanceController {
         switch event {
         case .hint(let n):
             guard !engine.slumped else { return }                   // lying, he does not pantomime
+            if hiddenRequest(.hint(n), need: n, stage: 0) { return }
             hideBubble()
             sim.standOut = .docked
             pantomime(n)
@@ -251,6 +261,7 @@ final class BalanceController {
             guard activity == nil else { return }
             if engine.slumped && stage < 3 { return }                // Strict counts on under him; 3–4 still show (6b)
             if stage < 3, Date() < riseQuietUntil { return }          // «Ох… спасибо» first; `resume()` shows it after
+            if hiddenRequest(event, need: n, stage: stage) { return }
             if stage == 1, !again {
                 // Soft / Strict start on the bubble; the need's pantomime is its intro (6a, decision 33).
                 hideBubble()
@@ -284,23 +295,7 @@ final class BalanceController {
                 buttonActions = []
                 sim.say(Lines.pause(n), duration: .infinity)
                 edge.raised = true
-                escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest,
-                                 breakTitle: n == .stretch ? Lines.startWarmup : (n == .walk ? Lines.goWalk : nil))
-                if let after = env["CHILK_DEMO_PAUSE_BREAK"].flatMap(Double.init) {
-                    Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated { self?.startFromPause() }
-                    }
-                }
-                scheduleDemoExit()
-                if let path = env["CHILK_DEMO_SNAPSHOT"] {
-                    Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
-                        MainActor.assumeIsolated {
-                            self?.escalation.snapshot(to: URL(fileURLWithPath: path), openForm: false)
-                            self?.escalation.snapshot(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-form.png")),
-                                                      openForm: true)
-                        }
-                    }
-                }
+                startPause(n)
             case 3:
                 sim.say(again ? Lines.ask(n, stage: stage, again: true) : Lines.disturb(n), buttons: buttons.map { Lines.button($0, for: n) })
                 buttonActions = buttons.map { action(for: $0, need: n) }
@@ -310,6 +305,75 @@ final class BalanceController {
                 sim.say(Lines.ask(n, stage: stage, again: again), buttons: buttons.map { Lines.button($0, for: n) })
                 buttonActions = buttons.map { action(for: $0, need: n) }
             }
+    }
+
+    /// Stage 4's shade with its form (also while he stays hidden: decision 19).
+    private func startPause(_ n: Need) {
+        escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest,
+                         breakTitle: n == .stretch ? Lines.startWarmup : (n == .walk ? Lines.goWalk : nil))
+        if let after = env["CHILK_DEMO_PAUSE_BREAK"].flatMap(Double.init) {
+            Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.startFromPause() }
+            }
+        }
+        scheduleDemoExit()
+        if let path = env["CHILK_DEMO_SNAPSHOT"] {
+            Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.escalation.snapshot(to: URL(fileURLWithPath: path), openForm: false)
+                    self?.escalation.snapshot(to: URL(fileURLWithPath: path.replacingOccurrences(of: ".png", with: "-form.png")),
+                                              openForm: true)
+                }
+            }
+        }
+    }
+
+    // MARK: Hidden behind the edge (slice 6d, decision 19)
+
+    private static func requestKey(_ e: BalanceEvent) -> String? {
+        switch e {
+        case .hint(let n): "\(n.rawValue)#0"
+        case .ask(let n, let stage, _, _): "\(n.rawValue)#\(stage)"
+        default: nil
+        }
+    }
+
+    /// Hidden, a request starts or climbs: the roll. He comes out for good — «Не, я тут посижу…», then the request as
+    /// usual. He stays hidden — he looks out ~3 s with the need's pantomime, no bubble, the ladder goes on; the shade
+    /// and the pause still come. `true` = handled here.
+    private func hiddenRequest(_ event: BalanceEvent, need n: Need, stage: Int) -> Bool {
+        guard let hide = hideout, hide.isHidden else { quietRequest = nil; return false }
+        if hide.rollStays(stage: stage) {
+            quietRequest = nil
+            hide.show("came out for \(n.rawValue), stage \(stage)", notify: false)
+            comeOutFirst { [weak self] in self?.apply(event) }
+            return true
+        }
+        quietRequest = Self.requestKey(event)
+        hideBubble()
+        if n == .walk { sim.wear(.hat) }
+        _ = pantomime(n, inPlace: true)
+        hide.look(seconds: 3, why: "\(n.rawValue), stage \(stage), no bubble")
+        if stage == 3 { escalation.dim() }
+        if stage >= 4 { startPause(n) }
+        return true
+    }
+
+    /// «Не, я тут посижу. Нам надо поговорить» (~3 s), then `then` — unless something else came meanwhile.
+    private func comeOutFirst(then: @escaping () -> Void) {
+        cancelIntro()
+        hideBubble()
+        sim.standOut = .peek
+        sim.say(Lines.stayOut, duration: 3)
+        introShow = then
+        introTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, let show = self.introShow else { return }
+                self.cancelIntro()
+                guard self.activity == nil, !self.isBusy() else { return }
+                show()
+            }
+        }
     }
 
     /// The intro ended (or the user clicked him): the bubble — if the same request is still on screen and free.
@@ -335,6 +399,11 @@ final class BalanceController {
         case .slumped:
             log("slumped")
             guard activity == nil, !stageThreeOrMore else { return }
+            if let hide = hideout, hide.isHidden {                   // 6d: «лежит» rolls like stage 4
+                guard hide.rollStays(stage: 4) else { quietRequest = "slumped"; return }
+                quietRequest = nil
+                hide.show("came out lying", notify: false)
+            }
             showSlump()
 
         case .roseUp:
@@ -430,11 +499,12 @@ final class BalanceController {
 
     /// Plays the need's own pantomime; returns how long it lasts.
     @discardableResult
-    private func pantomime(_ n: Need) -> Double {
+    /// `inPlace`: hidden behind the edge (6d) — hops would carry him out, so the stretch need is three stretches.
+    private func pantomime(_ n: Need, inPlace: Bool = false) -> Double {
         let act: Act
         switch n {
         case .water: act = .drink
-        case .stretch: act = .hops                                  // 6a, decision 5: chaotic hops, not stretches
+        case .stretch: act = inPlace ? .stretches : .hops           // 6a, decision 5: chaotic hops, not stretches
         case .eyes: act = .lookAway
         case .walk: sim.wear(.hat); act = .wave
         case .endOfDay: act = .pack
@@ -811,7 +881,7 @@ final class BalanceController {
 
     /// «Ликует» (6a, decision 6): he steps out from behind the edge to jump, then goes back.
     func cheer() {
-        guard activity == nil, !isBusy() else { return }
+        guard activity == nil, !isBusy(), hideout?.isHidden != true else { return }   // 6d: hidden, no emotions
         log("cheer")
         if engine.state.episode?.phase != .showing { sim.standOut = .peek }
         sim.perform(.cheer)
@@ -830,7 +900,9 @@ final class BalanceController {
 
     /// «Проверка ▸ Эмоции» and `CHILK_DEMO_EMOTE`: `laugh`, `laughStrong`, `clown`, `offended`, `dizzy`, `sad`.
     func emoteForCheck(_ key: String) {
-        guard activity == nil, !isBusy(), !engine.slumped else { return log("emote \(key) skipped: busy") }
+        guard activity == nil, !isBusy(), !engine.slumped, hideout?.isHidden != true else {
+            return log("emote \(key) skipped: busy or hidden")
+        }
         let strong = key == "laughStrong"
         guard let e = Emotion(rawValue: strong ? "laugh" : key) else { return }
         hideBubble()

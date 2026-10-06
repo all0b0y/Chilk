@@ -10,6 +10,8 @@ public struct ChatChip: Codable, Equatable, Sendable {
         case timer, cancelTimer, reminder, webSearch, findFiles, readFile, requestFolder, mode, water, takeBreak, remember
         /// Slice 4b: a persuaded deferral, the focus mode on, the focus ended early.
         case deferRequest, focus, endFocus
+        /// Slice 6d: hid behind the screen edge / came back out (`subject` = "hidden" / "shown").
+        case hide
     }
     public var kind: Kind
     /// What it was about: a timer's title, a file's name, a mode, a break — never what a file or page said.

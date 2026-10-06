@@ -136,6 +136,14 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
         }
     }
     run(2, pointer: CGPoint(x: Double(sim.bodyCenter.x) + 20, y: Double(sim.bodyCenter.y)))
+    // Slice 6d: hidden behind the edge (the «пф!»), a peek on both edges, out for a conversation, back, unhidden.
+    sim.hidden = true; run(2)
+    sim.standOut = .lurk; run(2, pointer: CGPoint(x: 60, y: 120))
+    mirrored = true; run(1, pointer: CGPoint(x: 60, y: 120))
+    sim.standOut = .out; run(1.5)
+    sim.standOut = .docked; run(2)
+    mirrored = false
+    sim.hidden = false; run(1.5)
     sim.fatigue = 0.37
     mirrored = false
     run(20)
@@ -166,7 +174,9 @@ struct RigTests {
         var failures: [String] = []
         let parts = allParts()
         // The scenario reaches every part of slice 6c (otherwise this test would not check them).
-        for p in [Part.tear, .ha, .foot(lw: 1), .clownNose(lw: 1), .wig(lw: 1), .blushHot] { #expect(parts.contains(p), "\(p)") }
+        for p in [Part.tear, .ha, .foot(lw: 1), .clownNose(lw: 1), .wig(lw: 1), .blushHot, .puff(index: 0), .puff(index: 1)] {
+            #expect(parts.contains(p), "\(p)")
+        }
         for part in parts {
             let r = part.bounds(metrics: m)
             let pad = 30.0, scale = 3.0

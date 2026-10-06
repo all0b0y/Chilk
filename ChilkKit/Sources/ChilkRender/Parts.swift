@@ -60,11 +60,15 @@ public enum Part: Hashable, Sendable {
     case blushHot
     /// The clown's stone face: the lower part of an eye under a flat heavy lid (-_-).
     case eyeLidded(lw: Double)
+    // Slice 6d
+    /// One puff of the «пф!» cloud when he dives behind the edge; `index` picks its size.
+    case puff(index: Int)
 
     public static let waveFrames = 24
     public static let confettiPieces = 8
     public static let tearsPerEye = 3
     public static let haWords = 6
+    public static let puffs = 5
 
     /// Parts that exist only for one speech bubble (bounded cache eviction).
     public var isTransient: Bool {
@@ -111,11 +115,12 @@ public enum Slot {
     public static let confetti = 35     // +0…+7
     public static let z = 43            // +0…+2
     public static let ha = 46           // +0…+5 — «ХА» (6c)
-    public static let bubbleBox = 52
-    public static let bubbleTail = 53
-    public static let bubbleStroke = 54
-    public static let button = 55       // +index
-    public static let word = 67         // +index
+    public static let puff = 52         // +0…+4 — «пф!» (6d)
+    public static let bubbleBox = 57
+    public static let bubbleTail = 58
+    public static let bubbleStroke = 59
+    public static let button = 60       // +index
+    public static let word = 72         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -213,6 +218,9 @@ extension Part {
             return box(-11, -7, 22, 14, margin: 1.5)
         case .eyeLidded(let lw):
             return box(-7.5, -2, 15, 11.5, margin: 3 * lw / 2 + 1.5)
+        case .puff(let i):
+            let r = Props.puffRadius(i)
+            return box(-r, -r, r * 2, r * 2, margin: 2)
         }
     }
 
@@ -549,6 +557,15 @@ extension Part {
             ctx.move(to: CGPoint(x: -6.5, y: 0.5))
             ctx.addLine(to: CGPoint(x: 6.5, y: 0.5))
             ctx.strokePath()
+
+        case .puff(let i):                                  // a soft white puff with a thin outline
+            let r = Props.puffRadius(i)
+            let c = CGRect(x: -r + 1, y: -r + 1, width: r * 2 - 2, height: r * 2 - 2)
+            ctx.setFillColor(RGBA.white.cgColor)
+            ctx.fillEllipse(in: c)
+            ctx.setStrokeColor(RGBA(0.17, 0.16, 0.22, 0.45).cgColor)
+            ctx.setLineWidth(1.6)
+            ctx.strokeEllipse(in: c)
         }
     }
 }
@@ -573,6 +590,8 @@ enum Props {
     static let tearBlue = RGBA.hex(0x7CC8F2).cgColor
     static let noseRed = RGBA.hex(0xF0404A).cgColor
     static let blushHot = RGBA.hex(0xFF6F8E, alpha: 0.85).cgColor
+    /// «пф!» puffs: alternating bigger and smaller.
+    static func puffRadius(_ i: Int) -> Double { i % 2 == 0 ? 9 : 6.5 }
     /// Top to bottom on each side: red, orange, green, blue — the 🤡 tufts in Chilk's palette.
     static let wigColors = ([0xFF5A5F, 0xFFB347, 0x7FCB55, 0x5DADEC] as [UInt32]).map { RGBA.hex($0).cgColor }
     /// Puff centres and radii around the wig origin (the top of his head); the top stays bald for the sprout.

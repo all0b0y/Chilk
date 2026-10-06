@@ -6,6 +6,8 @@ import Foundation
 public enum ChatChips {
     public static func chip(name: String, arguments: JSON, result: CodexToolResult) -> ChatChip? {
         guard let kind = kind(of: name) else { return nil }
+        // 6d+: «в 3 — ночи или дня?» is a question, not a failure: no red chip for it.
+        if !result.success, result.value["error"]?.string?.hasPrefix("ambiguous_") == true { return nil }
         var chip = ChatChip(kind: kind, failed: !result.success || didNothing(result.value))
         guard let action = try? ChilkToolCatalog.parse(name: name, arguments: arguments) else { return chip }
         switch action {
@@ -31,6 +33,8 @@ public enum ChatChips {
         case .focus:
             guard !chip.failed else { break }
             chip.at = result.value["until"]?.string.flatMap(ChilkToolCatalog.timestamp)
+        case .hide(let hidden):
+            chip.subject = hidden ? "hidden" : "shown"
         case .takeBreak(let b):
             switch b {
             case .eyeGym: chip.subject = "eyeGym"
@@ -55,7 +59,7 @@ public enum ChatChips {
     private static func didNothing(_ value: JSON) -> Bool {
         value["credited"]?.bool == false || value["cancelled"]?.bool == false || value["willStart"]?.bool == false
             || value["refused"] != nil || value["deferred"]?.bool == false || value["focus"]?.bool == false
-            || value["ended"]?.bool == false
+            || value["ended"]?.bool == false || value["changed"]?.bool == false
     }
 
     private static func kind(of name: String) -> ChatChip.Kind? {
@@ -73,6 +77,7 @@ public enum ChatChips {
         case "chilk_defer": .deferRequest
         case "chilk_focus": .focus
         case "chilk_end_focus": .endFocus
+        case "chilk_hide": .hide
         default: nil
         }
     }

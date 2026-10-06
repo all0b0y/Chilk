@@ -35,6 +35,8 @@ public struct Metrics: Sendable, Equatable {
     /// The tray popover is open (slice 5a): he has gone entirely behind the screen edge, sticker border,
     /// shadow and sprout included, to come out in the popover.
     public var awayX: Double { width + radiusX * 1.5 + 40 }
+    /// Hidden behind the edge, peeking out (slice 6d): just behind the edge — leaning in shows the eyes and the sprout.
+    public var lurkX: Double { width + 6 }
 
     /// How far to move the panel (screen points, + = right) when his position inside the panel changes
     /// from `oldX` to `newX`, so that on screen he does not move at all.

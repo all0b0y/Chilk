@@ -4,18 +4,22 @@ public enum VoiceContext {
     /// No app/window names, documents or transcript history; explicit date and timezone prevent relative-date guesses.
     /// The user's name (slice 5a) is the one they gave Chilk, so he can address them.
     public static func text(sittingMinutes: Int, now: Date = Date(), zone: TimeZone = .autoupdatingCurrent,
-                            name: String? = nil, balance: BalanceBrief? = nil) -> String {
+                            name: String? = nil, balance: BalanceBrief? = nil, hidden: Bool = false) -> String {
         let f = ISO8601DateFormatter()
         f.timeZone = zone
         let who = name.flatMap(UserProfile.cleanName).map { "; пользователя зовут \($0)" } ?? ""
         let brief = balance.map { "; " + $0.text(zone: zone) } ?? ""
-        return "[контекст: сейчас \(f.string(from: now)); timezone \(zone.identifier); пользователь за Mac без перерыва \(max(0, sittingMinutes)) мин\(who)\(brief)]\n"
+        let hideout = hidden ? "; Чилк спрятан за краем экрана" : ""     // slice 6d
+        return "[контекст: сейчас \(f.string(from: now)); timezone \(zone.identifier); пользователь за Mac без перерыва \(max(0, sittingMinutes)) мин\(who)\(brief)\(hideout)]\n"
     }
 
     /// Slice 5b: the same [контекст] for a question typed in the chat window (Persona: read there, may be longer).
-    public static func chat(_ context: String) -> String {
-        guard context.hasSuffix("]\n") else { return context + "[написано в чате]\n" }
-        return String(context.dropLast(2)) + "; написано в чате]\n"
+    public static func chat(_ context: String) -> String { adding("написано в чате", to: context) }
+
+    /// One more note inside [контекст] (slice 6d+: an open hour or date in the user's words).
+    public static func adding(_ note: String, to context: String) -> String {
+        guard context.hasSuffix("]\n") else { return context + "[\(note)]\n" }
+        return String(context.dropLast(2)) + "; \(note)]\n"
     }
 }
 

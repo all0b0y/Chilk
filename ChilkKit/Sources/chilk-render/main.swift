@@ -135,6 +135,19 @@ func previews(into dir: URL) throws {
         ("38-dizzy", sim({ $0.emote(.dizzy, strong: false) }, seconds: 1.0), false),
         ("39-petted", petted(wink: false), false),
         ("40-wink", petted(wink: true), false),
+        // Slice 6d
+        ("41-dive-puff", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
+            for _ in 0..<60 { s.step(dt: 1.0 / 60, pointer: nil) }
+            s.hidden = true
+            for _ in 0..<240 { s.step(dt: 1.0 / 60, pointer: nil); if let a = s.pose.puffAge, a > 0.12 { break } }
+            return s.pose }(), false),
+        ("42-lurk", sim({ $0.hidden = true; $0.snapHidden(); $0.standOut = .lurk }, seconds: 1.5, pointer: CGPoint(x: 60, y: 120)), false),
+        ("43-lurk-left-edge", sim({ $0.hidden = true; $0.snapHidden(); $0.standOut = .lurk }, seconds: 1.5, pointer: CGPoint(x: 60, y: 120)), true),
+        ("44-diving", { let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
+            for _ in 0..<60 { s.step(dt: 1.0 / 60, pointer: nil) }
+            s.hidden = true
+            for _ in 0..<27 { s.step(dt: 1.0 / 60, pointer: nil) }
+            return s.pose }(), false),
     ]
     for (name, pose, mirrored) in states {
         let image = render(metrics.sceneSize) { ctx in
