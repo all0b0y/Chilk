@@ -25,6 +25,8 @@ final class TicTacToeModel {
 
     /// Decision 32: a request shown in the notebook (between games, or as a sign after 10 min).
     var card: GameCard?
+    /// A short reply written on the sheet for 3 s («Ты же только что пил»).
+    var note: String?
     var answer: (Int) -> Void = { _ in }
 
     var start: (Int) -> Void = { _ in }
@@ -59,6 +61,9 @@ struct NotebookView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.headline).font(.system(size: 22, weight: .semibold, design: .rounded))
                     Text(model.status).font(.system(size: 15, design: .rounded)).foregroundStyle(Self.graphite.opacity(0.75))
+                    if let note = model.note {
+                        Text(note).font(.system(size: 14, weight: .medium, design: .rounded)).foregroundStyle(Self.margin.opacity(1))
+                    }
                 }
                 .foregroundStyle(Self.graphite)
                 Group {
@@ -96,6 +101,7 @@ struct NotebookView: View {
             .frame(width: 250)
             Button(GameLines.start) { model.start(model.length) }
                 .keyboardShortcut(.defaultAction)
+                .disabled(model.card != nil)
                 .controlSize(.large)
         }
         .padding(.top, 8)

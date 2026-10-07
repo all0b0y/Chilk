@@ -16,8 +16,8 @@ final class HeroView: NSView {
     /// The part of the scene the card shows (canonical y-down scene coordinates).
     static let window = CGRect(x: 78, y: 58, width: 222, height: 228)
     /// The hero card's scale; the notebook (slice 7a) shows him bigger.
-    static let scale: CGFloat = 0.6
-    static var size: CGSize { CGSize(width: window.width * scale, height: window.height * scale) }
+    static let cardScale: CGFloat = 0.6
+    static var cardSize: CGSize { CGSize(width: window.width * cardScale, height: window.height * cardScale) }
     let scale: CGFloat
     var size: CGSize { CGSize(width: Self.window.width * scale, height: Self.window.height * scale) }
 
@@ -29,11 +29,12 @@ final class HeroView: NSView {
     /// The eyes mirror (slice 6a), shown at once when the popover opens.
     var eyeStrain: () -> Double = { 0 }
 
-    init(scale: CGFloat = HeroView.scale) {
+    init(scale: CGFloat = HeroView.cardScale) {
         self.scale = scale
         sim = CharacterSim(metrics: metrics)
         rig = LayerRig(metrics: metrics, palette: .peach, rasterScale: 2)
-        super.init(frame: NSRect(origin: .zero, size: CGSize(width: Self.window.width * scale, height: Self.window.height * scale)))
+        super.init(frame: .zero)
+        setFrameSize(size)
         let host = CALayer()
         host.masksToBounds = true                        // the card edge hides him, like the screen edge
         layer = host

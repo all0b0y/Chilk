@@ -47,6 +47,8 @@ final class TrayModel {
     /// Slice 7a: the «Игры» page — the ready games and why not now (`nil` = can play).
     var games: [GameKind] = GameKind.ready
     var gameRefusal: String?
+    /// A paused game («Доиграть: Ты 1 : 0 Чилк»).
+    var resumeNote: String?
     var play: (GameKind) -> Void = { _ in }
     /// «Открыть Чилка» → the main window on «Сегодня»; «Настройки» → on «Настройки» (slice 5c).
     var openMain: () -> Void = {}
@@ -123,7 +125,7 @@ struct TrayView: View {
                         .padding(8)
                 }
             }
-            .frame(width: HeroView.size.width, height: HeroView.size.height)
+            .frame(width: HeroView.cardSize.width, height: HeroView.cardSize.height)
             .clipShape(RoundedRectangle(cornerRadius: 14))
 
             VStack(alignment: .leading, spacing: 6) {
@@ -288,7 +290,8 @@ struct TrayView: View {
                         Image(systemName: Self.gameIcon(kind)).font(.title2).frame(width: 30)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(GameLines.name(kind)).font(.body.weight(.medium))
-                            Text(Self.gameNote(kind)).font(.caption).foregroundStyle(.secondary)
+                            Text(model.resumeNote.map(GameLines.resumeNote) ?? Self.gameNote(kind))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                     }

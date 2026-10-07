@@ -41,6 +41,8 @@ final class BalanceController {
     private let logURL = ProcessInfo.processInfo.environment["CHILK_BALANCE_LOG"].map { URL(fileURLWithPath: $0) }
     private let env = ProcessInfo.processInfo.environment
     private var demoExitScheduled = false
+    /// Slice 7a: «Доиграем?» is the bubble on screen.
+    private var offerActive = false
     /// CHILK_DEMO_PRESS=0,0 (acceptance only): press these bubble buttons in turn, 2 s after each appears.
     private lazy var demoPresses: [Int] = (env["CHILK_DEMO_PRESS"] ?? "").split(separator: ",").compactMap { Int($0) }
     private var demoPressSince: Date?
@@ -102,25 +104,67 @@ final class BalanceController {
 
     /// Slice 7a (decision 32): the request on screen while the notebook holds Chilk — its need, stage and the buttons
     /// the notebook shows («Я занят» asks a follow-up at the edge, so not there).
-    var gameRequest: (need: Need, stage: Int, buttons: [Reaction])? {
+    var gameRequest: GameRequest? {
         guard let e = engine.state.episode, e.phase == .showing, e.stage >= 1 else { return nil }
-        return (e.need, e.stage, engine.buttons(for: e.need, stage: e.stage).filter { $0 != .busy })
+        return GameRequest(need: e.need, stage: e.stage,
+                           buttons: engine.buttons(for: e.need, stage: e.stage).filter { $0 != .busy })
     }
     var slumpedNow: Bool { engine.slumped }
+    /// What keeps Chilk at the edge apart from a stage 1–2 request bubble (which a game takes along, decision 32).
+    var isOccupiedApartFromRequest: Bool {
+        activity != nil || walking || guidedRun != nil || engine.slumped || stageThreeOrMore
+    }
+    /// The engine clock of the latest counted rest of any need: «Доиграем?» waits for a newer one.
+    var lastRestMark: TimeInterval { engine.state.needs.values.compactMap(\.lastCredit).max() ?? -1 }
 
-    /// A request's button pressed in the notebook: the same rules as at the edge.
-    func answerFromGame(_ r: Reaction) {
+    /// The notebook opens over a stage 1–2 request: its bubble goes, the request shows in the notebook instead.
+    func yieldToGame() {
+        guard !isBusy(), let e = engine.state.episode, e.phase == .showing, e.stage >= 1, e.stage < 3,
+              introTimer != nil || sim.isTalking || !buttonActions.isEmpty else { return }
+        cancelIntro()
+        hideBubble()
+        log("game: the request bubble moves into the notebook")
+    }
+
+    /// A request's button pressed in the notebook: counted by the engine right away. Chilk is in the notebook, so the
+    /// edge shows nothing; the reply worth seeing comes back as a line for the sheet.
+    func answerFromGame(_ r: Reaction) -> String? {
         log("game: request answered \(r.rawValue)")
+        let events = engine.handle(r)
+        syncEscalation()
+        for e in events {
+            if case .tooSoon = e { return Lines.tooSoonWater }
+            if case .deferred(_, let minutes) = e { return Lines.deferred(minutes) }
+        }
+        return nil
+    }
+
+    /// «Иду» from the notebook, after Chilk is back at the edge: the promised rest as usual.
+    func answerAtEdge(_ r: Reaction) {
+        log("game: request answered \(r.rawValue) at the edge")
         react(r)
     }
 
-    /// A bubble with buttons at the edge for the notebook («Доиграем?»); `false` = he is not free for it now.
+    /// A bubble with buttons at the edge for the notebook («Доиграем?»), 30 s; `false` = not now (busy, a request on
+    /// screen, hidden, Тишина — no bubbles there).
     func offer(_ text: String, buttons: [(String, () -> Void)]) -> Bool {
-        guard activity == nil, !isBusy(), !engine.slumped, engine.state.episode?.phase != .showing,
+        guard mode != .silent, activity == nil, !isBusy(), !engine.slumped, engine.state.episode?.phase != .showing,
               hideout?.isHidden != true else { return false }
         sim.standOut = .out
-        sim.say(text, buttons: buttons.map(\.0))
-        buttonActions = buttons.map { b in { [weak self] in self?.sim.standOut = .docked; b.1() } }
+        sim.say(text, duration: 30, buttons: buttons.map(\.0))
+        buttonActions = buttons.map { b in { [weak self] in self?.offerActive = false; self?.sim.standOut = .docked; b.1() } }
+        offerActive = true
+        return true
+    }
+
+    /// The offer went unanswered: the bubble goes and he is back at his place. `false` = something else replaced it.
+    @discardableResult
+    func withdrawOffer() -> Bool {
+        guard offerActive else { return false }
+        offerActive = false
+        buttonActions = []
+        hideBubble()
+        sim.standOut = .docked
         return true
     }
 
@@ -345,6 +389,7 @@ final class BalanceController {
 
     /// The bubble of a request (stage ≥ 1).
     private func showAsk(_ n: Need, stage: Int, buttons: [Reaction], again: Bool) {
+            offerActive = false                                  // 7a: a request replaces «Доиграем?»
             // Lying (6b, decision 10) he stays at the edge under the dimming / pause of Strict.
             sim.standOut = stage >= 3 ? (engine.slumped ? .docked : .center) : (stage >= 2 ? .out : .peek)
             if n == .walk { sim.wear(.hat) }

@@ -21,14 +21,16 @@ final class GameController: NSObject, NSWindowDelegate {
     private var waiting: Timer?
     private var waitStarted: Date?
     /// A voice conversation keeps him until its follow-up window ends.
-    private static let waitLimit: TimeInterval = 30
+    private static let waitLimit: TimeInterval = 60
 
     /// The notebook holds Chilk: he is not at the edge.
     private(set) var holdsChilk = false
     var isOpen: Bool { window != nil }
     var log: (String) -> Void = { _ in }
-    /// Chilk is free at the edge (the tray's rule): nothing else holds him.
+    /// Chilk is free at the edge: nothing else holds him (a stage 1–2 request bubble does not — it comes along).
     var isFree: () -> Bool = { true }
+    /// What holds him now (for the log while the notebook waits); empty = free.
+    var whyBusy: () -> [String] = { [] }
     /// Acceptance: called on every phase change (snapshots, scripted moves) and when a request card appears.
     var onPhase: (TicTacToeModel.Phase) -> Void = { _ in }
     var onCard: () -> Void = {}
@@ -49,9 +51,12 @@ final class GameController: NSObject, NSWindowDelegate {
         let board: TicTacToe?
         let youToMove: Bool
         let at: Date
+        /// The engine clock of the latest counted rest at the pause: «Доиграем?» waits for a newer one.
+        let restMark: TimeInterval
     }
     private var saved: SavedGame?
     private var offerTimer: Timer?
+    private var offerNotBefore: Date?
 
     init(edge: EdgeController, balance: BalanceController, seed: UInt64? = nil) {
         self.edge = edge
@@ -72,16 +77,18 @@ final class GameController: NSObject, NSWindowDelegate {
     @discardableResult
     func open(_ kind: GameKind = .ticTacToe, length: Int? = nil, restoring: SavedGame? = nil) -> String? {
         if let refusal = balance.gameRefusal(kind) {
+            waitStarted = nil
             log("game \(kind.rawValue) refused: \(refusal.rawValue)")
             return GameLines.refusal(refusal)
         }
+        balance.yieldToGame()                              // a request bubble (stage 1–2) moves into the notebook
         if let window {                                    // already open: just bring it up
             if let length, model.phase == .setup || model.phase == .matchOver { begin(length: length) }
             window.makeKeyAndOrderFront(nil)
             return nil
         }
         guard isFree() else {
-            // A conversation that asked for the game, a bubble or his entrance: open as soon as he is free (≤ 15 s).
+            // The conversation that asked for the game, a due notice or his entrance: open once he is free (≤ 60 s).
             let first = waitStarted == nil
             waitStarted = waitStarted ?? Date()
             if Date().timeIntervalSince(waitStarted!) > Self.waitLimit {
@@ -89,7 +96,7 @@ final class GameController: NSObject, NSWindowDelegate {
                 log("game \(kind.rawValue): Chilk stayed busy — not opened")
                 return GameLines.busy
             }
-            if first { log("game \(kind.rawValue): waits until Chilk is free") }
+            if first { log("game \(kind.rawValue): waits until Chilk is free (\(whyBusy().joined(separator: ", ")))") }
             waiting?.invalidate()
             waiting = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
@@ -99,7 +106,10 @@ final class GameController: NSObject, NSWindowDelegate {
             }
             return nil
         }
+        let deferred = waitStarted != nil
         waitStarted = nil
+        saved = nil                                        // a new game (or the resumed one) replaces a paused game
+        stopOffer()
         history.played(kind, at: Date())
         try? history.save(to: Self.historyFile)
         holdsChilk = true
@@ -112,7 +122,7 @@ final class GameController: NSObject, NSWindowDelegate {
         requestSince = nil
         lent = false
         if let restoring { restore(restoring) } else if let length { begin(length: length) } else { setPhase(.setup) }
-        show()
+        show(activate: !deferred)
         hero.start(enterAfter: 0.45)                       // … and comes out from behind the notebook's edge
         log("game \(kind.rawValue) opened\(length.map { " length \($0)" } ?? "")")
         return nil
@@ -163,23 +173,23 @@ final class GameController: NSObject, NSWindowDelegate {
         model.length = s.match.length
         log("game: resumed at \(s.match.you):\(s.match.chilk)")
         guard let board = s.board else { return newGame() }
+        startBoard(board)
+        if s.youToMove { setPhase(.yourMove) } else { chilkTurn() }
+    }
+
+    private func newGame() {
+        startBoard(TicTacToe())
+        if model.match.youStart { setPhase(.yourMove) } else { chilkTurn() }
+    }
+
+    /// A board on a fresh sheet: the pencil's wobble and the marks drawn anew, the score up top.
+    private func startBoard(_ board: TicTacToe) {
         model.board = board
         model.strike = nil
         model.seed = UInt64(rng.next() * 1_000_000_000)
         model.gameIndex += 1
         model.headline = GameLines.score(you: model.match.you, chilk: model.match.chilk, game: model.match.game,
                                          of: model.match.length)
-        if s.youToMove { setPhase(.yourMove) } else { chilkTurn() }
-    }
-
-    private func newGame() {
-        model.board = TicTacToe()
-        model.strike = nil
-        model.seed = UInt64(rng.next() * 1_000_000_000)
-        model.gameIndex += 1
-        model.headline = GameLines.score(you: model.match.you, chilk: model.match.chilk, game: model.match.game,
-                                         of: model.match.length)
-        if model.match.youStart { setPhase(.yourMove) } else { chilkTurn() }
     }
 
     private func tap(_ cell: Int) {
@@ -266,7 +276,9 @@ final class GameController: NSObject, NSWindowDelegate {
 
     // MARK: The window
 
-    private func show() {
+    /// `activate`: a click in the popover or a chat answer — the notebook takes the keyboard. Opened later (after a
+    /// voice conversation) it only comes to the front and does not take the keys from what the user types into.
+    private func show(activate: Bool) {
         let w = NSWindow(contentRect: NSRect(origin: .zero, size: NotebookView.size),
                          styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         w.titlebarAppearsTransparent = true
@@ -282,8 +294,12 @@ final class GameController: NSObject, NSWindowDelegate {
             w.setFrameOrigin(NSPoint(x: f.midX - NotebookView.size.width / 2, y: f.midY - NotebookView.size.height / 2))
         }
         window = w
-        NSApp.activate()
-        w.makeKeyAndOrderFront(nil)
+        if activate {
+            NSApp.activate()
+            w.makeKeyAndOrderFront(nil)
+        } else {
+            w.orderFrontRegardless()
+        }
         watchTimer?.invalidate()
         watchTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.watch() }
@@ -297,48 +313,61 @@ final class GameController: NSObject, NSWindowDelegate {
         hero.stop()
         window = nil
         model.card = nil
+        model.note = nil
         let then = afterClose
         afterClose = nil
         if holdsChilk {
             holdsChilk = false
-            if edge.sim.standOut == .away {
-                edge.sim.standOut = .docked                // back at his place
-                balance.resume()                           // what waited while he played
+            if !lent, edge.sim.standOut == .away {
+                edge.sim.standOut = .docked                // back at his place (hidden: behind the edge again)
+                // «Иду» from a note starts the promised rest itself; otherwise what waited while he played.
+                if let then { then() } else { balance.resume() }
+            } else {
+                then?()                                    // a call has him at the edge: it resumes the rest itself
             }
             log("game closed — Chilk is back at the edge")
+        } else {
+            then?()
         }
         lent = false
-        then?()
         if saved != nil { startOfferWatch() }
+    }
+
+    /// Acceptance: the notebook as the window server shows it.
+    func snapshot(to url: URL) {
+        guard let window else { return }
+        WindowSnapshot.write(window, to: url)
     }
 
     // MARK: Games and breaks (decision 32)
 
     /// Twice a second while the notebook is open: a call takes Chilk to the edge for a while; a request waits for the
-    /// end of the game (≤ 10 min) and then shows as a card; stage 3 or «измотан» pause the game.
+    /// end of the game (≤ 10 min) and then shows as a note; stage 3 or «измотан» pause the game.
     private func watch() {
         guard window != nil else { return }
+        // A call or a due notice (plan, decision 8): he talks at the edge for a while. The game still owns him, so no
+        // request bubble or leap takes the edge meanwhile, and he comes back as soon as the talk is over.
         if conversationActive() {
             if !lent {
                 lent = true
-                holdsChilk = false                         // the conversation owns him now
                 hero.sim.standOut = .away
                 log("game: Chilk went to the edge for a call")
             }
             return
         }
         if lent {
-            guard isFree() else { return }                 // back at his place at the edge first
+            guard !edge.sim.isTalking else { return }
             lent = false
-            holdsChilk = true
             edge.sim.standOut = .away
             hero.sim.standOut = .out
             log("game: Chilk is back in the notebook")
         }
         let request = balance.gameRequest
         if request == nil { requestSince = nil } else if requestSince == nil { requestSince = Date() }
+        // The first sheet counts as «between games»: a waiting request comes before the first game too.
         switch GameBreakPolicy.decide(stage: request?.stage, need: request?.need, slumped: balance.slumpedNow,
-                                      silent: balance.mode == .silent, betweenGames: waitingForNext,
+                                      silent: balance.mode == .silent,
+                                      betweenGames: waitingForNext || model.phase == .setup,
                                       waiting: requestSince.map { Date().timeIntervalSince($0) } ?? 0) {
         case .pause:
             pauseForBreak()
@@ -357,11 +386,12 @@ final class GameController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func showCard(_ request: (need: Need, stage: Int, buttons: [Reaction])) {
+    private func showCard(_ request: GameRequest) {
         cardReactions = request.buttons
         model.card = GameCard(text: GameLines.firstThenRematch(request.need),
                               buttons: request.buttons.map { Lines.button($0, for: request.need) })
-        log("game: card \(request.need.rawValue) stage \(request.stage)\(waitingForNext ? " between games" : " mid-game")")
+        log("game: card \(request.need.rawValue) stage \(request.stage)"
+            + (waitingForNext || model.phase == .setup ? " between games" : " mid-game"))
         onCard()
     }
 
@@ -372,25 +402,34 @@ final class GameController: NSObject, NSWindowDelegate {
         cardReactions = []
         requestSince = nil
         if r == .going {                                   // «Иду»: the rest starts at the edge; the game waits
-            pauseForBreak { [weak balance] in balance?.answerFromGame(.going) }
+            pauseForBreak { [weak balance] in balance?.answerAtEdge(.going) }
             return
         }
-        balance.answerFromGame(r)
+        // Counted (or not) by the engine right here; its reply («Ты же только что пил») is written on the sheet.
+        if let line = balance.answerFromGame(r) { flash(line) }
         watch()
+    }
+
+    private func flash(_ line: String) {
+        model.note = line
+        after(3) { [weak self] in if self?.model.note == line { self?.model.note = nil } }
     }
 
     /// Saves the game (the match and the board, or just the match between games) and closes the notebook; Chilk goes
     /// to the edge, where the request shows (dimming, «Помоги мне…», the promised rest).
     private func pauseForBreak(then: (() -> Void)? = nil) {
         guard window != nil else { return }
+        let mark = balance.lastRestMark
         switch model.phase {
         case .yourMove, .chilkThinks:
-            saved = SavedGame(match: model.match, board: model.board, youToMove: model.phase == .yourMove, at: Date())
+            saved = SavedGame(match: model.match, board: model.board, youToMove: model.phase == .yourMove, at: Date(),
+                              restMark: mark)
         case .gameOver where !model.match.isOver:
-            saved = SavedGame(match: model.match, board: nil, youToMove: true, at: Date())
+            saved = SavedGame(match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
         default:
             saved = nil                                    // the first sheet or a finished match: nothing to resume
         }
+        offerNotBefore = nil
         log("game paused for a break" + (saved.map { " at \($0.match.you):\($0.match.chilk)" } ?? ""))
         afterClose = then
         close()
@@ -403,19 +442,23 @@ final class GameController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// «Доиграем?» after the rest: no request on screen, not worn out, Chilk free at the edge; kept until the day ends.
+    private func stopOffer() {
+        offerTimer?.invalidate()
+        offerTimer = nil
+    }
+
+    /// «Доиграем?» once a rest was counted after the pause, with nothing on screen and Chilk free at the edge; kept until
+    /// the day ends. Unanswered for 30 s, the bubble goes and comes back in 10 min (the popover offers it too).
     private func offerTick() {
-        guard let s = saved, window == nil else {
-            offerTimer?.invalidate()
-            offerTimer = nil
-            return
-        }
+        guard let s = saved, window == nil else { return stopOffer() }
         guard Calendar.current.isDate(s.at, inSameDayAs: Date()) else {
             saved = nil
+            stopOffer()
             log("game: the paused game expired")
             return
         }
-        guard Date().timeIntervalSince(s.at) >= 20, balance.gameRequest == nil, !balance.slumpedNow, isFree() else { return }
+        if let wait = offerNotBefore, Date() < wait { return }
+        guard balance.lastRestMark > s.restMark, balance.gameRequest == nil, !balance.slumpedNow, isFree() else { return }
         let shown = balance.offer(GameLines.resume(you: s.match.you, chilk: s.match.chilk), buttons: [
             (GameLines.resumeYes, { [weak self] in self?.resumeSaved() }),
             (GameLines.resumeLater, { [weak self] in
@@ -423,23 +466,34 @@ final class GameController: NSObject, NSWindowDelegate {
                 self?.log("game: «Доиграем?» — later")
             }),
         ])
-        if shown {
-            offerTimer?.invalidate()
-            offerTimer = nil
-            log("game: «Доиграем?» offered")
+        guard shown else { return }
+        stopOffer()
+        log("game: «Доиграем?» offered")
+        Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.saved != nil, self.window == nil else { return }
+                if self.balance.withdrawOffer() { self.log("game: «Доиграем?» unanswered — later") }
+                self.offerNotBefore = Date().addingTimeInterval(600)
+                self.startOfferWatch()
+            }
         }
     }
 
     private func resumeSaved() {
         guard let s = saved else { return }
-        saved = nil
-        open(.ticTacToe, restoring: s)
+        if let line = open(.ticTacToe, restoring: s) {    // `saved` is cleared only once the notebook really opens
+            log("game: could not resume — \(line)")
+            offerNotBefore = Date().addingTimeInterval(600)
+            startOfferWatch()
+        }
     }
 
-    /// Acceptance: the notebook as the window server shows it.
-    func snapshot(to url: URL) {
-        guard let window else { return }
-        WindowSnapshot.write(window, to: url)
+    /// The popover's games page resumes a paused game too (in any mode, Тишина included).
+    var savedScore: String? { saved.map { GameLines.finalScore(you: $0.match.you, chilk: $0.match.chilk) } }
+
+    func playFromPopover(_ kind: GameKind) -> String? {
+        if let s = saved { return open(kind, restoring: s) }
+        return open(kind)
     }
 
     // MARK: Timers
@@ -477,14 +531,18 @@ extension GameController {
             }
             switch phase {
             case .yourMove:
-                self.after(0.9) {
-                    guard self.model.phase == .yourMove else { return }
-                    let free = self.model.board.empty
-                    while let next = script.first, !free.contains(next) { script.removeFirst() }
-                    let cell = script.isEmpty ? free.first! : script.removeFirst()
-                    self.log("game demo: you play \(cell)")
-                    self.tap(cell)
+                @MainActor func attempt() {
+                    self.after(0.9) {
+                        guard self.model.phase == .yourMove else { return }
+                        if self.lent { return attempt() }      // he is at the edge for a call: wait for him
+                        let free = self.model.board.empty
+                        while let next = script.first, !free.contains(next) { script.removeFirst() }
+                        let cell = script.isEmpty ? free.first! : script.removeFirst()
+                        self.log("game demo: you play \(cell)")
+                        self.tap(cell)
+                    }
                 }
+                attempt()
             case .matchOver:
                 self.after(4) { self.close() }
             default: break

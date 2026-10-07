@@ -36,6 +36,7 @@ final class Tray: NSObject, NSPopoverDelegate {
     /// Slice 7a: «Игры» → the notebook (after the popover gives Chilk back); why not now (`nil` = can play).
     var playGame: (GameKind) -> String? = { _ in nil }
     var gameRefusal: () -> String? = { nil }
+    var savedGame: () -> String? = { nil }
     /// The right-click menu («Позвать», «Проверка ▸», «О Чилке», «Выйти»), built fresh each time.
     var menu: () -> NSMenu = { NSMenu() }
     /// «Чат» (slice 5b): opens the chat window.
@@ -240,6 +241,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         let engine = balance.engine
         model.now = Date()
         model.gameRefusal = gameRefusal()
+        model.resumeNote = savedGame()
         let card = HeroCard.make(pressure: { engine.pressure($0) }, exitsLeft: engine.state.exitsLeft,
                                  exitsMax: engine.config.emergencyExits, mode: balance.mode, off: engine.config.needsOff)
         if card != model.card { model.card = card }

@@ -144,12 +144,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let game = GameController(edge: edge, balance: balance,
                                   seed: ProcessInfo.processInfo.environment["CHILK_DEMO_GAME_SEED"].flatMap { UInt64($0) })
         game.log = { [weak balance] in balance?.log($0) }
-        game.isFree = { [weak tray] in tray?.isFree() ?? false }
         game.conversationActive = { [weak conversation, weak actions] in
             (conversation?.isActive ?? false) || (actions?.noticeWaiting ?? false)
         }
         actions.openGame = { [weak game] kind, length in game?.request(kind, length: length) ?? .failure("Games unavailable") }
-        tray.playGame = { [weak game] kind in game?.open(kind) }
+        tray.playGame = { [weak game] kind in game?.playFromPopover(kind) }
+        tray.savedGame = { [weak game] in game?.savedScore }
         tray.gameRefusal = { [weak game] in game?.refusalLine() }
         self.game = game
 
@@ -195,6 +195,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
                 && !(greeting?.isActive ?? true) && !edge.sim.isTalking && edge.sim.standOut == .docked
         }
+        // Slice 7a: like the popover's rule, but a stage 1–2 request bubble does not keep him — it moves into the
+        // notebook. Wired here: `greeting` must exist before it is captured.
+        game.whyBusy = { [weak conversation, weak actions, weak balance, weak greeting, weak tray, weak edge] in
+            guard let edge else { return ["gone"] }
+            let reasons: [(Bool, String)] = [
+                (conversation?.isActive ?? true, "conversation"), (actions?.noticeWaiting ?? true, "notice"),
+                (balance?.isOccupiedApartFromRequest ?? true, "balance"), (greeting?.isActive ?? true, "greeting"),
+                (tray?.holdsChilk ?? true, "popover"), (edge.sim.isTalking, "talking"),
+                (edge.sim.act?.isEmotion == true, "emotion"),
+            ]
+            return reasons.filter(\.0).map(\.1)
+        }
+        game.isFree = { [weak game] in game?.whyBusy().isEmpty ?? false }
         // Slice 6e: a leap to another monitor waits until Chilk is free.
         edge.hopBusy = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak chat, weak edge,
                           weak game] in

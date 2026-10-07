@@ -1,6 +1,13 @@
 import ChilkCore
 import Foundation
 
+/// Slice 7a (decision 32): a request as the notebook sees it.
+struct GameRequest: Equatable {
+    let need: Need
+    let stage: Int
+    let buttons: [Reaction]
+}
+
 /// Slice 7a: the notebook's words.
 enum GameLines {
     static var ticTacToe: String { String(localized: "Крестики-нолики") }
@@ -56,6 +63,7 @@ enum GameLines {
     }
 
     static func resume(you: Int, chilk: Int) -> String { String(localized: "Доиграем? Счёт \(you) : \(chilk)") }
+    static func resumeNote(_ score: String) -> String { String(localized: "Доиграть: \(score)") }
     static var resumeYes: String { String(localized: "Доиграем") }
     static var resumeLater: String { String(localized: "Потом") }
 
