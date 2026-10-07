@@ -246,7 +246,10 @@ final class GameController: NSObject, NSWindowDelegate {
         case .draughts(let board)?:
             startBoard(TicTacToe())
             model.draughts = board
-            if board.toMove == .you { setPhase(.yourMove) } else { draughtsChilkTurn() }
+            model.partial = []
+            if board.toMove == .you {
+                setPhase(.yourMove, status: board.moves.first?.captured.isEmpty == false ? GameLines.mustTake : nil)
+            } else { draughtsChilkTurn() }
         }
     }
 
@@ -262,6 +265,7 @@ final class GameController: NSObject, NSWindowDelegate {
         if model.kind == .checkers {                       // decision 31: the first move alternates like the other games
             model.draughts = Draughts(toMove: model.match.youStart ? .you : .chilk)
             model.selected = nil
+            model.partial = []
             model.lastMove = nil
             if model.match.youStart { setPhase(.yourMove) } else { draughtsChilkTurn() }
             return
@@ -271,21 +275,35 @@ final class GameController: NSObject, NSWindowDelegate {
 
     // MARK: Draughts (slice 7d, decision 31)
 
+    /// Bumped on every search and when the notebook closes: a late search result is dropped.
+    private var searchToken = 0
+
     private func square(_ s: Int) {
         guard model.phase == .yourMove, !lent, var board = model.draughts, board.toMove == .you else { return }
         let legal = board.moves
-        if let p = board.squares[s], p.side == .you {
+        if let p = board.squares[s], p.side == .you, s != model.partial.first || model.partial.count == 1 {
             if legal.contains(where: { $0.from == s }) {
                 model.selected = s
+                model.partial = [s]
             } else if !legal.isEmpty, legal[0].captured.count > 0 {
                 flash(GameLines.mustTake)                  // another piece has to take
             }
             return
         }
-        guard let from = model.selected, let m = legal.first(where: { $0.from == from && $0.to == s }) else { return }
+        // Step by step along the series: once only one move fits the squares clicked, it is played whole.
+        guard model.selected != nil, !model.partial.isEmpty else { return }
+        let path = model.partial + [s]
+        let fits = legal.filter { $0.path.count >= path.count && Array($0.path.prefix(path.count)) == path }
+        guard !fits.isEmpty else { return }
+        guard fits.count == 1 || fits.contains(where: { $0.path == path }) else {
+            model.partial = path
+            return
+        }
+        let m = fits.count == 1 ? fits[0] : fits.first { $0.path == path }!
         board.play(m)
         model.draughts = board
         model.selected = nil
+        model.partial = []
         model.lastMove = nil
         if let o = board.outcome { return finish(o) }
         draughtsChilkTurn()
@@ -298,18 +316,26 @@ final class GameController: NSObject, NSWindowDelegate {
         hero.sim.perform(.think(seconds: think))
         let seed = UInt64(rng.next() * 1_000_000_000)
         let started = Date()
+        searchToken += 1
+        let token = searchToken
         // The search runs off the main thread while he «thinks»; the move lands after both.
         Task.detached(priority: .userInitiated) {
             var search = SeededRandom(seed: seed)
             let pick = DraughtsAI.move(board, rng: &search)
             let spent = Date().timeIntervalSince(started)
-            await MainActor.run { [weak self] in self?.land(pick, on: board, after: max(0, think - spent), spent: spent) }
+            await MainActor.run { [weak self] in
+                self?.land(pick, on: board, after: max(0, think - spent), spent: spent, token: token)
+            }
         }
     }
 
-    private func land(_ pick: (move: DraughtsMove, yawned: Bool), on board: Draughts, after wait: Double, spent: Double) {
+    /// The search's move, unless the game moved on meanwhile (closed, paused, restored: a new token).
+    private func land(_ pick: (move: DraughtsMove, yawned: Bool), on board: Draughts, after wait: Double, spent: Double,
+                      token: Int) {
+        guard token == searchToken, window != nil else { return }
         after(wait) { [weak self] in
-            guard let self, self.model.phase == .chilkThinks, var b = self.model.draughts, b == board else { return }
+            guard let self, token == self.searchToken, self.window != nil, self.model.phase == .chilkThinks,
+                  var b = self.model.draughts, b == board else { return }
             b.play(pick.move)
             self.model.draughts = b
             self.model.lastMove = pick.move
@@ -516,6 +542,7 @@ final class GameController: NSObject, NSWindowDelegate {
             }
         }
         cancelTimers()
+        searchToken += 1
         watchTimer?.invalidate()
         watchTimer = nil
         hero.stop()
@@ -942,7 +969,9 @@ extension GameController {
                         moves += 1
                         self.square(m.from)
                         if moves % 8 == 0 { snap("game") }
-                        self.after(0.3) { self.square(m.to) }
+                        for (i, s) in m.path.dropFirst().enumerated() {
+                            self.after(0.3 * Double(i + 1)) { if self.model.phase == .yourMove { self.square(s) } }
+                        }
                     }
                 }
                 attempt()

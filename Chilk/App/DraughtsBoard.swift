@@ -28,6 +28,11 @@ struct DraughtsBoard: View {
             }
             PencilBox(seed: model.seed, wobble: 0.004)
                 .stroke(NotebookView.graphite.opacity(0.85), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            if model.partial.count > 1 {                               // your series so far, in blue
+                LastMove(path: model.partial).stroke(NotebookView.ink.opacity(0.6),
+                                                     style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [4, 4]))
+                    .allowsHitTesting(false)
+            }
             if let m = model.lastMove {
                 LastMove(path: m.path).stroke(NotebookView.graphite.opacity(0.55),
                                               style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [4, 4]))
@@ -60,9 +65,12 @@ struct DraughtsBoard: View {
         .frame(width: Self.side, height: Self.side)
     }
 
+    /// The next square of every legal move that goes through your squares so far.
     private func targets(_ b: Draughts) -> [Int] {
-        guard let s = model.selected, model.phase == .yourMove else { return [] }
-        return Array(Set(b.moves.filter { $0.from == s }.map(\.to))).sorted()
+        guard model.selected != nil, model.phase == .yourMove, !model.partial.isEmpty else { return [] }
+        let p = model.partial
+        return Array(Set(b.moves.filter { $0.path.count > p.count && Array($0.path.prefix(p.count)) == p }
+            .map { $0.path[p.count] })).sorted()
     }
 
     static func rect(_ s: Int) -> CGRect {

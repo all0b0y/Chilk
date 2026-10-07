@@ -43,6 +43,9 @@ final class TicTacToeModel {
     // Slice 7d: draughts — the board, your selected piece, Chilk's last move.
     var draughts: Draughts?
     var selected: Int?
+    /// The squares of your move so far (the piece, then the landings clicked): a series is chosen step by step
+    /// when two of them end alike.
+    var partial: [Int] = []
     var lastMove: DraughtsMove?
     var square: (Int) -> Void = { _ in }
     var again: () -> Void = {}
@@ -83,9 +86,9 @@ struct NotebookView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.headline).font(.system(size: 22, weight: .semibold, design: .rounded))
                     Text(model.status).font(.system(size: 15, design: .rounded)).foregroundStyle(Self.graphite.opacity(0.75))
-                    if let note = model.note {
-                        Text(note).font(.system(size: 14, weight: .medium, design: .rounded)).foregroundStyle(Self.margin.opacity(1))
-                    }
+                    // A fixed line: a reply or «Бить обязательно!» must not move the board under the cursor.
+                    Text(model.note ?? " ").font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(Self.margin.opacity(1))
                 }
                 .foregroundStyle(Self.graphite)
                 if model.kind == .battleship {

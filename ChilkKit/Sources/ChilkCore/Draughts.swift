@@ -157,7 +157,14 @@ public struct Draughts: Codable, Equatable, Sendable {
     /// `false`: not a legal move now.
     @discardableResult
     public mutating func play(_ m: DraughtsMove) -> Bool {
-        guard outcome == nil, moves.contains(m), var p = squares[m.from] else { return false }
+        guard outcome == nil, moves.contains(m), squares[m.from] != nil else { return false }
+        apply(m)
+        return true
+    }
+
+    /// A move already known to be legal (the search's own moves): no second move generation.
+    mutating func apply(_ m: DraughtsMove) {
+        guard var p = squares[m.from] else { return }
         let byKing = p.king
         squares[m.from] = nil
         for c in m.captured { squares[c] = nil }
@@ -165,7 +172,6 @@ public struct Draughts: Codable, Equatable, Sendable {
         squares[m.to] = p
         quiet = byKing && m.captured.isEmpty ? quiet + 1 : 0
         toMove = toMove.other
-        return true
     }
 
     /// `nil` while the game goes on.
@@ -182,7 +188,9 @@ public struct Draughts: Codable, Equatable, Sendable {
 /// among equally good moves he picks at random (decision 31).
 public enum DraughtsAI {
     public static let yawnChance = 0.25
-    public static let depth = 4
+    /// Plies of the full search; takes are then played out to the end (no stopping in the middle of an exchange).
+    public static let depth = 5
+    static let takesAhead = 8
     public static let thinkRange = 0.5...1.2
 
     public static func move<R: RandomSource>(_ board: Draughts, rng: inout R, depth: Int = depth) -> (move: DraughtsMove, yawned: Bool) {
@@ -197,7 +205,7 @@ public enum DraughtsAI {
         var best = Int.min, out: [DraughtsMove] = []
         for m in board.moves {
             var next = board
-            next.play(m)
+            next.apply(m)
             let v = -search(next, depth: depth - 1, alpha: -1_000_000, beta: 1_000_000)
             if v > best { best = v; out = [m] } else if v == best { out.append(m) }
         }
@@ -205,17 +213,15 @@ public enum DraughtsAI {
     }
 
     private static func search(_ b: Draughts, depth: Int, alpha: Int, beta: Int) -> Int {
-        if let o = b.outcome {
-            switch o {
-            case .draw: return 0
-            default: return (o == .you) == (b.toMove == .you) ? 100_000 + depth : -100_000 - depth
-            }
-        }
-        if depth <= 0 { return evaluate(b) }
+        if b.quiet >= Draughts.quietLimit { return 0 }
+        let ms = b.moves
+        if ms.isEmpty { return -100_000 - max(0, depth) }                 // the side to move has lost
+        // At the horizon only takes go on (they are compulsory anyway), up to `takesAhead` more plies.
+        if depth <= 0, ms[0].captured.isEmpty || depth <= -takesAhead { return evaluate(b) }
         var a = alpha
-        for m in b.moves {
+        for m in ms {
             var next = b
-            next.play(m)
+            next.apply(m)
             let v = -search(next, depth: depth - 1, alpha: -beta, beta: -a)
             if v >= beta { return v }
             a = max(a, v)

@@ -213,8 +213,3 @@ public enum BattleshipAI {
         rng.uniform(thinkRange.lowerBound, thinkRange.upperBound)
     }
 }
-
-extension GameMatch {
-    /// Decision 30: a battleship match is 1–3 games.
-    public static let battleshipLengths = 1...3
-}
