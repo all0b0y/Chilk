@@ -5,8 +5,8 @@ import Testing
 /// Slice 8a (decision 13): a failed parse names the field and how to fix it.
 struct ToolErrorTextTests {
     @Test func aTimeWithoutAZoneSaysHowToWriteIt() {
-        let text = ChilkToolCatalog.explain(name: "chilk_reminder", arguments: ["at": "2026-10-09T10:00:00", "title": "Хлеб"])
-        #expect(text == "invalid_arguments: at — needs an ISO-8601 time with a timezone offset, e.g. 2026-10-09T10:00:00+03:00")
+        let text = ChilkToolCatalog.explain(name: "chilk_reminder", arguments: ["at": "завтра в 10", "title": "Хлеб"])
+        #expect(text == "invalid_arguments: at — needs an ISO-8601 time, e.g. 2026-10-09T10:00:00+03:00 (without an offset it is local time)")
     }
 
     @Test func emptyMissingExtraAndUnknownAreNamed() {
@@ -21,21 +21,24 @@ struct ToolErrorTextTests {
     }
 
     @Test func theExecutorsReturnIt() async {
-        let r = await ChilkReminderExecutor(store: NoReminders()).execute(name: "chilk_reminder", arguments: ["title": "Хлеб"])
-        #expect(!r.success && r.value["error"]?.string == "invalid_arguments: at — missing")
+        let r = await ChilkReminderExecutor(store: NoReminders()).execute(name: "chilk_reminders", arguments: ["title": "Хлеб"])
+        #expect(!r.success && r.value["error"]?.string?.hasPrefix("invalid_arguments: title — not a field of chilk_reminders") == true)
     }
 }
 
 private actor NoReminders: ReminderStore {
     func add(title: String, due: Date) async throws -> ReminderInfo { ReminderInfo(title: title, due: due) }
     func open() async throws -> [ReminderInfo] { [] }
+    func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo { throw ReminderAccessError.notFound }
+    func complete(id: String) async throws { throw ReminderAccessError.notFound }
+    func delete(id: String) async throws { throw ReminderAccessError.notFound }
 }
 
 /// Review 8a: lengths come from the schema, and a valid path is not reported.
 struct ToolErrorTextLimitsTests {
     @Test func aLongButValidFieldIsNotTheCulprit() {
         let text = ChilkToolCatalog.explain(name: "chilk_schedule", arguments: [
-            "at": "2026-10-09T10:00:00", "title": "Созвон", "message": .string(String(repeating: "а", count: 150))])
+            "at": "в десять", "title": "Созвон", "message": .string(String(repeating: "а", count: 150))])
         #expect(text.hasPrefix("invalid_arguments: at"))
         let long = ChilkToolCatalog.explain(name: "chilk_reminder", arguments: [
             "at": "2026-10-09T10:00:00+03:00", "title": .string(String(repeating: "а", count: 130))])

@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phrases: PhraseBatches?
     private var tray: Tray?
     private var game: GameController?
+    /// Slice 8c: confirmation cards.
+    private var cards: CardDesk?
     /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
     private var crashTimer: Timer?
     private var crashWaits = 0
@@ -257,12 +259,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.onNudge = { [weak tray] in tray?.nudge() }
         actions.onDue = { [weak tray] in tray?.nudge() }
 
-        // Bubble buttons: a conversation's own («Подробнее», «Да / Нет»), the greeting's, then the balance's.
+        // Slice 8c: confirmation cards — after a conversation, a due notice or a request, the card comes back.
+        let cards = CardDesk(sim: edge.sim)
+        cards.log = { [weak balance] in balance?.log($0) }
+        cards.chilkFrame = conversation.chilkFrame
+        cards.stageFree = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak chat, weak game, weak edge] in
+            guard let edge else { return false }
+            return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
+                && !(tray?.holdsChilk ?? true) && !(greeting?.isActive ?? true) && !(chat?.thinking ?? true)
+                && !(game?.holdsChilk ?? true) && !edge.sim.isTalking
+        }
+        cards.commit = { [weak actions] card in await actions?.commit(card) ?? (false, String(localized: "Не получилось — ничего не изменилось")) }
+        cards.onChange = { [weak chat] in chat?.refreshCard() }
+        cards.onResult = { [weak chat] line, _ in chat?.cardResult(line) }
+        if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            cards.snapshot = { [weak edge, weak chat] name in
+                guard let edge else { return }
+                _ = WindowSnapshot.writeScreen(edge.homeVisibleFrame, to: dir.appending(path: "\(name).png"))
+                chat?.snapshot(to: dir.appending(path: "\(name)-chat.png"))
+            }
+        }
+        actions.cards = cards
+        conversation.cards = cards
+        chat.cards = cards
+        self.cards = cards
+        let chatFree = chat.chilkFree
+        chat.chilkFree = { [weak cards] in !(cards?.ownsStage ?? false) && chatFree() }
+        let trayFree = tray.isFree
+        tray.isFree = { [weak cards] in !(cards?.ownsStage ?? false) && trayFree() }
+        let greetingCan = greeting.canPresent
+        greeting.canPresent = { [weak cards] in !(cards?.ownsStage ?? false) && greetingCan() }
+        let gameWhy = game.whyBusy
+        game.whyBusy = { [weak cards] in gameWhy() + ((cards?.hasCard ?? false) ? ["card"] : []) }   // decision: no game over a card
+        let hop = edge.hopBusy
+        edge.hopBusy = { [weak cards] in (cards?.ownsStage ?? false) || hop() }
+
+        // Bubble buttons: a conversation's own («Подробнее», «Да / Нет», a card in its bubble), the greeting's,
+        // basketball's, a card's at the edge, then the balance's.
         let balanceButton = edge.onButton
-        edge.onButton = { [weak conversation, weak greeting, weak game] i in
+        edge.onButton = { [weak conversation, weak greeting, weak game, weak cards] i in
             if conversation?.pressedButton(i) == true { return }
             if greeting?.pressedButton(i) == true { return }
             if game?.pressedButton(i) == true { return }             // 7b: basketball's own bubbles
+            if cards?.pressed(i, source: .edge) == true { return }   // 8c
             balanceButton?(i)
         }
         ears.onWake = { [weak conversation] in conversation?.wake() }
@@ -405,6 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions?.shutdown()
         phrases?.shutdown()
         tray?.shutdown()
+        cards?.shutdown()
         brain?.shutdown()
         ears?.shutdown()
     }

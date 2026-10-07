@@ -8,6 +8,15 @@ public enum ChilkFileScope: String, Codable, Sendable {
     public var ability: ChilkAbility { self == .files ? .files : .obsidian }
 }
 
+/// Slice 8c (decision 7): what `chilk_reminder_change` proposes for one of Chilk's reminders.
+public enum ReminderChange: Equatable, Sendable {
+    case move(Date)
+    case rename(String)
+    case moveRename(Date, String)
+    case done
+    case delete
+}
+
 /// Breaks the user asks for by voice (decisions 2026-10-05); they start when the conversation closes.
 public enum ChilkBreak: Equatable, Sendable {
     case eyeGym, warmup, walk
@@ -27,6 +36,8 @@ public enum ChilkAction: Equatable, Sendable {
     case requestFolder(path: String, reason: String)
     case reminder(title: String, at: Date)
     case reminders
+    /// Slice 8c (decision 7): one of Chilk's own reminders, by its id from `chilk_reminders`.
+    case reminderChange(id: String, change: ReminderChange)
     case mode(BalanceMode)
     case takeBreak(ChilkBreak)
     /// Slice 5b, decision 17: one short fact for Chilk's memory; `asked` = the user asked («запомни…»).
@@ -57,7 +68,7 @@ public enum ChilkToolCatalog {
             tool("chilk_water", "Credit water ONLY when the user confirms they drank it. Do not credit a promise.", [:]),
             tool("chilk_timer", "Create a local Chilk timer. App must run; overdue notices return on next launch.",
                  ["seconds": ["type": "integer", "minimum": 1, "maximum": 31622400], "title": title]),
-            tool("chilk_schedule", "Schedule a short prepared message in Chilk at an explicit ISO-8601 timestamp with timezone. Not Apple Reminders; app must run. An hour 1–12 said without утра/дня/вечера/ночи is ambiguous: ask first (03:00 or 15:00?), never guess; refused with ambiguous_time / ambiguous_day otherwise.",
+            tool("chilk_schedule", "Propose a short prepared message Chilk says at a time («скажи мне в 17:00…»). Not Apple Reminders; the app must run. ISO-8601 timestamp; without a timezone it is the user's local time. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is scheduled yet: the app shows the user a confirmation card built from these values and schedules it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["at": ["type": "string", "maxLength": 64], "title": title,
                   "message": ["type": "string", "minLength": 1, "maxLength": 240]]),
             tool("chilk_timers", "List local Chilk timers with exact ids and deadlines; use before cancelling an ambiguous name.", [:]),
@@ -73,9 +84,13 @@ public enum ChilkToolCatalog {
                   "reason": ["type": "string", "minLength": 1, "maxLength": 120]]),
             tool("chilk_cancel_timer", "Cancel one local Chilk timer by its exact id, only on the user's request.",
                  ["id": ["type": "string", "minLength": 1, "maxLength": 128]]),
-            tool("chilk_reminder", "Create an Apple Reminders reminder for the user in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Explicit future ISO-8601 timestamp with timezone. An hour 1–12 said without утра/дня/вечера/ночи is ambiguous: ask first (03:00 or 15:00?), never guess; refused with ambiguous_time / ambiguous_day otherwise. Creates only: no editing, completing or deleting.",
+            tool("chilk_reminder", "Propose an Apple Reminders reminder in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Future ISO-8601 timestamp; without a timezone it is the user's local time. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows the user a confirmation card built from these values and creates it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["at": ["type": "string", "maxLength": 64], "title": ["type": "string", "minLength": 1, "maxLength": 120]]),
-            tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (title, due). Other lists are never read.", [:]),
+            tool("chilk_reminders", "List open reminders in Chilk's own «Чилк» list in Apple Reminders (id, title, due). Other lists are never read.", [:]),
+            tool("chilk_reminder_change", "Propose a change to ONE reminder of Chilk's own «Чилк» list, by its exact id from chilk_reminders, only on the user's request: action move (new time in at), rename (new title), move_rename (both), done (mark completed) or delete. Unused fields: empty string. Nothing changes yet: the app shows a confirmation card and applies it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm. Other lists cannot be changed. Refused: not_found (no such reminder in the «Чилк» list).",
+                 ["id": ["type": "string", "minLength": 1, "maxLength": 256],
+                  "action": ["type": "string", "enum": ["move", "rename", "move_rename", "done", "delete"]],
+                  "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120]]),
             tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
                  ["mode": ["type": "string", "enum": ["strict", "soft", "silent"]]]),
             tool("chilk_eye_gym", "Only when the user asks: eye gymnastics with Chilk — he flies a figure-eight to follow, then «look into the distance» for 20 s. Starts after your short reply, when the conversation closes.", [:]),
@@ -151,7 +166,7 @@ public enum ChilkToolCatalog {
     private static func ability(of name: String) -> ChilkAbility? {
         switch name {
         case "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
-        case "chilk_reminder", "chilk_reminders": .reminders
+        case "chilk_reminder", "chilk_reminders", "chilk_reminder_change": .reminders
         default: nil
         }
     }
@@ -165,9 +180,22 @@ public enum ChilkToolCatalog {
         && !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
 
-    /// An explicit ISO-8601 timestamp WITH a timezone («2026-10-06T09:00:00+03:00»); nothing else is guessed.
-    static func timestamp(_ text: String) -> Date? {
-        guard text.count <= 64, text.range(of: "T.*(Z|[+-][0-9]{2}:[0-9]{2})$", options: .regularExpression) != nil else { return nil }
+    /// An ISO-8601 timestamp («2026-10-06T09:00:00+03:00»). Slice 8c: without a timezone it is the user's local
+    /// time (the card shows what it became, so a wrong reading is caught before anything is written).
+    static func timestamp(_ text: String, zone: TimeZone = .autoupdatingCurrent) -> Date? {
+        guard text.count <= 64 else { return nil }
+        if text.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\\.[0-9]+)?)?$", options: .regularExpression) != nil {
+            let local = DateFormatter()
+            local.locale = Locale(identifier: "en_US_POSIX")
+            local.timeZone = zone
+            let plain = text.split(separator: ".").first.map(String.init) ?? text
+            for format in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm"] {
+                local.dateFormat = format
+                if let d = local.date(from: plain) { return d }
+            }
+            return nil
+        }
+        guard text.range(of: "T.*(Z|[+-][0-9]{2}:[0-9]{2})$", options: .regularExpression) != nil else { return nil }
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = f.date(from: text) { return date }
@@ -235,6 +263,24 @@ public enum ChilkToolCatalog {
         case "chilk_reminders":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .reminders
+        case "chilk_reminder_change":
+            guard Set(fields.keys) == ["id", "action", "at", "title"], let id = fields["id"]?.string,
+                  !id.isEmpty, id.count <= 256, let action = fields["action"]?.string,
+                  let at = fields["at"]?.string, let title = fields["title"]?.string else { throw ToolError.invalidArguments }
+            let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            func due() throws -> Date { guard let d = timestamp(at) else { throw ToolError.invalidArguments }; return d }
+            func name() throws -> String {
+                guard validTitle(cleanTitle, limit: 120) else { throw ToolError.invalidArguments }
+                return cleanTitle
+            }
+            switch action {
+            case "move": return .reminderChange(id: id, change: .move(try due()))
+            case "rename": return .reminderChange(id: id, change: .rename(try name()))
+            case "move_rename": return .reminderChange(id: id, change: .moveRename(try due(), try name()))
+            case "done": return .reminderChange(id: id, change: .done)
+            case "delete": return .reminderChange(id: id, change: .delete)
+            default: throw ToolError.invalidArguments
+            }
         case "chilk_remember":
             guard Set(fields.keys) == ["fact", "asked"], let fact = fields["fact"]?.string,
                   !fact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fact.count <= 200,

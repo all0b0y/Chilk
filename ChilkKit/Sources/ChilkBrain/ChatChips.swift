@@ -6,6 +6,8 @@ import Foundation
 public enum ChatChips {
     public static func chip(name: String, arguments: JSON, result: CodexToolResult) -> ChatChip? {
         guard let kind = kind(of: name) else { return nil }
+        // Slice 8c: a proposal is not a deed — the card itself shows in the chat until it is answered.
+        if result.value["awaiting_confirmation"]?.bool == true { return nil }
         // 6d+: «в 3 — ночи или дня?» is a question, not a failure: no red chip for it.
         if !result.success, result.value["error"]?.string?.hasPrefix("ambiguous_") == true { return nil }
         var chip = ChatChip(kind: kind, failed: !result.success || didNothing(result.value))
@@ -32,7 +34,7 @@ public enum ChatChips {
             if case .number(let granted)? = result.value["minutes"] { chip.minutes = Int(granted) } else { chip.minutes = asked }
         case .focus:
             guard !chip.failed else { break }
-            chip.at = result.value["until"]?.string.flatMap(ChilkToolCatalog.timestamp)
+            chip.at = result.value["until"]?.string.flatMap { ChilkToolCatalog.timestamp($0) }
         case .hide(let hidden):
             chip.subject = hidden ? "hidden" : "shown"
         case .game(let kind, _):

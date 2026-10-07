@@ -30,8 +30,10 @@ extension ChilkToolCatalog {
         case "string":
             guard let text = value.string else { return "must be a string" }
             if key == "at" {
-                return timestamp(text) == nil ? "needs an ISO-8601 time with a timezone offset, e.g. 2026-10-09T10:00:00+03:00" : nil
+                if tool == "chilk_reminder_change", text.isEmpty { return nil }
+                return timestamp(text) == nil ? "needs an ISO-8601 time, e.g. 2026-10-09T10:00:00+03:00 (without an offset it is local time)" : nil
             }
+            if tool == "chilk_reminder_change", key == "title", text.isEmpty { return nil }
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "must not be empty" }
             if text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
                 return "must be one line without control characters"

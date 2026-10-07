@@ -22,6 +22,11 @@ final class Conversation {
     var context: () -> String = { "" }
     /// Local debug log (CHILK_BALANCE_LOG), never sent anywhere.
     var log: (String) -> Void = { _ in }
+    /// Slice 8c: confirmation cards — a «да / нет» to the card is answered here, without Codex.
+    weak var cards: CardDesk?
+    /// The card is in this conversation's bubble (its buttons go to the desk).
+    private var cardInBubble = false
+
     /// His window on screen and whether he lives on the left edge: the long-answer panel opens beside him.
     var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
 
@@ -127,6 +132,17 @@ final class Conversation {
     /// A button under his bubble. `false` = not ours (the balance gets it).
     func pressedButton(_ index: Int) -> Bool {
         if question != nil { settleQuestion(index); return true }
+        if cardInBubble, let cards, cards.hasCard {
+            let label = cards.current.map { cards.buttons($0) }?[safe: index]
+            guard cards.pressed(index, source: .voice) else { return false }
+            if label != CardDesk.edit {
+                cardInBubble = false
+                stopEars()
+                leave(saying: label == CardDesk.yes ? String(localized: "Делаю…") : String(localized: "Ладно, ничего не делаю"),
+                      after: 1.5)
+            }
+            return true
+        }
         guard index == 0, let longAnswer else { return false }
         let place = chilkFrame()
         log("long answer opened")
@@ -353,6 +369,7 @@ final class Conversation {
                     if phase == .waiting {                                       // the follow-up has begun
                         phase = .listening
                         longAnswer = nil
+                        cardInBubble = false                        // his words now; the card waits at the desk
                         sim.setBubbleButtons([])
                     }
                     sim.earsDroop = 0
@@ -431,10 +448,20 @@ final class Conversation {
             guard !question.isEmpty else {
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)
             }
+            // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
+            if let cards, cards.hasCard, let line = cards.answer(question, source: .voice) {
+                log("card answered by voice")
+                cardInBubble = false
+                onTurn?(question, line, brain.liveThread ?? "")
+                return leave(saying: line, after: 1.5)
+            }
+            let cardNote = cards?.correcting == true ? cards?.context() : nil
+            let stamp = cards?.proposals ?? 0
             let asked = now
             do {
                 defer { ClockCheck.turnEnded(.voice) }
-                let raw = try await brain.ask(ClockCheck.question(question, context: context(), channel: .voice) + question) { partial in
+                let base = cardNote.map { VoiceContext.adding($0, to: context()) } ?? context()
+                let raw = try await brain.ask(ClockCheck.question(question, context: base, channel: .voice) + question) { partial in
                     answer.set(partial)
                 }
                 guard !Task.isCancelled, phase == .thinking || phase == .answering else { _ = takeEmote(); return }
@@ -445,7 +472,15 @@ final class Conversation {
                 onTurn?(question, text, raw.thread)
                 phase = .answering
                 sim.stopAct()
-                showReply(text)
+                if let cards, cards.proposals != stamp, cards.hasCard {
+                    // The card replaces his words in the bubble (they are in the chat); its buttons work, «да» too.
+                    cards.correcting = false
+                    cardInBubble = true
+                    longAnswer = nil
+                    cards.showInConversation()
+                } else {
+                    showReply(text)
+                }
                 if let q = takeEmote() {
                     // The words first — they explain the reaction — then the emotion 0.2 s after they are all on
                     // screen; the bubble stays over him while it plays (acceptance 2026-10-06, decision 11 revised).
@@ -455,7 +490,9 @@ final class Conversation {
                     try? await Task.sleep(for: .seconds(q.seconds))
                     guard !Task.isCancelled, phase == .answering else { return }
                 }
-                if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
+                if cardInBubble {
+                    listen(window: Dialogue.followUpWindow(mode: .question, replyLength: 0))   // «да» by voice
+                } else if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
                     leave(saying: nil, after: Dialogue.readingTime(text.count))
@@ -489,6 +526,8 @@ final class Conversation {
     /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
     private func leave(saying line: String?, after seconds: Double) {
         settleQuestion(nil)
+        cardInBubble = false
+        cards?.inConversation = false                       // a card still up goes back to the edge
         phase = .idle
         closing = true
         poll?.invalidate()

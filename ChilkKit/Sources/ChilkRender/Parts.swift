@@ -804,12 +804,16 @@ struct BubbleLayout: Sendable {
         if let hit = cache.withLock({ $0[key] }) { return hit }
         let font = TextKit.bubbleFont
         var rows: [[String]] = [[]]
-        for word in text.split(separator: " ").map(String.init) {
-            let candidate = (rows[rows.count - 1] + [word]).joined(separator: " ")
-            if !rows[rows.count - 1].isEmpty && TextKit.width(candidate, font: font) > maxTextWidth {
-                rows.append([word])
-            } else {
-                rows[rows.count - 1].append(word)
+        // A line break starts a new row (slice 8c: a card's what / when / where lines).
+        for (n, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            if n > 0 { rows.append([]) }
+            for word in line.split(separator: " ").map(String.init) {
+                let candidate = (rows[rows.count - 1] + [word]).joined(separator: " ")
+                if !rows[rows.count - 1].isEmpty && TextKit.width(candidate, font: font) > maxTextWidth {
+                    rows.append([word])
+                } else {
+                    rows[rows.count - 1].append(word)
+                }
             }
         }
         var words: [Word] = []

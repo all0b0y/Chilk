@@ -164,10 +164,8 @@ final class Actions {
                             + "tell the user it is switched off there.")
         }
         let result: CodexToolResult
-        if let refused = ClockCheck.refusal(for: call) {
-            result = refused                                     // 6d+: «в 3» — ночи или дня? Ask first.
-            record(.refused(ToolJournal.code(of: refused.value["error"]?.string ?? "")))
-            return result
+        if ChilkReminderExecutor.proposes(call.name) || call.name == "chilk_schedule" {
+            result = await propose(call)                        // 8c: a card first; «Да» writes it
         } else if call.name == "chilk_remember" {
             result = remember(call)
         } else if call.name == "chilk_emote" {
@@ -185,6 +183,104 @@ final class Actions {
         balance?.log("tool \(call.name) success=\(result.success)"
                      + (result.success ? "" : " \(result.value["error"]?.string ?? "")"))
         return result
+    }
+
+    // MARK: Confirmation cards (slice 8c, decisions 3–8)
+
+    /// Set by the app.
+    weak var cards: CardDesk?
+
+    /// `chilk_reminder` / `chilk_schedule` / `chilk_reminder_change` → a card built from the values that would be
+    /// written. Nothing is written here.
+    private func propose(_ call: CodexToolCall) async -> CodexToolResult {
+        guard let cards else { return .failure("cards_unavailable: nothing was done") }
+        let action: ChilkAction
+        do { action = try ChilkToolCatalog.parse(name: call.name, arguments: call.arguments) }
+        catch { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
+        let now = Date()
+        func future(_ d: Date) -> Bool { d > now.addingTimeInterval(30) }
+        let kind: ActionCard.Kind
+        var date: Date?
+        switch action {
+        case .reminder(let title, let at):
+            guard future(at) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
+            kind = .reminder(title: title, due: at)
+            date = at
+        case .schedule(let at, let title, let message):
+            guard future(at) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
+            kind = .message(title: title, text: message, at: at)
+            date = at
+        case .reminderChange(let id, let change):
+            let found: ReminderInfo
+            do { found = try await reminders.lookup(id: id) } catch ReminderAccessError.denied {
+                return .failure("no_access: no access to Reminders. The user can allow it in System Settings → Privacy & Security → Reminders → Чилк")
+            } catch ReminderAccessError.notFound {
+                return .failure("not_found: no reminder with this id in the «Чилк» list; list them with chilk_reminders")
+            } catch { return .failure("reminders_unreachable: could not reach Apple Reminders; nothing was changed") }
+            switch change {
+            case .move(let d), .moveRename(let d, _):
+                guard future(d) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
+                date = d
+            default: break
+            }
+            switch change {
+            case .move(let d): kind = .reminderChange(id: id, oldTitle: found.title, oldDue: found.due, title: found.title, due: d)
+            case .rename(let t): kind = .reminderChange(id: id, oldTitle: found.title, oldDue: found.due, title: t, due: found.due)
+            case .moveRename(let d, let t): kind = .reminderChange(id: id, oldTitle: found.title, oldDue: found.due, title: t, due: d)
+            case .done: kind = .reminderComplete(id: id, title: found.title, due: found.due)
+            case .delete: kind = .reminderDelete(id: id, title: found.title, due: found.due)
+            }
+        default:
+            return .failure("Unsupported action")
+        }
+        let guess = date.map { ClockCheck.guess(for: $0) } ?? (part: false, day: false)
+        let card = ActionCard(kind: kind, guessedPart: guess.part, guessedDay: guess.day)
+        cards.propose(card)
+        return .ok(["awaiting_confirmation": true, "card": .string(card.summary()),
+                    "note": "Nothing is done yet. The user confirms the card with Да, changes it, or says Нет."])
+    }
+
+    /// After the card's «Да»: writes exactly the card's values. Returns the line Chilk says.
+    func commit(_ card: ActionCard) async -> (ok: Bool, line: String) {
+        let started = Date()
+        let format = { (d: Date) in card.lines(now: started).dropFirst().first ?? ISO8601DateFormatter().string(from: d) }
+        let result: CodexToolResult
+        let line: String
+        let tool: String
+        switch card.kind {
+        case .reminder(let title, let due):
+            tool = "card_reminder"
+            result = await reminders.create(title: title, due: due)
+            line = String(localized: "Готово: «\(title)» — \(format(due))")
+        case .message(let title, let text, let at):
+            tool = "card_message"
+            let iso = ISO8601DateFormatter()
+            iso.timeZone = .current
+            result = executor?.execute(name: "chilk_schedule", arguments: ["at": .string(iso.string(from: at)),
+                                                                           "title": .string(title), "message": .string(text)])
+                ?? .failure("timers_unavailable")
+            line = String(localized: "Готово: скажу «\(Dialogue.plain(text))» — \(format(at))")
+        case .reminderChange(let id, let old, _, let title, let due):
+            tool = "card_reminder_change"
+            result = await reminders.change(id: id, title: title == old ? nil : title, due: due)
+            line = String(localized: "Готово: «\(title)» изменено")
+        case .reminderComplete(let id, let title, _):
+            tool = "card_reminder_done"
+            result = await reminders.complete(id: id)
+            line = String(localized: "Готово: «\(title)» выполнено")
+        case .reminderDelete(let id, let title, _):
+            tool = "card_reminder_delete"
+            result = await reminders.delete(id: id)
+            line = String(localized: "Готово: «\(title)» удалено")
+        }
+        journal.write(ToolJournal.line(at: started, tool: tool,
+                                       outcome: result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")),
+                                       seconds: Date().timeIntervalSince(started)))
+        balance?.log("card \(tool) success=\(result.success)")
+        if result.success { return (true, line) }
+        let code = ToolJournal.code(of: result.value["error"]?.string ?? "")
+        return (false, code == "no_access" ? String(localized: "Не получилось: нет доступа к «Напоминаниям» — разреши в Настройках")
+                                           : String(localized: "Не получилось — ничего не изменилось"))
     }
 
     /// A click on Chilk while a due bubble is up closes it (`false` = not about a timer).

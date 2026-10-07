@@ -44,8 +44,12 @@ struct ChilkToolTests {
     @Test func absoluteTimesNeedAnExplicitTimezoneAndAShortMessage() throws {
         let at = Date(timeIntervalSince1970: 1_700_000_000)
         #expect(try ChilkToolCatalog.parse(name: "chilk_schedule", arguments: ["at": "2023-11-15T01:13:20+03:00", "title": "Чай", "message": "Пора"]) == .schedule(at: at, title: "Чай", message: "Пора"))
-        #expect(throws: (any Error).self) {
+        // Slice 8c: without a zone it is local time (the card shows it before anything is scheduled).
+        #expect(throws: Never.self) {
             try ChilkToolCatalog.parse(name: "chilk_schedule", arguments: ["at": "2023-11-15T01:13:20", "title": "Чай", "message": "Пора"])
+        }
+        #expect(throws: (any Error).self) {
+            try ChilkToolCatalog.parse(name: "chilk_schedule", arguments: ["at": "15 ноября", "title": "Чай", "message": "Пора"])
         }
         #expect(throws: (any Error).self) {
             try ChilkToolCatalog.parse(name: "chilk_schedule", arguments: ["at": "2023-11-15T01:13:20+03:00", "title": "Чай", "message": .string(String(repeating: "ч", count: 241))])

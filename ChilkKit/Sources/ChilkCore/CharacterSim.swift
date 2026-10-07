@@ -612,6 +612,9 @@ public final class CharacterSim {
 
     public var isTalking: Bool { time < bubbleUntil }
 
+    /// The words in the bubble on screen now (slice 8c: the card notices another bubble took its place).
+    public var bubbleWords: String? { isTalking ? bubbleText : nil }
+
     /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
     public var passesClicks: Bool {
         if case .leap = act { return true }                              // 6e: clicks go through while he flies

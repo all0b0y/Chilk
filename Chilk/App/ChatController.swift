@@ -32,6 +32,39 @@ final class ChatController: NSObject, NSWindowDelegate {
     /// Only the acceptance script (CHILK_DEMO_CHAT) may use «@new» / «@oldest».
     private var demoMode = false
 
+    /// Slice 8c: confirmation cards — a typed «да / нет» answers the card here, without Codex.
+    weak var cards: CardDesk? {
+        didSet { refreshCard() }
+    }
+
+    /// The card on screen, mirrored here (the desk calls it on every change).
+    func refreshCard() {
+        guard let card = cards?.current else {
+            model.card = nil
+            model.cardEdit = nil
+            return
+        }
+        let shown = ChatCard(id: card.id, lines: card.lines(now: Date()), buttons: cards?.buttons(card) ?? [])
+        if model.card != shown {
+            if model.card?.id != card.id { model.cardEdit = nil }
+            model.card = shown
+            model.cardNote = nil
+        }
+    }
+
+    /// A typed «да» waits for the write: the pair goes into the chat with its result, not with «Делаю…».
+    private var confirmingWords: String?
+
+    /// The result of a card answered anywhere (edge, voice, chat): into the chat after a typed «да», else a note.
+    func cardResult(_ line: String) {
+        guard let words = confirmingWords else { model.cardNote = line; return }
+        confirmingWords = nil
+        let id = store.recordLocal(question: words, answer: line, via: .text,
+                                   continuing: model.selected.flatMap { store.log.session($0)?.id })
+        lastLiveChat = id
+        model.selected = id
+    }
+
     /// [контекст] for a turn (time, sitting time, name).
     var context: () -> String = { "" }
     /// Chilk is free at the edge for the «thinking» pose (no bubble, no break, not in the popover).
@@ -123,6 +156,20 @@ final class ChatController: NSObject, NSWindowDelegate {
             log("chat: refused while lying (\(text.count) chars), no Codex turn")
             return
         }
+        let confirming = cards?.current.map { !$0.expired(now: Date()) && CardAnswer.parse(text) == .yes } ?? false
+        if confirming { confirmingWords = text }
+        if let cards, cards.hasCard, let line = cards.answer(text, source: .chat) {
+            // Decision 4: a typed «да» is an answer too — no Codex turn.
+            model.draft = ""
+            model.error = nil
+            if confirming { log("chat: card confirmed by text"); return }   // the result records the pair
+            let id = store.recordLocal(question: text, answer: line, via: .text,
+                                       continuing: model.selected.flatMap { store.log.session($0)?.id })
+            lastLiveChat = id
+            model.selected = id
+            log("chat: card answered by text")
+            return
+        }
         if let problem = brain.problem { model.error = problem; return }
         conversation.yieldToChat()
         stopMic(send: false)
@@ -140,7 +187,9 @@ final class ChatController: NSObject, NSWindowDelegate {
         posing = pose
         if pose { sim.perform(.think(seconds: 60)) }              // at the edge, no bubble (decision 13)
         log("chat: typed question (\(text.count) chars)\(fresh ? ", clean thread" : "")\(plan.continuing != nil ? ", continues a chat" : "")\(pose ? "" : ", Chilk busy at the edge")")
-        let question = ClockCheck.question(text, context: VoiceContext.chat(context()), channel: .chat) + text
+        let cardNote = cards?.correcting == true ? cards?.context() : nil
+        let base = cardNote.map { VoiceContext.adding($0, to: VoiceContext.chat(context())) } ?? VoiceContext.chat(context())
+        let question = ClockCheck.question(text, context: base, channel: .chat) + text
         Task {
             defer {
                 thinking = false
@@ -360,6 +409,19 @@ final class ChatController: NSObject, NSWindowDelegate {
             self.log("chat deleted")
         }
         model.typed = { [weak self] in self?.typed() }
+        model.cardButton = { [weak self] title in
+            guard let self, let cards = self.cards, let card = cards.current else { return }
+            if title == CardDesk.edit {
+                self.model.cardEdit = CardEditModel(card)
+                return
+            }
+            if let index = cards.buttons(card).firstIndex(of: title) { _ = cards.pressedFromChat(index) }
+        }
+        model.cardSave = { [weak self] in
+            guard let self, let edit = self.model.cardEdit else { return }
+            self.model.cardEdit = nil
+            self.cards?.replaceCurrent(with: edit.edited())
+        }
     }
 }
 

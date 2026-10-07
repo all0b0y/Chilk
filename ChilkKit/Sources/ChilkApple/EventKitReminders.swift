@@ -25,7 +25,42 @@ public final class EventKitReminders: ReminderStore {
         reminder.dueDateComponents = parts
         reminder.addAlarm(EKAlarm(absoluteDate: due))                // the notification itself, on every device
         try store.save(reminder, commit: true)
-        return ReminderInfo(title: title, due: due)
+        return ReminderInfo(title: title, due: due, id: reminder.calendarItemIdentifier)
+    }
+
+    /// Slice 8c (decision 7): only a reminder of the «Чилк» list, after the card's «Да».
+    public func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo {
+        let reminder = try own(id)
+        if let title { reminder.title = title }
+        if let due {
+            var parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
+            parts.timeZone = .current
+            reminder.dueDateComponents = parts
+            for alarm in reminder.alarms ?? [] { reminder.removeAlarm(alarm) }
+            reminder.addAlarm(EKAlarm(absoluteDate: due))
+        }
+        try store.save(reminder, commit: true)
+        return ReminderInfo(title: reminder.title ?? "", due: reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) },
+                            id: reminder.calendarItemIdentifier)
+    }
+
+    public func complete(id: String) async throws {
+        let reminder = try own(id)
+        reminder.isCompleted = true
+        try store.save(reminder, commit: true)
+    }
+
+    public func delete(id: String) async throws {
+        try store.remove(try own(id), commit: true)
+    }
+
+    /// The reminder with this id — only if it lives in Chilk's own list (other lists are never touched).
+    private func own(_ id: String) throws -> EKReminder {
+        guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else { throw ReminderAccessError.denied }
+        guard let list = try chilkList(create: false),
+              let reminder = store.calendarItem(withIdentifier: id) as? EKReminder,
+              reminder.calendar?.calendarIdentifier == list.calendarIdentifier else { throw ReminderAccessError.notFound }
+        return reminder
     }
 
     public func open() async throws -> [ReminderInfo] {
@@ -42,7 +77,8 @@ public final class EventKitReminders: ReminderStore {
         await withCheckedContinuation { continuation in
             _ = store.fetchReminders(matching: predicate) { @Sendable reminders in
                 let items = (reminders ?? []).map { r in
-                    ReminderInfo(title: r.title ?? "", due: r.dueDateComponents.flatMap { Calendar.current.date(from: $0) })
+                    ReminderInfo(title: r.title ?? "", due: r.dueDateComponents.flatMap { Calendar.current.date(from: $0) },
+                                 id: r.calendarItemIdentifier)
                 }
                 continuation.resume(returning: items)
             }

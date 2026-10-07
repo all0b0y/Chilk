@@ -69,7 +69,7 @@ public enum ClockWords {
         let hours = ambiguousHours(in: question)
         if !hours.isEmpty {
             let pairs = hours.map { h in String(format: "%d — %02d:00 или %02d:00", h, h % 12, h % 12 + 12) }
-            notes.append("в словах пользователя час без части суток (\(pairs.joined(separator: "; "))): прежде чем ставить напоминание, спроси, какое время")
+            notes.append("в словах пользователя час без части суток (\(pairs.joined(separator: "; "))): не спрашивай — возьми вероятное по смыслу и времени сейчас; карточка подтверждения покажет догадку")
         }
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = zone
@@ -79,9 +79,31 @@ public enum ClockWords {
             f.locale = Locale(identifier: "ru_RU")
             f.timeZone = zone
             f.dateFormat = "d MMMM"
-            notes.append("сейчас ночь после полуночи: «завтра» может значить \(f.string(from: now)) (после сна) или \(f.string(from: next)) — уточни дату")
+            notes.append("сейчас ночь после полуночи: «завтра» может значить \(f.string(from: now)) (после сна) или \(f.string(from: next)) — не спрашивай, возьми вероятное (обычно \(f.string(from: now))); карточка покажет дату")
         }
         return notes.isEmpty ? nil : notes.joined(separator: "; ")
+    }
+
+    /// Slice 8c: dictation glues words («напомнив три» for «напомни в три») — an hour 1…12 anywhere in words that name
+    /// no part of day and no 24-hour time still leaves the part of day open (the card marks it, nothing is refused).
+    public static func looseOpenHour(in text: String, hour h: Int) -> Bool {
+        let t = tokens(text)
+        if t.contains(where: partsOfDay.contains) { return false }
+        for (i, w) in t.enumerated() {
+            let next = i + 1 < t.count ? t[i + 1] : ""
+            if unitPrefixes.contains(where: { next.hasPrefix($0) }) || ordinalEnds.contains(next) { continue }
+            if let n = clockNumber(w), (1...12).contains(n), n % 12 == h % 12 { return true }
+            if let n = hourWords[w], n % 12 == h % 12 { return true }
+            for (word, n) in hourWords where w.hasSuffix(word) && w.count > word.count + 2 && n % 12 == h % 12 { return true }
+        }
+        return false
+    }
+
+    /// «завтра» said between 00:00 and 04:59: the date is a guess (slice 8c, decision 8).
+    public static func dayOpen(question: String, now: Date, zone: TimeZone) -> Bool {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        return cal.component(.hour, from: now) < 5 && tokens(question).contains("завтра")
     }
 
     // MARK: Words

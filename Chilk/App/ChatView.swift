@@ -22,6 +22,12 @@ final class ChatModel {
     var delete: (UUID) -> Void = { _ in }
     /// «Память» lives in the main window (slice 5c).
     var openMemory: () -> Void = {}
+    /// Slice 8c: the confirmation card on screen (the same as at the edge), its buttons and its inline editor.
+    var card: ChatCard?
+    var cardEdit: CardEditModel?
+    var cardNote: String?
+    var cardButton: (String) -> Void = { _ in }
+    var cardSave: () -> Void = {}
 
     var current: ChatSession? { selected.flatMap { id in sessions.first { $0.id == id } } }
 }
@@ -96,6 +102,12 @@ struct ChatView: View {
                         }
                         .id("pending")
                     }
+                    if let card = model.card {
+                        CardBox(card: card, model: model).id("card")
+                    }
+                    if let note = model.cardNote {
+                        Label(note, systemImage: "checkmark.circle").font(.callout).foregroundStyle(.secondary).id("cardNote")
+                    }
                     if let error = model.error {
                         Label(error, systemImage: "exclamationmark.triangle.fill")
                             .foregroundStyle(.orange).font(.callout).id("error")
@@ -107,6 +119,7 @@ struct ChatView: View {
             .onChange(of: model.current?.turns.count) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: model.pending) { proxy.scrollTo("bottom", anchor: .bottom) }
             .onChange(of: model.selected) { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: model.card) { proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 
@@ -199,5 +212,66 @@ private struct Avatar: View {
 
     var body: some View {
         Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: size, height: size)
+    }
+}
+
+/// Slice 8c: what the chat shows of the card.
+struct ChatCard: Equatable {
+    let id: UUID
+    let lines: [String]
+    let buttons: [String]
+}
+
+/// The card in the chat: its lines, «Да / Изменить / Нет»; «Изменить» opens the fields right in it.
+private struct CardBox: View {
+    let card: ChatCard
+    @Bindable var model: ChatModel
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Avatar()
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(card.lines.enumerated()), id: \.offset) { i, line in
+                    Text(line).font(i == 0 ? .body.weight(.semibold) : .callout)
+                        .foregroundStyle(i == 0 ? Color.primary : (line.contains("?") ? TrayView.peach : Color.secondary))
+                }
+                if let edit = model.cardEdit {
+                    Divider()
+                    CardEditFields(model: edit)
+                    HStack {
+                        Button(String(localized: "Отмена")) { model.cardEdit = nil }
+                        Button(String(localized: "Готово")) { model.cardSave() }.keyboardShortcut(.defaultAction).disabled(!edit.valid)
+                    }
+                } else {
+                    HStack {
+                        ForEach(card.buttons, id: \.self) { title in
+                            Button(title) { model.cardButton(title) }
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(TrayView.peach.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(TrayView.peach.opacity(0.5)))
+            Spacer(minLength: 60)
+        }
+    }
+}
+
+struct CardEditFields: View {
+    @Bindable var model: CardEditModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField(model.hasText ? String(localized: "Коротко") : String(localized: "Название"), text: $model.title)
+            if model.hasText {
+                TextField(String(localized: "Что сказать"), text: $model.text, axis: .vertical).lineLimit(2...4)
+            }
+            if model.hasDate {
+                DatePicker(String(localized: "Когда"), selection: $model.date, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                    .environment(\.locale, Locale(identifier: "ru_RU"))
+            }
+        }
+        .frame(maxWidth: 360)
     }
 }

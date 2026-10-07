@@ -2,8 +2,8 @@ import ChilkBrain
 import ChilkCore
 import Foundation
 
-/// Slice 6d+ (SPEC Т1–Т4): the user's latest words, for the time check. An hour left open («в 3») or «завтра» after
-/// midnight adds a hint to [контекст], and a reminder on that side is refused until the user's next words answer it.
+/// Slice 6d+ (SPEC Т1–Т4), revised by 8c (decision 8): the user's latest words. An hour left open («в 3») or «завтра»
+/// after midnight adds a hint to [контекст]; nothing is refused any more — the card shows the guess.
 /// Voice and chat keep their own words: a voice question asked during a chat turn must not judge the chat's reminder.
 @MainActor
 enum ClockCheck {
@@ -37,48 +37,22 @@ enum ClockCheck {
     /// The channel's Codex turn is over (answered or failed).
     static func turnEnded(_ channel: Channel) { inFlight.remove(channel) }
 
-    /// `chilk_reminder` / `chilk_schedule` on a side the user left open → the refusal Codex gets; else nil.
-    static func refusal(for call: CodexToolCall, now: Date = Date()) -> CodexToolResult? {
-        guard call.name == "chilk_reminder" || call.name == "chilk_schedule" else { return nil }
-        // Two turns at once (a voice question during a chat turn): the stricter reading — a needless question is
-        // cheaper than a reminder at the wrong hour.
-        let channels = inFlight.isEmpty
-            ? (last.max { $0.value.at < $1.value.at }.map { [$0.key] } ?? [])
-            : Channel.allCases.filter(inFlight.contains)
-        for channel in channels {
-            if let refusal = refusal(for: call, channel: channel, now: now) { return refusal }
-        }
-        return nil
-    }
-
-    private static func refusal(for call: CodexToolCall, channel: Channel, now: Date) -> CodexToolResult? {
-        guard let said = last[channel], now.timeIntervalSince(said.at) < 15 * 60 else { return nil }
-        // Read `at` loosely: a timestamp the tool would refuse (past, no zone) is still a guess at the open hour; one
-        // that cannot be read at all, while the user left an hour open, is treated as that hour.
-        let raw = call.arguments["at"]?.string
+    /// Slice 8c (decision 8): no question first — the card marks what was guessed. `part`: the user's latest words
+    /// named this hour without утра / дня / вечера / ночи; `day`: «завтра» said after midnight.
+    static func guess(for date: Date, now: Date = Date()) -> (part: Bool, day: Bool) {
+        let channels = inFlight.isEmpty ? (last.max { $0.value.at < $1.value.at }.map { [$0.key] } ?? [])
+                                        : Channel.allCases.filter(inFlight.contains)
+        var out = (part: false, day: false)
         let zone = TimeZone.autoupdatingCurrent
-        var conflict: ClockWords.Conflict?
-        if let raw, let hour = ClockWords.localHour(ofTimestamp: raw, zone: zone) {
-            conflict = ClockWords.conflict(question: said.text, hour: hour, now: now, zone: zone)
-        } else {
-            log("tool \(call.name): unreadable at «\(raw ?? "none")»")
-            conflict = ClockWords.ambiguousHours(in: said.text).first.map { .hour($0) }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = zone
+        let hour = cal.component(.hour, from: date)
+        for channel in channels {
+            guard let said = last[channel], now.timeIntervalSince(said.at) < 15 * 60 else { continue }
+            if ClockWords.ambiguousHours(in: said.text).contains(where: { $0 % 12 == hour % 12 })
+                || ClockWords.looseOpenHour(in: said.text, hour: hour) { out.part = true }
+            if ClockWords.dayOpen(question: said.text, now: now, zone: zone) { out.day = true }
         }
-        if conflict == .day, said.answering.contains(.day) { conflict = nil }   // «завтра, после сна» is the answer
-        switch conflict {
-        case .hour(let h):
-            refused[channel, default: []].insert(.hour)
-            log("tool \(call.name) refused: ambiguous_time \(h)")
-            return .failure(String(format: "ambiguous_time: the user said %d without утра/дня/вечера/ночи. Nothing was set. "
-                                   + "Ask them briefly which one: %02d:00 or %02d:00 (e.g. «%@»), "
-                                   + "and set it after the answer.", h, h % 12, h % 12 + 12, ClockWords.askBack(hour: h)))
-        case .day:
-            refused[channel, default: []].insert(.day)
-            log("tool \(call.name) refused: ambiguous_day")
-            return .failure("ambiguous_day: it is after midnight and the user said «завтра». Nothing was set. Ask which "
-                            + "date they mean (today after sleep, or the day after — name both dates), then set it.")
-        case nil:
-            return nil
-        }
+        return out
     }
 }
