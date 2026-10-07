@@ -106,15 +106,18 @@ struct VoiceInputTests {
     }
 
     /// A call amid continuous speech (a TV) is marked, so the conversation does not open follow-up windows into it.
+    /// Slice 8b (decision 2): a voice in more than half of the 10 s before the checked clip.
     @Test func aWakeInContinuousSpeechIsMarkedAmidSpeech() async throws {
         let input = VoiceInput(recognize: { $0.contains(0.3) ? "Чилк, поставь таймер" : "ordinary speech" },
                                gate: WakeAudioGate(continuous: true))
         var woke = false
         input.arm { woke = true }
         input.feed(Array(repeating: 0, count: 9_600), speech: false)
-        input.feed(Array(repeating: 0.1, count: 80_000), speech: true)             // 5 s → first check
-        input.feed(Array(repeating: 0.2, count: 16_000), speech: true)             // the TV goes on during it
-        await until { !input.isChecking }
+        for _ in 0..<3 {                                                          // the TV talks for ~15 s
+            input.feed(Array(repeating: 0.1, count: 80_000), speech: true)
+            input.feed(Array(repeating: 0.2, count: 16_000), speech: true)         // and goes on during the check
+            await until { !input.isChecking }
+        }
         input.feed(Array(repeating: 0.3, count: 64_000), speech: true)             // «Чилк, поставь таймер» → next check
         input.feed(Array(repeating: 0.4, count: 3_200), speech: true)              // arrives during that check
         await until { woke }
@@ -123,21 +126,86 @@ struct VoiceInputTests {
         input.feed(Array(repeating: 0.5, count: 1_600), speech: true)
         var delivered: [Float] = []
         try input.attach { delivered += $0 }
-        #expect(runs(delivered) == ["0.4×3200", "0.5×1600"])
+        #expect(runs(delivered) == ["0.3×32000", "0.4×3200", "0.5×1600"])      // only after the checked clip
         input.suspend()
     }
 
-    @Test func aWakeSoonAfterOtherSpeechIsMarkedAmidSpeech() async throws {
-        let input = VoiceInput(recognize: { $0.contains(0.3) ? "Эй, Чилк" : "ordinary speech" })
+    /// Slice 8b (decision 2): a few words before «Чилк» and a first failed call are not a TV.
+    @Test func aWakeAfterAFewWordsOrAFailedCallIsNotAmidSpeech() async throws {
+        let input = VoiceInput(recognize: { $0.contains(0.3) ? "Эй, Чилк" : "Чил… ой" })
         var woke = false
         input.arm { woke = true }
-        input.feed(Array(repeating: 0.1, count: 8_000), speech: true)              // the TV says something…
+        input.feed(Array(repeating: 0.1, count: 16_000), speech: true)             // «Чил… ой» (rejected)
         input.feed(Array(repeating: 0, count: 9_600), speech: false)
         await until { !input.isChecking }
-        input.feed(Array(repeating: 0.3, count: 8_000), speech: true)              // …and right after: «Эй, Чилк»
+        input.feed(Array(repeating: 0, count: 16_000), speech: false)
+        input.feed(Array(repeating: 0.3, count: 8_000), speech: true)              // …and again: «Эй, Чилк»
         input.feed(Array(repeating: 0, count: 9_600), speech: false)
         await until { woke }
-        #expect(try input.prepareDictation(replayWake: true) == WakeHeard(request: "", amidSpeech: true))
+        #expect(try input.prepareDictation(replayWake: true) == WakeHeard(request: "", amidSpeech: false))
+        input.suspend()
+    }
+
+    /// Slice 8b (decision 17): the start of a phrase is checked at its first short pause; a hit wakes him before
+    /// the phrase is over, and the rest goes to dictation.
+    @Test func anEarlyCheckWakesHimBeforeThePhraseEnds() async throws {
+        let clips = Clips()
+        let input = VoiceInput(recognize: { await clips.add($0.count); return "Чилк" }, gate: WakeAudioGate(continuous: true, early: true))
+        var woke = false
+        input.arm { woke = true }
+        input.feed(Array(repeating: 0, count: 9_600), speech: false)
+        input.feed(Array(repeating: 0.3, count: 8_000), speech: true)              // «Чилк»
+        input.feed(Array(repeating: 0, count: 3_200), speech: false)               // 0.2 s: a comma, not the end
+        await until { woke }
+        #expect(woke)
+        #expect(await clips.sizes.count == 1)
+        input.feed(Array(repeating: 0.4, count: 1_600), speech: true)              // «поставь…» goes on
+        #expect(try input.prepareDictation(replayWake: true) == WakeHeard(request: "", amidSpeech: false))
+        var delivered: [Float] = []
+        try input.attach { delivered += $0 }
+        #expect(runs(delivered) == ["0.4×1600"])
+        input.suspend()
+    }
+
+    /// No name at the start: the same phrase is checked whole, as before (one more check).
+    @Test func anEarlyMissChecksTheWholePhrase() async throws {
+        let clips = Clips()
+        let input = VoiceInput(recognize: { await clips.add($0.count); return $0.count > 50_000 ? "Слушай, Чилк, а" : "Слушай" },
+                               gate: WakeAudioGate(early: true))
+        input.arm {}
+        input.feed(Array(repeating: 0, count: 11_200), speech: false)
+        input.feed(Array(repeating: 0.1, count: 40_000), speech: true)             // 2.5 s without a pause
+        for _ in 0..<500 where await clips.sizes.count < 1 { try? await Task.sleep(for: .milliseconds(10)) }
+        await until { !input.isChecking }
+        input.feed(Array(repeating: 0, count: 9_600), speech: false)               // the phrase ends
+        for _ in 0..<500 where await clips.sizes.count < 2 { try? await Task.sleep(for: .milliseconds(10)) }
+        let sizes = await clips.sizes
+        #expect(sizes.count == 2)
+        #expect(sizes.first == 11_200 + 24_000 + 8_000)                            // pre-roll + 1.5 s (+ padding)
+        input.suspend()
+    }
+
+    /// An early wake amid a TV: he is out at once, the request comes from the whole phrase heard by Whisper.
+    @Test func anEarlyWakeAmidSpeechTakesTheRequestFromTheWholePhrase() async throws {
+        let input = VoiceInput(recognize: { $0.contains(0.5) ? "Чилк, поставь таймер на 10 минут" : $0.contains(0.3) ? "Чилк, поста" : "tv" },
+                               gate: WakeAudioGate(continuous: true, early: true))
+        var woke = false
+        input.arm { woke = true }
+        for _ in 0..<3 {
+            input.feed(Array(repeating: 0.1, count: 80_000), speech: true)
+            input.feed(Array(repeating: 0.2, count: 16_000), speech: true)
+            await until { !input.isChecking }
+        }
+        input.feed(Array(repeating: 0, count: 9_600), speech: false)               // a pause: the call is a fresh phrase
+        await until { !input.isChecking }
+        input.feed(Array(repeating: 0.3, count: 24_000), speech: true)             // 1.5 s → early check
+        await until { woke }
+        let heard = try input.prepareDictation(replayWake: true)
+        #expect(heard == WakeHeard(request: "поста", amidSpeech: true, wholePending: true))
+        input.feed(Array(repeating: 0.5, count: 16_000), speech: true)
+        input.feed(Array(repeating: 0, count: 9_600), speech: false)               // the phrase ends → whole check
+        let whole = await input.wholePhrase()
+        #expect(whole == "поставь таймер на 10 минут")
         input.suspend()
     }
 
@@ -165,4 +233,9 @@ actor PendingRecognition {
         while !started { await Task.yield() }
     }
     func complete(_ text: String) { continuation?.resume(returning: text); continuation = nil }
+}
+
+actor Clips {
+    private(set) var sizes: [Int] = []
+    func add(_ n: Int) { sizes.append(n) }
 }

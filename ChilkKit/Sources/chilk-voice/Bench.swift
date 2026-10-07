@@ -43,6 +43,7 @@ enum Bench {
             switch args[0] {
             case "whisper-v1": row = try await whisperV1(samples, model: model!)
             case "whisper-v1c": row = try await whisperV1(samples, model: model!, continuous: true)
+            case "whisper-v1e": row = try await whisperV1(samples, model: model!, continuous: true, early: true)
             case "whisper-v2": row = try await whisperV2(samples, model: model!)
             case "apple": row = try await apple(path)
             case "request": row = try await request(file, background: Int((Double(fields[1]) ?? 0) * 16_000), model: model!)
@@ -79,7 +80,7 @@ enum Bench {
             let text = try await model.recognize(audio)
             await clock.finished(after: now() - t)
             return text
-        }, gate: WakeAudioGate(continuous: true))
+        }, gate: WakeAudioGate(continuous: true, early: ProcessInfo.processInfo.environment["BENCH_EARLY"] == "1"))
         var lastText = "", woke = false
         input.onCheck = { text, _, _ in lastText = text }
         input.arm { woke = true }
@@ -96,7 +97,39 @@ enum Bench {
         }
         guard woke else { input.suspend(); return ["woke": false] }
         let wakeAt = Double(i) / 16_000
-        let heard = try input.prepareDictation(replayWake: true)
+        let share = input.lastSpeechShare
+        var heard = try input.prepareDictation(replayWake: true)
+        var wholeAt: Double?
+        if let early = heard, early.wholePending {
+            // Slice 8b: an early wake amid speech — the request is the whole phrase; feed on (real time) until it is checked.
+            final class Box: @unchecked Sendable { var done = false; var text: String? }
+            let box = Box()
+            let waiter = Task { @MainActor in box.text = await input.wholePhrase(); box.done = true }
+            while !box.done, i < samples.count {
+                feedChunk()
+                guard input.isChecking else { continue }
+                let dt = await clock.waitComputed()
+                var extra = Int(dt * 16_000)
+                while extra > 0, i < samples.count { let before = i; feedChunk(); extra -= i - before }
+                await clock.go()
+                for _ in 0..<100_000 { if box.done { break }; await Task.yield() }
+            }
+            _ = await waiter.value
+            heard = WakeHeard(request: box.text ?? early.request, amidSpeech: true)
+            wholeAt = Double(i) / 16_000
+            input.suspend()
+            var row: [String: Any] = ["segments": [Any]()]
+            row["woke"] = true
+            row["wake_at"] = wakeAt
+            row["whole_at"] = wholeAt
+            row["wake_text"] = lastText
+            row["heard"] = heard?.request ?? NSNull()
+            row["amid_speech"] = true
+            row["early_whole"] = true
+            row["speech_share"] = share
+            row["replayed_s"] = 0
+            return row
+        }
         var dictated: [Float] = []
         try input.attach { dictated += $0 }
         let replayed = dictated.count
@@ -118,6 +151,7 @@ enum Bench {
         row["wake_text"] = lastText
         row["heard"] = heard?.request ?? NSNull()
         row["amid_speech"] = heard?.amidSpeech ?? false
+        row["speech_share"] = share
         row["replayed_s"] = Double(replayed) / 16_000
         return row
     }
@@ -149,14 +183,14 @@ enum Bench {
     /// `continuous` = the WakeAudioGate candidate: speech that arrived during a check is checked next (no waiting
     /// for a pause), back-to-back windows overlapping by the pre-roll. Same VoiceInput otherwise.
     @MainActor
-    static func whisperV1(_ samples: [Float], model: WakeModel, continuous: Bool = false) async throws -> [String: Any] {
+    static func whisperV1(_ samples: [Float], model: WakeModel, continuous: Bool = false, early: Bool = false) async throws -> [String: Any] {
         let clock = SimClock()
         let input = VoiceInput(recognize: { audio in
             let t = now()
             let text = try await model.recognize(audio)
             await clock.finished(after: now() - t)
             return text
-        }, gate: WakeAudioGate(continuous: continuous))
+        }, gate: WakeAudioGate(continuous: continuous, early: early))
         var lastText = "", woke = false
         input.onCheck = { text, _, _ in lastText = text }
         input.arm { woke = true }

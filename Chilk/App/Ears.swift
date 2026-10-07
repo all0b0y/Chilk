@@ -43,7 +43,9 @@ final class Ears {
         let model = self.model
         // Bench 3c (2026-10-05): speech that arrives while a phrase is being checked is checked next, so a TV or a
         // podcast that never pauses no longer leaves him deaf after the first phrase.
-        input = VoiceInput(recognize: { try await model.recognize($0) }, gate: WakeAudioGate(continuous: true))
+        // Slice 8b (decision 17): the early check is off in code until bench 3c passes; CHILK_EARLY_WAKE=1/0 overrides.
+        let early = ProcessInfo.processInfo.environment["CHILK_EARLY_WAKE"].map { $0 == "1" } ?? Ears.earlyWakeByDefault
+        input = VoiceInput(recognize: { try await model.recognize($0) }, gate: WakeAudioGate(continuous: true, early: early))
         // CHILK_WAKE_TEXT=1 (diagnosis with synthetic speech only): what Whisper heard goes to the debug log —
         // never to the journal, never by default.
         let showText = ProcessInfo.processInfo.environment["CHILK_WAKE_TEXT"] != nil
@@ -55,7 +57,7 @@ final class Ears {
             if showText { self.log("wake text «\(text)»") }
         }
         input.onError = { [weak self] error in self?.fail(error) }
-        note("ears \(enabled ? "on" : "off") at launch")
+        note("ears \(enabled ? "on" : "off") at launch, early check \(early ? "on" : "off")")
     }
 
     func start() { if enabled { prepare() } }
@@ -147,6 +149,15 @@ final class Ears {
     }
 
     func captureForDictation() async throws { try await startCapture() }
+
+    /// Slice 8b: the early check (decision 17) — on by default only once bench 3c passed its thresholds.
+    static let earlyWakeByDefault = false
+
+    /// When the microphone last heard a voice while dictating (decision 1: «э-э-э» keeps him listening).
+    var lastVoiceAt: TimeInterval { input.lastVoiceAt }
+
+    /// After an early wake amid other speech: the request from the whole phrase (decision 17).
+    func wholePhrase() async -> String? { await input.wholePhrase() }
 
     func attach(_ dictation: Dictation) throws {
         try input.attach { samples in

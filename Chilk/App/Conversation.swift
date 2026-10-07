@@ -38,6 +38,7 @@ final class Conversation {
     private var suppressFollowUps = false
     private var dictation: Dictation?
     private var detector = EndOfSpeech(start: 0)
+    private var lastVoiceSeen: TimeInterval = -.infinity
     private var window: TimeInterval?
     private var poll: Timer?
     private var earsTask: Task<Void, Never>?
@@ -247,6 +248,27 @@ final class Conversation {
         self.window = window
         heard = Latest()
         lastHeardVersion = 0
+        lastVoiceSeen = now
+        if let wake, wake.wholePending {
+            // Slice 8b (decision 17): out at once with «Слушаю…»; amid a TV the request is the whole phrase as Whisper
+            // heard it (the early clip may end mid-word, Apple would dictate the TV), as before the early check.
+            dictation = nil
+            sim.standOut = .out
+            sim.listening = true
+            sim.earsDroop = 0
+            sim.say(Lines.listening, duration: .infinity)
+            if !wake.request.isEmpty { sim.updateBubble(request("")) }
+            log("early wake amid speech: waiting for the whole phrase")
+            earsTask = Task {
+                let whole = await ears.wholePhrase()
+                guard generation == listeningGeneration, !Task.isCancelled, phase == .listening else { return }
+                if let whole { heardInCheck = whole }
+                if heardInCheck?.isEmpty != false { stopEars(); return leave(saying: Lines.didntHear, after: 3) }
+                startPoll()
+                finishListening()
+            }
+            return
+        }
         if let wake, wake.amidSpeech, !wake.request.isEmpty {
             // Bench 3c part 3: amid other speech Apple keeps dictating the TV after the request (1/22 requests right
             // at 15 dB). Whisper already heard the request: ask with it, without listening on.
@@ -301,7 +323,7 @@ final class Conversation {
     /// A request Whisper already heard counts as speech: silence after it means he can answer.
     private func freshDetector() -> EndOfSpeech {
         var d = EndOfSpeech(start: now)
-        if let window { d.nothingHeardAfter = window; d.maxDuration = window + 25 }
+        if let window { d.nothingHeardAfter = window; d.maxDuration = window + 45 }
         if heardInCheck?.isEmpty == false { d.heard(request(""), isFinal: false, at: now) }
         return d
     }
@@ -325,7 +347,17 @@ final class Conversation {
                 }
             }
             sim.hearing = Double(heard.currentLevel)
+            // Slice 8b (decision 1): «э-э-э» — a voice without new words — makes him wait longer.
+            if ears.lastVoiceAt > lastVoiceSeen {
+                lastVoiceSeen = ears.lastVoiceAt
+                detector.voice(at: lastVoiceSeen)
+            }
             if phase == .waiting, let window { sim.earsDroop = (now - detector.started) / window }
+            else if phase == .listening, let waited = detector.waited(at: now) {
+                // While he waits for the end of the phrase his ears slowly drop (after the first half second).
+                let pause = detector.pause
+                sim.earsDroop = max(0, (waited * pause - 0.5) / (pause - 0.5))
+            }
             switch detector.verdict(at: now) {
             case .keepListening: break
             case .nothingHeard where window != nil: perform(.leaveQuietly)

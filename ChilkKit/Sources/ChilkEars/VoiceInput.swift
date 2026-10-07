@@ -7,10 +7,15 @@ public struct WakeHeard: Sendable, Equatable {
     /// Whisper's text after the name; empty = he was only called.
     public let request: String
     /// Someone else was talking around the call (a TV, a podcast): a follow-up window would hear them too.
+    /// Slice 8b (decision 2): a voice in more than half of the 10 s before the call.
     public let amidSpeech: Bool
-    public init(request: String, amidSpeech: Bool) {
+    /// Slice 8b (decision 17): an early wake amid other speech — the request comes from the whole phrase
+    /// (`VoiceInput.wholePhrase()`), not from the early clip and not from Apple's dictation.
+    public let wholePending: Bool
+    public init(request: String, amidSpeech: Bool, wholePending: Bool = false) {
         self.request = request
         self.amidSpeech = amidSpeech
+        self.wholePending = wholePending
     }
 }
 
@@ -19,10 +24,15 @@ public struct WakeHeard: Sendable, Equatable {
 @MainActor
 public final class VoiceInput {
     public typealias Recognize = @Sendable ([Float]) async throws -> String
-    public enum Mode: Sendable { case suspended, wake, preparing, dictating }
+    public enum Mode: Sendable { case suspended, wake, preparing, dictating, wholePhrase }
     public enum InputError: Error { case bufferOverrun }
     public private(set) var mode: Mode = .suspended
-    public var isChecking: Bool { mode == .wake && gate.isChecking }
+    /// Bench only: the voice share before the last checked clip.
+    public var lastSpeechShare: Double { gate.lastClipSpeechShare }
+    public var isChecking: Bool { (mode == .wake || mode == .wholePhrase) && gate.isChecking }
+    /// When the microphone last heard a voice while dictating (systemUptime of the packet): «э-э-э» without words
+    /// keeps him listening longer (slice 8b, decision 1).
+    public private(set) var lastVoiceAt: TimeInterval = -.infinity
     public var onError: (Error) -> Void = { _ in }
     /// Debug harness only. The app never logs the transcript of ambient speech.
     public var onCheck: (_ text: String, _ hit: Bool, _ seconds: Double) -> Void = { _, _, _ in }
@@ -39,7 +49,8 @@ public final class VoiceInput {
     private var dictationCutoff: TimeInterval?
     private var frame: [Float] = []
     private var heardInCheck: WakeHeard?
-    private var lastAmbientAt: TimeInterval = -.infinity
+    private var whole: CheckedContinuation<String?, Never>?
+    private var wholeResult: String??
     private let pendingLimit = 16_000 * 12
 
     public init(recognize: @escaping Recognize, gate: WakeAudioGate = WakeAudioGate()) {
@@ -65,7 +76,9 @@ public final class VoiceInput {
         overrun = false
         dictationCutoff = nil
         heardInCheck = nil
-        lastAmbientAt = -.infinity
+        lastVoiceAt = -.infinity
+        resolveWhole(nil)
+        wholeResult = nil
         gate.reset()
         vad.reset()
     }
@@ -76,6 +89,14 @@ public final class VoiceInput {
     @discardableResult
     public func prepareDictation(replayWake: Bool, at: TimeInterval = ProcessInfo.processInfo.systemUptime) throws -> WakeHeard? {
         let heard = replayWake ? heardInCheck : nil
+        if let heard, heard.wholePending {
+            // Keep collecting the phrase into the gate; its whole check gives the request (`wholePhrase()`).
+            heardInCheck = nil
+            wholeResult = nil
+            gate.collectWholePhrase()
+            mode = .wholePhrase
+            return heard
+        }
         let audio = !replayWake ? [] : heard != nil ? gate.replayAfterClip() : gate.replay()
         guard let audio else { throw InputError.bufferOverrun }
         generation += 1             // invalidates any wake check still in flight
@@ -88,6 +109,18 @@ public final class VoiceInput {
         sink = nil
         heardInCheck = nil
         return heard
+    }
+
+    /// After an early wake amid speech: the request from the whole phrase (Whisper's text after the name), or nil
+    /// when the whole phrase did not carry the name (then the early clip's request stands).
+    public func wholePhrase() async -> String? {
+        if let done = wholeResult { wholeResult = nil; return done }
+        guard mode == .wholePhrase else { return nil }
+        return await withCheckedContinuation { whole = $0 }
+    }
+
+    private func resolveWhole(_ text: String?) {
+        if let w = whole { whole = nil; w.resume(returning: text) } else if mode == .wholePhrase { wholeResult = .some(text) }
     }
 
     public func attach(_ feed: @escaping ([Float]) -> Void) throws {
@@ -111,11 +144,16 @@ public final class VoiceInput {
         }
         switch mode {
         case .suspended: return
-        case .dictating: sink?(accepted)
+        case .dictating:
+            sink?(accepted)
+            // Voice activity only (decision 1): a 20 ms frame of the packet is enough, no words are kept.
+            if accepted.count >= 320, speech ?? vad.isSpeech(Array(accepted.suffix(320))) {
+                lastVoiceAt = ProcessInfo.processInfo.systemUptime    // the conversation's clock (packets arrive live)
+            }
         case .preparing:
             if pending.count + accepted.count <= pendingLimit { pending += accepted }
             else { pending.removeAll(); overrun = true }
-        case .wake:
+        case .wake, .wholePhrase:
             frame += accepted
             var consumed = 0
             while frame.count - consumed >= 320 {
@@ -137,17 +175,22 @@ public final class VoiceInput {
                 // drop quiet opening qualifiers («Короче, Чилк…»), creating false direct addresses.
                 let padding = Array(repeating: Float(0), count: 8_000)
                 let text = try await recognize(clip + padding)
-                guard let self, self.generation == id, self.mode == .wake, !Task.isCancelled else { return }
+                guard let self, self.generation == id, self.mode == .wake || self.mode == .wholePhrase,
+                      !Task.isCancelled else { return }
                 let request = WakePhrase.request(in: text)
                 let hit = request != nil
                 let end = ProcessInfo.processInfo.systemUptime
                 self.onCheck(text, hit, end - start)
+                if self.mode == .wholePhrase {
+                    self.resolveWhole(request)
+                    return
+                }
                 if let request {
-                    let amid = self.gate.lastClipContinuedSpeech || end - self.lastAmbientAt < 10
-                    self.heardInCheck = WakeHeard(request: request, amidSpeech: amid)
+                    let amid = self.gate.lastClipSpeechShare > 0.5
+                    self.heardInCheck = WakeHeard(request: request, amidSpeech: amid,
+                                                  wholePending: amid && self.gate.lastClipWasEarly)
                     self.onWake()
                 } else {
-                    if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.lastAmbientAt = end }
                     self.gate.reject()
                 }
             } catch {

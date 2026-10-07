@@ -80,4 +80,43 @@ struct WakeAudioGateTests {
         #expect(gate.replayAfterClip() == [7, 7])
         #expect(gate.replay()?.prefix(2) == [2, 2])                                    // the full replay still exists
     }
+
+    /// Slice 8b (decision 2): the share of voice in the 10 s before the checked clip.
+    @Test func theSpeechShareBeforeTheClipIsMeasured() {
+        var gate = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.3, maxPhrase: 1, capacity: 12, continuous: true)
+        _ = feed(&gate, Array(repeating: 1, count: 80), speech: true)                // 8 s of a TV (checks in between)
+        while gate.isChecking { gate.reject(); _ = feed(&gate, [0], speech: false) }
+        _ = feed(&gate, Array(repeating: 0, count: 5), speech: false)
+        _ = feed(&gate, Array(repeating: 2, count: 10), speech: true)
+        #expect(gate.isChecking && gate.lastClipSpeechShare > 0.5)
+        var quiet = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.3, maxPhrase: 5, capacity: 12)
+        _ = feed(&quiet, Array(repeating: 1, count: 10), speech: true)               // a few words
+        _ = feed(&quiet, Array(repeating: 0, count: 3), speech: false)
+        quiet.reject()
+        _ = feed(&quiet, Array(repeating: 0, count: 20), speech: false)
+        _ = feed(&quiet, Array(repeating: 2, count: 10), speech: true)
+        _ = feed(&quiet, Array(repeating: 0, count: 3), speech: false)
+        #expect(quiet.isChecking && quiet.lastClipSpeechShare < 0.2)
+    }
+
+    /// Slice 8b (decision 17): early = the first short pause or 1.5 s; a miss goes on to the whole phrase.
+    @Test func earlyChecksComeAtTheFirstShortPauseOrAfterOneAndAHalfSeconds() {
+        var gate = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12, early: true)
+        _ = feed(&gate, [0, 0], speech: false)
+        #expect(feed(&gate, [1, 1, 1, 1, 1], speech: true).isEmpty)
+        let clips = feed(&gate, [0, 0], speech: false)                              // 0.2 s pause
+        #expect(clips.count == 1 && gate.lastClipWasEarly)
+        gate.reject()
+        #expect(feed(&gate, [2, 2, 2], speech: true).isEmpty)
+        let whole = feed(&gate, [0, 0, 0, 0, 0, 0], speech: false)
+        #expect(whole.count == 1 && !gate.lastClipWasEarly)
+        #expect(whole[0].count == 2 + 5 + 2 + 3 + 6)                               // the whole phrase from its pre-roll
+        var long = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12, early: true)
+        _ = feed(&long, [0, 0], speech: false)
+        let early = feed(&long, Array(repeating: 1, count: 15), speech: true)       // 1.5 s without a pause
+        #expect(early.count == 1 && long.lastClipWasEarly)
+        var off = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12)
+        _ = feed(&off, [0, 0], speech: false)
+        #expect(feed(&off, Array(repeating: 1, count: 15), speech: true).isEmpty)  // off by default
+    }
 }
