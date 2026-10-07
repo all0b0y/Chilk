@@ -13,6 +13,11 @@ public final class QueueEventStore: EKEventStore {
         queue.async { completion((0..<n).map { _ in MadeUpReminder.make() }) }
         return NSObject()
     }
+
+    /// The access prompt answered «allowed» on the same queue — no system prompt, no TCC.
+    public override func requestFullAccessToReminders(completion: @escaping EKEventStoreRequestAccessCompletionHandler) {
+        queue.async { completion(true, nil) }
+    }
 }
 
 /// An `EKReminder` allocated without EventKit's initialiser (no store, no account).

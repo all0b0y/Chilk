@@ -17,7 +17,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phrases: PhraseBatches?
     private var tray: Tray?
     private var game: GameController?
+    /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
     private var crashTimer: Timer?
+    private var crashWaits = 0
     private var greeting: FirstMeeting?
     private var hide: HideController?
     private var ambience: AmbienceController?
@@ -296,20 +298,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
-        // Slice 8a (decision 15): «Я упал в ЧЧ:ММ — уже снова тут» after a real crash; then this run's marker.
-        if let crashed = CrashWatch.launch() {
-            let line = Lines.crashed(at: crashed)
-            balance.log("crash notice: the last run crashed at \(crashed)")
-            var tries = 0
-            crashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self, weak tray, weak hide, weak edge] _ in
-                MainActor.assumeIsolated {
-                    tries += 1
-                    guard let self, let edge else { return }
-                    if hide?.isHidden == true { self.balance?.log("crash notice: hidden — journal only"); self.crashTimer?.invalidate(); return }
-                    guard tries >= 3, tray?.isFree() == true || tries > 30 else { return }
-                    self.crashTimer?.invalidate()
-                    edge.sim.say(line, duration: 5)
-                    self.balance?.log("crash notice said")
+        // Slice 8a (decision 15): «Я упал в ЧЧ:ММ — уже снова тут» after a real crash — once, when he is free.
+        let left = CrashWatch.launch()
+        if !left.isEmpty {
+            if let crashed = CrashWatch.check(left, final: false) {
+                tellCrash(crashed)
+            } else {
+                Timer.scheduledTimer(withTimeInterval: 15, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated {
+                        if let crashed = CrashWatch.check(left, final: true) { self?.tellCrash(crashed) }
+                    }
                 }
             }
         }
@@ -369,6 +367,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             chat.runDemo(raw.components(separatedBy: "||"),
                          snapshot: env["CHILK_DEMO_CHAT_SNAPSHOT"].map { URL(fileURLWithPath: $0) })
         }
+    }
+
+    private func tellCrash(_ crashed: Date) {
+        guard let when = CrashNotice.when(crashed, now: Date()) else {
+            balance?.log("crash notice: the last run crashed at \(crashed) — too long ago to say")
+            return
+        }
+        let line = Lines.crashed(when)
+        balance?.log("crash notice: the last run crashed at \(crashed)")
+        crashWaits = 0
+        crashTimer?.invalidate()
+        crashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.crashTick(line) }
+        }
+    }
+
+    private func crashTick(_ line: String) {
+        crashWaits += 1
+        if hide?.isHidden == true {
+            balance?.log("crash notice: hidden — journal only")
+        } else if crashWaits < 3 || tray?.isFree() != true {
+            guard crashWaits > 300 else { return }               // 10 min without a free moment: journal only
+            balance?.log("crash notice: never free — journal only")
+        } else if let edge {
+            edge.sim.say(line, duration: 5)
+            balance?.log("crash notice said")
+        }
+        crashTimer?.invalidate()
+        crashTimer = nil
     }
 
     func applicationWillTerminate(_ notification: Notification) {

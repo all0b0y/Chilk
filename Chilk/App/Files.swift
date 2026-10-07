@@ -82,8 +82,7 @@ final class Files {
     /// «Можно я загляну в „Документы/Работа“? Ищу там договор» — «Да» shares the folder for reading at once.
     private func request(_ call: CodexToolCall) async -> CodexToolResult {
         guard case .requestFolder(let path, let reason)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
-        else { return .failure("Invalid arguments: path is a full folder path, absolute or starting with ~/, without . or .. "
-                                + "(see locations in chilk_list_folders); reason is 1–120 characters") }
+        else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         guard let store, let askUser else { return .failure("Chilk cannot ask right now") }
         let home = self.home
         let outcome = await requests.run(path: path, grants: grants,

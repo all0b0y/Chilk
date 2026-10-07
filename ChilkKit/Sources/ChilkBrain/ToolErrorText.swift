@@ -14,14 +14,14 @@ extension ChilkToolCatalog {
         }
         if let missing = names.first(where: { fields[$0] == nil }) { return "invalid_arguments: \(missing) — missing" }
         for key in names {
-            if let schema = props[key], let value = fields[key], let problem = problem(key, value, schema) {
+            if let schema = props[key], let value = fields[key], let problem = problem(name, key, value, schema) {
                 return "invalid_arguments: \(key) — \(problem)"
             }
         }
         return "invalid_arguments: a value is malformed or out of range"
     }
 
-    private static func problem(_ key: String, _ value: JSON, _ schema: JSON) -> String? {
+    private static func problem(_ tool: String, _ key: String, _ value: JSON, _ schema: JSON) -> String? {
         let type = schema["type"]?.string
         if case .array(let allowed)? = schema["enum"], !allowed.contains(value) {
             return "must be one of " + allowed.map(describe).joined(separator: ", ")
@@ -36,8 +36,14 @@ extension ChilkToolCatalog {
             if text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
                 return "must be one line without control characters"
             }
-            if key == "path" { return "a path inside the folder: relative, no leading / or ~, no . or .. parts" }
-            if text.count > 80 { return "too long (keep it under 80 characters)" }
+            if case .number(let lo)? = schema["minLength"], Double(text.count) < lo { return "too short (at least \(clean(lo)) characters)" }
+            if case .number(let hi)? = schema["maxLength"], Double(text.count) > hi { return "too long (at most \(clean(hi)) characters)" }
+            if key == "path", tool == "chilk_request_folder", !validFolderPath(text) {
+                return "a full folder path: absolute or starting with ~/, without . or .. parts"
+            }
+            if key == "path", tool != "chilk_request_folder", !validRelativePath(text) {
+                return "a path inside the folder: relative, no leading / or ~, no . or .. parts"
+            }
             return nil
         case "integer", "number":
             guard case .number(let n) = value else { return "must be a number" }

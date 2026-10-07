@@ -38,7 +38,7 @@ public struct ChilkReminderExecutor: Sendable {
             switch try ChilkToolCatalog.parse(name: name, arguments: arguments) {
             case .reminder(let title, let at):
                 guard at > now().addingTimeInterval(30) else {
-                    return .failure("That time has already passed: ask the user for a future time")
+                    return .failure("time_passed: that time has already passed; ask the user for a future time")
                 }
                 return .ok(Self.describe(try await store.add(title: title, due: at)))
             case .reminders:
@@ -48,13 +48,13 @@ public struct ChilkReminderExecutor: Sendable {
             default: return .failure("Unsupported reminders action")
             }
         } catch ReminderAccessError.denied {
-            return .failure("No access to Reminders. The user can allow it in System Settings → Privacy & Security → Reminders → Чилк")
+            return .failure("no_access: no access to Reminders. The user can allow it in System Settings → Privacy & Security → Reminders → Чилк")
         } catch is CancellationError {
-            return .failure("Cancelled")
+            return .failure("cancelled")
         } catch is ChilkToolCatalog.ToolError {
             return .failure(ChilkToolCatalog.explain(name: name, arguments: arguments))
         } catch {
-            return .failure("Could not reach Apple Reminders; nothing was created")
+            return .failure("reminders_unreachable: could not reach Apple Reminders; nothing was created")
         }
     }
 

@@ -114,7 +114,7 @@ final class Actions {
 
     private func emote(_ call: CodexToolCall) -> CodexToolResult {
         guard case .emote(let e, let strong)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
-        else { return .failure("Invalid arguments: {emotion: cheer|laugh|clown|offended|dizzy|sad, strong: true|false}") }
+        else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         switch emotes.request(e, turn: call.turnId, now: Date(), stageFree: canEmote()) {
         case .play:
             if e == .clown {
@@ -134,7 +134,7 @@ final class Actions {
 
     private func remember(_ call: CodexToolCall) -> CodexToolResult {
         guard case .remember(let fact, let asked)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
-        else { return .failure("Invalid arguments: {fact: one short fact in Russian, ≤ 200 characters, asked: true|false}") }
+        else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         guard let memory else { return .failure("Memory unavailable") }
         switch memory.remember(fact, selfNoted: !asked) {
         case .added: return .ok(["added": true, "facts": .number(Double(memory.book.facts.count))])

@@ -30,3 +30,22 @@ private actor NoReminders: ReminderStore {
     func add(title: String, due: Date) async throws -> ReminderInfo { ReminderInfo(title: title, due: due) }
     func open() async throws -> [ReminderInfo] { [] }
 }
+
+/// Review 8a: lengths come from the schema, and a valid path is not reported.
+struct ToolErrorTextLimitsTests {
+    @Test func aLongButValidFieldIsNotTheCulprit() {
+        let text = ChilkToolCatalog.explain(name: "chilk_schedule", arguments: [
+            "at": "2026-10-09T10:00:00", "title": "Созвон", "message": .string(String(repeating: "а", count: 150))])
+        #expect(text.hasPrefix("invalid_arguments: at"))
+        let long = ChilkToolCatalog.explain(name: "chilk_reminder", arguments: [
+            "at": "2026-10-09T10:00:00+03:00", "title": .string(String(repeating: "а", count: 130))])
+        #expect(long == "invalid_arguments: title — too long (at most 120 characters)")
+    }
+
+    @Test func folderPathsAreCheckedLikeTheTool() {
+        #expect(ChilkToolCatalog.explain(name: "chilk_request_folder", arguments: ["path": "Документы/Работа", "reason": "договор"])
+                == "invalid_arguments: path — a full folder path: absolute or starting with ~/, without . or .. parts")
+        #expect(!ChilkToolCatalog.explain(name: "chilk_request_folder", arguments: ["path": "~/Документы", "reason": ""])
+                .contains("path"))
+    }
+}

@@ -53,11 +53,15 @@ public final class EventKitReminders: ReminderStore {
         switch EKEventStore.authorizationStatus(for: .reminder) {
         case .fullAccess: return
         case .notDetermined:
-            let granted: Bool = await withCheckedContinuation { continuation in
-                store.requestFullAccessToReminders { @Sendable granted, _ in continuation.resume(returning: granted) }
-            }
-            guard granted else { throw ReminderAccessError.denied }
+            guard await requestAccess() else { throw ReminderAccessError.denied }
         default: throw ReminderAccessError.denied
+        }
+    }
+
+    /// The first-time access prompt; its answer arrives on EventKit's queue too (`@Sendable`, as in `fetch`).
+    func requestAccess() async -> Bool {
+        await withCheckedContinuation { continuation in
+            store.requestFullAccessToReminders { @Sendable granted, _ in continuation.resume(returning: granted) }
         }
     }
 

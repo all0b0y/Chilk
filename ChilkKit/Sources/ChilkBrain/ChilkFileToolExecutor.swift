@@ -54,9 +54,9 @@ public actor ChilkFileToolExecutor {
             default: return .failure("Unsupported file action")
             }
         } catch let error as FileError { return .failure(error.message) }
-        catch is CancellationError { return .failure("Cancelled") }
+        catch is CancellationError { return .failure("cancelled") }
         catch is ChilkToolCatalog.ToolError { return .failure(ChilkToolCatalog.explain(name: name, arguments: arguments)) }
-        catch { return .failure("The file operation failed") }
+        catch { return .failure("file_failed: the file operation failed") }
     }
 
     enum FileError: Error {

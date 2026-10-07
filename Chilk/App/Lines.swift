@@ -1,3 +1,4 @@
+import ChilkCore
 import Foundation
 
 /// Hand-written fallback lines (slice 3 adds Codex-generated batches on top).
@@ -22,7 +23,10 @@ enum Lines {
     ]
 
     /// Slice 8a (decision 15): after a real crash, once.
-    static func crashed(at date: Date) -> String {
-        String(localized: "Я упал в \(date.formatted(date: .omitted, time: .shortened)) — уже снова тут")
+    static func crashed(_ when: CrashNotice.When) -> String {
+        switch when {
+        case .today(let time): String(localized: "Я упал в \(time) — уже снова тут")
+        case .yesterday(let time): String(localized: "Я вчера упал в \(time) — уже снова тут")
+        }
     }
 }
