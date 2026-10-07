@@ -66,6 +66,12 @@ final class CourtController: NSObject, NSWindowDelegate {
 
     private enum Bubble { case none, question, request([Reaction]), goOn }
     private var bubble = Bubble.none
+    /// A conversation took his bubble: this one comes back once the talk is over (review 7b).
+    private var stashed: Bubble?
+    private var dockTimer: Timer?
+    private var swingTimer: Timer?
+    /// He was hidden (6d) when the game opened; «спрячься» during it ends the game.
+    private var hiddenAtOpen = false
     /// Put away for a call or full screen; `phase`: where the game was.
     private var away: (call: Bool, phase: CourtModel.Phase)?
     private var afterClose: (() -> Void)?
@@ -96,7 +102,14 @@ final class CourtController: NSObject, NSWindowDelegate {
         lastTouch = Date()
         away = nil
         bubble = .none
+        stashed = nil
+        hiddenAtOpen = edge.sim.hidden
         model.swing = 1
+        // No stale scoreboard from the last game while the first round gets ready.
+        model.match = restoring ?? GameMatch(length: length ?? GameMatch.defaultLength)
+        model.phase = length == nil && restoring == nil ? .setup : .result
+        model.headline = GameLines.name(.basketball)
+        model.status = ""
         let p = makePanel()
         panel = p
         placeHoop(p)
@@ -131,17 +144,21 @@ final class CourtController: NSObject, NSWindowDelegate {
         cancelTimers()
         watchTimer?.invalidate()
         watchTimer = nil
+        dockTimer?.invalidate()
+        swingTimer?.invalidate()
         sky.stop()
         panel = nil
         let then = afterClose
         afterClose = nil
         if holdsChilk {
             holdsChilk = false
-            if case .none = bubble {} else { edge.sim.clearBubble() }
+            let talking = conversationActive()             // a conversation has him: it places him and its bubble
+            if !talking, case .none = bubble {} else if !talking { edge.sim.clearBubble() }
             bubble = .none
+            stashed = nil
             if edge.sim.act == .shoot { edge.sim.stopAct() }
-            if edge.sim.standOut == .out { edge.sim.standOut = .docked }
-            if let then { then() } else { balance.resume() }
+            if !talking, edge.sim.standOut == .out { edge.sim.standOut = .docked }
+            if let then { then() } else if !talking { balance.resume() }
             log("court closed — Chilk is back at his place")
         }
         onClosed()
@@ -230,12 +247,15 @@ final class CourtController: NSObject, NSWindowDelegate {
 
     private func swingNet() {
         let start = Date()
-        func tick() {
-            let u = min(1, Date().timeIntervalSince(start) / 0.9)
-            model.swing = u
-            if u < 1 { after(1.0 / 30) { tick() } }
+        swingTimer?.invalidate()
+        swingTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let u = min(1, Date().timeIntervalSince(start) / 0.9)
+                self.model.swing = u
+                if u >= 1 { self.swingTimer?.invalidate() }
+            }
         }
-        tick()
     }
 
     private func resolve(_ round: ShotRound) {
@@ -297,11 +317,20 @@ final class CourtController: NSObject, NSWindowDelegate {
     /// a request (between throws) and stage 3 / «измотан» (the match is saved).
     private func watch() {
         guard panel != nil else { return }
+        if edge.sim.hidden, !hiddenAtOpen {               // «спрячься» during the game: the game ends, he hides
+            log("court: hidden — the game ends")
+            return close()
+        }
         let call = inCall(), full = fullScreen()
         if let a = away {
             lastTouch = Date()
+            // Put away for a long film or call: stage 3 / «измотан» still pause the match (stage 1–2 wait).
+            if case .pause = GameBreakPolicy.decide(stage: balance.gameRequest?.stage, need: balance.gameRequest?.need,
+                                                    slumped: balance.slumpedNow, silent: balance.mode == .silent,
+                                                    betweenGames: false, waiting: 0) {
+                return pauseForBreak()
+            }
             if !call && !full && !(a.call && edge.sim.isTalking) { back(fromCall: a.call) }
-            _ = a
             return
         }
         if call || full {
@@ -309,11 +338,25 @@ final class CourtController: NSObject, NSWindowDelegate {
             return
         }
         if conversationActive() {
-            if case .question = bubble { bubble = .none }   // the conversation's bubble replaced it; asked again after
+            lastTouch = Date()                             // talking is not idling
+            if case .none = bubble {} else {               // the conversation's bubble replaced ours: it comes back after
+                stashed = bubble
+                bubble = .none
+            }
+            return
+        }
+        if let s = stashed, !edge.sim.isTalking {          // the talk is over: our bubble again
+            stashed = nil
+            edge.sim.standOut = .out
+            switch s {
+            case .goOn: askToGoOn()
+            case .request where model.phase == .matchOver: _ = checkBreak(betweenThrows: true)
+            default: nextRound()
+            }
             return
         }
         if model.phase == .asking, case .none = bubble, !edge.sim.isTalking {
-            nextRound()                                    // the talk is over: «Попаду?» again
+            nextRound()                                    // «Попаду?» once he is free to ask
             return
         }
         if [.setup, .asking, .matchOver, .request].contains(model.phase) || isAskingToGoOn {
@@ -388,7 +431,10 @@ final class CourtController: NSObject, NSWindowDelegate {
             let batch = Lines.batch?.shush ?? []
             let pool = CourtLines.shush + batch
             edge.sim.say(pool[rng.index(pool.count)], duration: 2.5)
-            after(2.5) { [weak self] in self?.edge.sim.standOut = .docked }
+            dockTimer?.invalidate()
+            dockTimer = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.away != nil { self?.edge.sim.standOut = .docked } }
+            }
         } else {
             edge.sim.clearBubble()
             edge.sim.standOut = .docked
@@ -402,19 +448,31 @@ final class CourtController: NSObject, NSWindowDelegate {
     private func back(fromCall: Bool) {
         guard let a = away else { return }
         away = nil
+        dockTimer?.invalidate()
         panel?.orderFrontRegardless()
         edge.sim.standOut = .out
-        let m = model.match
-        if fromCall, a.phase == .asking, !m.isOver {
-            bubble = .goOn
-            edge.sim.say(CourtLines.goOnAfterCall(you: m.you, chilk: m.chilk), duration: 3600,
-                         buttons: [CourtLines.goOn, GameLines.enough])
+        if fromCall, a.phase == .asking, !model.match.isOver {
             model.phase = .asking
+            askToGoOn()
             log("court: the call is over — «Ну что, продолжаем?»")
         } else {
             log("court: back")
             if a.phase == .asking { nextRound() } else { setPhase(a.phase) }
         }
+    }
+
+    private func askToGoOn() {
+        let m = model.match
+        bubble = .goOn
+        edge.sim.say(CourtLines.goOnAfterCall(you: m.you, chilk: m.chilk), duration: 3600,
+                     buttons: [CourtLines.goOn, GameLines.enough])
+    }
+
+    /// «Давай до пяти» while the court is open on the length choice or after a match: that match starts.
+    func apply(length: Int) {
+        guard model.phase == .setup || model.phase == .matchOver else { return }
+        touch()
+        begin(length: length)
     }
 
     private func comeBack() {
@@ -445,6 +503,7 @@ final class CourtController: NSObject, NSWindowDelegate {
         p.hasShadow = false
         p.level = .floating
         p.isReleasedWhenClosed = false
+        p.hidesOnDeactivate = false                        // the match goes on while the user works in another app
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.delegate = self
         p.contentView = NSHostingView(rootView: HoopPanelView(model: model))
@@ -559,12 +618,12 @@ struct HoopPanelView: View {
             }
             HStack {
                 Button(GameLines.enough) { model.close() }.keyboardShortcut(.cancelAction)
-                Button(GameLines.start) { model.start(model.length) }.keyboardShortcut(.defaultAction)
+                Button(GameLines.start) { model.start(model.length) }
             }.controlSize(.small)
         case .matchOver:
             HStack {
                 Button(GameLines.enough) { model.close() }.keyboardShortcut(.cancelAction)
-                Button(GameLines.again) { model.again() }.keyboardShortcut(.defaultAction)
+                Button(GameLines.again) { model.again() }
             }.controlSize(.small)
         default:
             Button(GameLines.enough) { model.close() }.keyboardShortcut(.cancelAction).controlSize(.small)
@@ -637,6 +696,7 @@ final class CourtSky {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.contentView = view

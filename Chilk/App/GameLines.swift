@@ -82,6 +82,7 @@ enum CourtLines {
     static var highFive: String { String(localized: "Пять!") }
     static var putAway: String { String(localized: "Ладно, мяч убрал") }
     static var goOn: String { String(localized: "Продолжить") }
+    static var notDuringCall: String { String(localized: "У тебя созвон — сыграем после") }
 
     static func score(you: Int, chilk: Int, shot: Int, of length: Int) -> String {
         String(localized: "Ты \(you) : \(chilk) Чилк · бросок \(shot) из \(length)")

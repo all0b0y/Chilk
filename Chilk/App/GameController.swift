@@ -101,7 +101,15 @@ final class GameController: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             return nil
         }
-        if kind == .basketball, court.isOpen { return nil }
+        if kind == .basketball, court.isOpen {
+            if let length { court.apply(length: length) }
+            return nil
+        }
+        if kind == .basketball, court.inCall() {          // a call already on: no «тсс» for a game not yet begun
+            waitStarted = nil
+            log("game basketball: not during a call")
+            return CourtLines.notDuringCall
+        }
         if isOpen {                                        // another game is on: it ends, he comes back, then this one
             log("game \(kind.rawValue): the other game closes first")
             if window != nil { close() } else { court.close() }
@@ -607,10 +615,10 @@ extension GameController {
         var shot = 0
         var drag = ProcessInfo.processInfo.environment["CHILK_DEMO_COURT_DRAG"]?.split(separator: ",").compactMap { Double($0) }
         if drag?.count != 2 { drag = nil }
-        func snap(_ name: String) {
-            guard let dir = snapshots else { return }
+        let snap: (String) -> Void = { [weak self] name in
+            guard let self, let dir = snapshots else { return }
             shot += 1
-            court.snapshot(to: URL(fileURLWithPath: dir), name: String(format: "court-%02d-%@", shot, name))
+            self.court.snapshot(to: URL(fileURLWithPath: dir), name: String(format: "court-%02d-%@", shot, name))
         }
         court.onPhase = { [weak self] phase in
             guard let self else { return }
@@ -632,9 +640,12 @@ extension GameController {
             }
         }
         var seen: (kind: String, since: Date)?
-        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
+        var opened = false
+        _ = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.court.isOpen else { return }
+                guard let self else { return }
+                if self.court.isOpen { opened = true } else if opened { seen = nil }
+                guard self.court.isOpen else { return }
                 guard let kind = self.court.waitingBubble else { seen = nil; return }
                 if seen?.kind != kind { seen = (kind, Date()); return }
                 guard Date().timeIntervalSince(seen!.since) >= 1.2 else { return }
