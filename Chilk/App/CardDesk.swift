@@ -355,7 +355,7 @@ final class CardEditPanel {
         let model = CardEditModel(card)
         let view = CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
                                 cancel: { [weak self] in self?.finish(nil) })
-        let size = NSSize(width: 360, height: model.hasText ? 250 : 190)
+        let size = NSSize(width: 360, height: model.hasText ? 250 : (model.hasDate || model.hasMinutes ? 190 : 150))
         let screen = NSScreen.screens.first { $0.frame.intersects(chilk) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? chilk
         var x = onLeftEdge ? chilk.maxX - 30 : chilk.minX - size.width + 30
         x = min(max(x, screen.minX + 12), screen.maxX - size.width - 12)
@@ -410,6 +410,9 @@ final class CardEditModel {
     var text: String
     let hasText: Bool
     let hasDate: Bool
+    /// Slice 8d: a Clock timer has minutes instead of a date (decision 5: «у таймера — минуты»).
+    var minutes: Int = 0
+    let hasMinutes: Bool
     /// The date the card started with: a rename of a reminder keeps its time unless the user moves it.
     private let startDate: Date?
 
@@ -424,7 +427,11 @@ final class CardEditModel {
             hasDate = d != nil; startDate = d
         case .reminderComplete(_, let t, let d), .reminderDelete(_, let t, let d):
             title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false; startDate = d
+        case .timer(let t, let seconds):
+            title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil
+            minutes = max(1, (seconds + 30) / 60)
         }
+        if case .timer = card.kind { hasMinutes = true } else { hasMinutes = false }
     }
 
     var dateTouched: Bool { startDate.map { abs($0.timeIntervalSince(date)) >= 30 } ?? false }
@@ -432,6 +439,7 @@ final class CardEditModel {
     var valid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (!hasDate || date > Date() || (isChange && !dateTouched))
+            && (!hasMinutes || (1...1439).contains(minutes))
     }
 
     private var isChange: Bool { if case .reminderChange = original.kind { true } else { false } }
@@ -445,6 +453,9 @@ final class CardEditModel {
         case .message: kind = .message(title: t, text: String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(240)), at: date)
         case .reminderChange(let id, let old, let oldDue, _, let due):
             kind = .reminderChange(id: id, oldTitle: old, oldDue: oldDue, title: t, due: hasDate && dateTouched ? date : due)
+        case .timer(_, let seconds):
+            // Untouched minutes keep the exact seconds («через 90 секунд» stays 90 s).
+            kind = .timer(title: t, seconds: minutes == max(1, (seconds + 30) / 60) ? seconds : minutes * 60)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)
@@ -467,6 +478,7 @@ struct CardEditView: View {
                            displayedComponents: [.date, .hourAndMinute])
                     .environment(\.locale, Locale(identifier: "ru_RU"))
             }
+            if model.hasMinutes { MinutesField(minutes: $model.minutes) }
             HStack {
                 Spacer()
                 Button(String(localized: "Отмена"), action: cancel).keyboardShortcut(.cancelAction)
@@ -476,6 +488,20 @@ struct CardEditView: View {
         .formStyle(.grouped)
         .padding(4)
         .tint(TrayView.peach)
+    }
+}
+
+/// «Минуты: [ 25 ] ±» — a Clock timer (1 min … 23 h 59 min).
+struct MinutesField: View {
+    @Binding var minutes: Int
+
+    var body: some View {
+        HStack {
+            Text(String(localized: "Минуты"))
+            Spacer()
+            TextField("", value: $minutes, format: .number).frame(width: 64).multilineTextAlignment(.trailing)
+            Stepper("", value: $minutes, in: 1...1439).labelsHidden()
+        }
     }
 }
 

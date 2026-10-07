@@ -47,7 +47,8 @@ extension Lines {
     static func abilityName(_ a: ChilkAbility) -> String {
         switch a {
         case .webSearch: String(localized: "Поиск в интернете")
-        case .timers: String(localized: "Таймеры и «скажи в 17:00»")
+        case .timers: String(localized: "«Скажи мне в 17:00»")
+        case .clock: String(localized: "Таймеры («Часы»)")
         case .reminders: String(localized: "Напоминания Apple")
         case .files: String(localized: "Файлы")
         case .obsidian: String(localized: "Obsidian")

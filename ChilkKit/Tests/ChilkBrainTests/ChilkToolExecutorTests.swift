@@ -21,7 +21,9 @@ struct ChilkToolExecutorTests {
             water += 1
             return ["credited": true]
         })
-        let timer = e.execute(name: "chilk_timer", arguments: ["seconds": 30, "title": "Чай"])
+        let at = ISO8601DateFormatter().string(from: fixedNow.addingTimeInterval(30))
+        let timer = e.execute(name: "chilk_schedule", arguments: ["at": .string(at), "title": "Чай", "message": "Чай готов"])
+        #expect(!e.execute(name: "chilk_timer", arguments: ["seconds": 30, "title": "Чай"]).success)   // 8d: Clock
         #expect(timer.success)
         let id = try #require(timer.value["id"]?.string)
         let list = e.execute(name: "chilk_timers", arguments: [:])
@@ -40,7 +42,7 @@ struct ChilkToolExecutorTests {
     }
 
     @Test func theRegisteredCatalogMatchesTheSupportedActions() {
-        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_mode", "chilk_eye_gym", "chilk_warmup", "chilk_breathe", "chilk_walk", "chilk_remember", "chilk_defer", "chilk_focus", "chilk_end_focus", "chilk_emote", "chilk_hide", "chilk_game"])
+        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_clock_open", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_mode", "chilk_eye_gym", "chilk_warmup", "chilk_breathe", "chilk_walk", "chilk_remember", "chilk_defer", "chilk_focus", "chilk_end_focus", "chilk_emote", "chilk_hide", "chilk_game"])
         #expect(ChilkToolCatalog.tools.allSatisfy { $0.inputSchema["additionalProperties"]?.bool == false })
     }
 

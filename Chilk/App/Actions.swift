@@ -164,7 +164,12 @@ final class Actions {
                             + "tell the user it is switched off there.")
         }
         let result: CodexToolResult
-        if ChilkReminderExecutor.proposes(call.name) || call.name == "chilk_schedule" {
+        if call.name == "chilk_clock_open" {
+            if let clock { clock.openClock() }
+            result = clock == nil ? .failure("clock_unavailable") : .ok([
+                "opened": "Clock",
+                "note": "Chilk cannot cancel, pause or resume Clock timers himself (macOS); the user does it in Clock."])
+        } else if ChilkReminderExecutor.proposes(call.name) || call.name == "chilk_schedule" || call.name == "chilk_timer" {
             result = await propose(call)                        // 8c: a card first; «Да» writes it
         } else if call.name == "chilk_remember" {
             result = remember(call)
@@ -189,6 +194,8 @@ final class Actions {
 
     /// Set by the app.
     weak var cards: CardDesk?
+    /// Slice 8d: Clock timers through the shortcut «Чилк».
+    var clock: ClockTimers?
 
     /// `chilk_reminder` / `chilk_schedule` / `chilk_reminder_change` → a card built from the values that would be
     /// written. Nothing is written here.
@@ -246,6 +253,8 @@ final class Actions {
             case .done: kind = .reminderComplete(id: id, title: found.title, due: found.due)
             case .delete: kind = .reminderDelete(id: id, title: found.title, due: found.due)
             }
+        case .timer(let seconds, let title):
+            kind = .timer(title: title.trimmingCharacters(in: .whitespacesAndNewlines), seconds: seconds)
         default:
             return .failure("Unsupported action")
         }
@@ -261,7 +270,11 @@ final class Actions {
         let started = Date()
         let format = { (d: Date) in card.whenText(d, now: started) }
         // Switched off in the tray after the card was proposed: nothing is written.
-        let ability: ChilkAbility = if case .message = card.kind { .timers } else { .reminders }
+        let ability: ChilkAbility = switch card.kind {
+        case .message: .timers
+        case .timer: .clock
+        default: .reminders
+        }
         guard switches().isOn(ability) else {
             return (false, String(localized: "Не сделал: это выключено в «Инструментах»"))
         }
@@ -294,12 +307,27 @@ final class Actions {
             tool = "card_reminder_delete"
             result = await reminders.delete(id: id)
             line = String(localized: "Готово: «\(title)» удалено")
+        case .timer(let title, let seconds):
+            tool = "card_clock_timer"
+            let length = ActionCard.duration(seconds)
+            switch await clock?.start(seconds: seconds) ?? .failed {
+            case .started:
+                result = .ok(["started": true])
+                line = String(localized: "Таймер «\(title)» — \(length). Прозвонят «Часы»")
+            case .notAdded:
+                result = .failure("shortcut_missing")
+                line = String(localized: "Не поставил: нет команды «Чилк». Добавь её в окне «Быстрых команд» и попроси ещё раз")
+            case .failed:
+                result = .failure("clock_failed")
+                line = String(localized: "Не получилось — «Часы» не ответили")
+            }
         }
         journal.write(ToolJournal.line(at: started, tool: tool,
                                        outcome: result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")),
                                        seconds: Date().timeIntervalSince(started)))
         balance?.log("card \(tool) success=\(result.success)")
         if result.success { return (true, line) }
+        if case .timer = card.kind { return (false, line) }
         let code = ToolJournal.code(of: result.value["error"]?.string ?? "")
         return (false, code == "no_access" ? String(localized: "Не получилось: нет доступа к «Напоминаниям» — разреши в Настройках")
                                            : String(localized: "Не получилось — ничего не изменилось"))

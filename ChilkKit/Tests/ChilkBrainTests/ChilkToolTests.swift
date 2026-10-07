@@ -58,6 +58,10 @@ struct ChilkToolTests {
 
     @Test func relativeTimersRequireAnExactIntegerAndNoExtraFields() throws {
         #expect(try ChilkToolCatalog.parse(name: "chilk_timer", arguments: ["seconds": 30, "title": "Чай"]) == .timer(seconds: 30, title: "Чай"))
+        #expect(try ChilkToolCatalog.parse(name: "chilk_clock_open", arguments: [:]) == .openClock)
+        #expect(throws: (any Error).self) {                              // Clock's timer: 23:59:59 at most
+            try ChilkToolCatalog.parse(name: "chilk_timer", arguments: ["seconds": 86400, "title": "Сутки"])
+        }
         #expect(throws: (any Error).self) {
             try ChilkToolCatalog.parse(name: "chilk_timer", arguments: ["seconds": .number(1.5), "title": "Чай"])
         }

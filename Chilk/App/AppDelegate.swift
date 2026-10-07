@@ -19,6 +19,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var game: GameController?
     /// Slice 8c: confirmation cards.
     private var cards: CardDesk?
+    /// Slice 8d: timers in Apple's Clock.
+    private var clock: ClockTimers?
     /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
     private var crashTimer: Timer?
     private var crashWaits = 0
@@ -272,6 +274,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cards.commit = { [weak actions] card in await actions?.commit(card) ?? (false, String(localized: "Не получилось — ничего не изменилось")) }
         cards.onChange = { [weak chat] in chat?.refreshCard() }
         cards.onResult = { [weak chat] id, line, _ in chat?.cardResult(id, line) }
+        // Slice 8d: Clock timers through the shortcut «Чилк» — offered once at launch of a new build.
+        let clock = ClockTimers()
+        clock.log = { [weak balance] in balance?.log($0) }
+        clock.stageFree = { [weak cards] in cards?.stageFree() ?? false }
+        clock.speak = { [weak edge] line in edge?.sim.say(line, duration: 9) }
+        actions.clock = clock
+        self.clock = clock
+        clock.checkAtLaunch()
         cards.onLeftConversation = { [weak conversation] in conversation?.cardLeft() }
         if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

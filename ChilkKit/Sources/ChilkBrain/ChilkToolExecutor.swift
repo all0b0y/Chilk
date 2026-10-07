@@ -55,11 +55,7 @@ public final class ChilkToolExecutor {
             case .game(let kind, let length): return game(kind, length)
             case .timers: return .ok(["timers": .array(entries.map(Self.describe))])
             case .cancel(let id): return .ok(["cancelled": .bool(try store.cancel(id: id))])
-            case .timer(let seconds, let title):
-                let start = now()
-                let entry = try store.schedule(title: title, message: title,
-                                               at: start.addingTimeInterval(Double(seconds)), now: start)
-                return .ok(Self.describe(entry))
+            case .timer, .openClock: return .failure("Clock timers are handled by the app")
             case .schedule(let at, let title, let message):
                 let entry = try store.schedule(title: title, message: message, at: at, now: now())
                 return .ok(Self.describe(entry))

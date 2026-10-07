@@ -54,6 +54,18 @@ struct ActionCardTests {
         }
     }
 
+    @Test func aClockTimerCardSaysTheLengthAndWhenItRings() {
+        let card = ActionCard(kind: .timer(title: "Чай", seconds: 300))
+        #expect(card.lines(now: now, calendar: cal) == ["⏱ Таймер: Чай", "5 мин — до 21:05", "«Часы»"])
+        #expect(card.editable && !card.expired(now: now.addingTimeInterval(86400)))
+        let late = ActionCard(kind: .timer(title: "Спать", seconds: 4 * 3600))
+        #expect(late.lines(now: now, calendar: cal)[1] == "4 ч — до 01:00 завтра")
+        #expect(ActionCard.duration(45) == "45 с")
+        #expect(ActionCard.duration(90) == "1 мин 30 с")
+        #expect(ActionCard.duration(5400) == "1 ч 30 мин")
+        #expect(ActionCard.duration(93600) == "1 д 2 ч")
+    }
+
     @Test func theResultLineHasNoGuessMarks() {
         let card = ActionCard(kind: .reminder(title: "Хлеб", due: at(8, 15)), guessedPart: true)
         #expect(card.lines(now: now, calendar: cal)[1].contains("день?"))

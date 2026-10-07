@@ -27,7 +27,10 @@ public enum ChilkAction: Equatable, Sendable {
     case status, water, timers
     case cancel(id: String)
     case schedule(at: Date, title: String, message: String)
+    /// Slice 8d (decision 9): a timer in Apple's Clock app — proposed on a card, started on «Да».
     case timer(seconds: Int, title: String)
+    /// Slice 8d: open Clock (cancel / pause / resume are not reachable for Chilk — the user's choice «A»).
+    case openClock
     /// Read-only files (decision 2026-10-05). `folder` is a shared folder's name; find also takes "all".
     case findFiles(folder: String, query: String, offset: Int)
     case readFile(folder: String, path: String)
@@ -66,12 +69,13 @@ public enum ChilkToolCatalog {
         return [
             tool("chilk_status", "Read Chilk balance aggregates, no apps/windows/private files.", [:]),
             tool("chilk_water", "Credit water ONLY when the user confirms they drank it. Do not credit a promise.", [:]),
-            tool("chilk_timer", "Create a local Chilk timer. App must run; overdue notices return on next launch.",
-                 ["seconds": ["type": "integer", "minimum": 1, "maximum": 31622400], "title": title]),
+            tool("chilk_timer", "Propose a countdown timer in Apple's Clock app («через 10 минут», «таймер на 5 минут»): Clock rings it even when Chilk is closed. Clock's timer has no name, Chilk says the title when it starts. Up to 23 h 59 min; a time of day or a longer wait is chilk_reminder. Nothing is started yet: the app shows a confirmation card and starts the timer only on «Да» (counted from «Да»). Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is set.",
+                 ["seconds": ["type": "integer", "minimum": 1, "maximum": 86399], "title": title]),
+            tool("chilk_clock_open", "Open Apple's Clock app on the user's request to cancel, pause, resume or look at a Clock timer: macOS lets Chilk only start timers, so the user does the rest in Clock. Say so in one short line.", [:]),
             tool("chilk_schedule", "Propose a short prepared message Chilk says at a time («скажи мне в 17:00…»). Not Apple Reminders; the app must run. ISO-8601 timestamp; without a timezone it is the user's local time. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is scheduled yet: the app shows the user a confirmation card built from these values and schedules it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["at": ["type": "string", "maxLength": 64], "title": title,
                   "message": ["type": "string", "minLength": 1, "maxLength": 240]]),
-            tool("chilk_timers", "List local Chilk timers with exact ids and deadlines; use before cancelling an ambiguous name.", [:]),
+            tool("chilk_timers", "List Chilk's own scheduled messages («скажи мне в 17:00») with exact ids and times; use before cancelling an ambiguous one. Clock timers are not listed (macOS does not let Chilk read them).", [:]),
             tool("chilk_list_folders", "List the folders the user shared with Chilk: name, kind (files or obsidian = Markdown only) and location. Files are read-only: Chilk never creates, edits, moves, renames or deletes anything.", [:]),
             tool("chilk_find_files", "Find filenames in a shared folder (its name from chilk_list_folders) or in \"all\" of them. Query is a literal substring, not a command. Results: folder + relative path; offset pages by 30.",
                  ["folder": folder,
@@ -82,7 +86,7 @@ public enum ChilkToolCatalog {
             tool("chilk_request_folder", "Ask the user for read-only access to a folder they named that is not shared yet. Chilk asks «Можно я загляну…?» with Да/Нет and waits up to 60 s. Path: absolute or ~/…, from the user's words; reason: what you are looking for, briefly, in Russian. Never the whole home folder, the disk root, hidden or system folders. A declined folder is not asked again until Chilk restarts.",
                  ["path": ["type": "string", "minLength": 2, "maxLength": 512],
                   "reason": ["type": "string", "minLength": 1, "maxLength": 120]]),
-            tool("chilk_cancel_timer", "Cancel one local Chilk timer by its exact id, only on the user's request.",
+            tool("chilk_cancel_timer", "Cancel one of Chilk's scheduled messages by its exact id from chilk_timers, only on the user's request. Not for Clock timers (chilk_clock_open).",
                  ["id": ["type": "string", "minLength": 1, "maxLength": 128]]),
             tool("chilk_reminder", "Propose an Apple Reminders reminder in Chilk's own «Чилк» list: it syncs to iPhone/Watch and fires even when Chilk is closed. Use for a task at a date or time of day («завтра утром», «в пятницу в 15:00»); a countdown from now («через 10 минут») is chilk_timer. Future ISO-8601 timestamp; without a timezone it is the user's local time. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows the user a confirmation card built from these values and creates it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["at": ["type": "string", "maxLength": 64], "title": ["type": "string", "minLength": 1, "maxLength": 120]]),
@@ -165,7 +169,8 @@ public enum ChilkToolCatalog {
 
     private static func ability(of name: String) -> ChilkAbility? {
         switch name {
-        case "chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
+        case "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
+        case "chilk_timer", "chilk_clock_open": .clock
         case "chilk_reminder", "chilk_reminders", "chilk_reminder_change": .reminders
         default: nil
         }
@@ -240,6 +245,9 @@ public enum ChilkToolCatalog {
             guard Set(fields.keys) == ["path", "reason"], let path = fields["path"]?.string, validFolderPath(path),
                   let reason = fields["reason"]?.string, validTitle(reason, limit: 120) else { throw ToolError.invalidArguments }
             return .requestFolder(path: path, reason: reason.trimmingCharacters(in: .whitespacesAndNewlines))
+        case "chilk_clock_open":
+            guard fields.isEmpty else { throw ToolError.invalidArguments }
+            return .openClock
         case "chilk_status", "chilk_water", "chilk_timers":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             if name == "chilk_status" { return .status }
@@ -325,7 +333,7 @@ public enum ChilkToolCatalog {
         case "chilk_timer":
             guard Set(fields.keys) == ["seconds", "title"],
                   case .number(let seconds) = fields["seconds"], seconds.isFinite, seconds.rounded(.towardZero) == seconds,
-                  seconds >= 1, seconds <= 366 * 24 * 60 * 60,
+                  seconds >= 1, seconds <= 86399,
                   let title = fields["title"]?.string, validTitle(title) else {
                 throw ToolError.invalidArguments
             }

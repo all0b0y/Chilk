@@ -14,6 +14,9 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case reminderChange(id: String, oldTitle: String, oldDue: Date?, title: String, due: Date?)
         case reminderComplete(id: String, title: String, due: Date?)
         case reminderDelete(id: String, title: String, due: Date?)
+        /// Slice 8d (decision 9): a timer in Apple's Clock app, counted from «Да». Clock's timer has no name: Chilk says
+        /// the title when it is set.
+        case timer(title: String, seconds: Int)
     }
 
     public let id: UUID
@@ -36,7 +39,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .reminder(_, let due): due
         case .message(_, _, let at): at
         case .reminderChange(_, _, let oldDue, _, let due): due != oldDue ? due : nil
-        case .reminderComplete, .reminderDelete: nil
+        case .reminderComplete, .reminderDelete, .timer: nil
         }
     }
 
@@ -46,7 +49,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
     /// Can be edited in the «Изменить» panel (decision 5): title and date/time; completing or deleting cannot.
     public var editable: Bool {
         switch kind {
-        case .reminder, .message, .reminderChange: true
+        case .reminder, .message, .reminderChange, .timer: true
         case .reminderComplete, .reminderDelete: false
         }
     }
@@ -76,6 +79,10 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .reminderDelete(_, let title, let due):
             out = ["🗑 Удалить напоминание: \(title)"] + (due.map { [fmt.when($0, guessedPart: false, guessedDay: false)] } ?? [])
                 + [place]
+        case .timer(let title, let seconds):
+            // Counted from «Да»: the ring time shown is «if you say yes now».
+            out = ["⏱ Таймер: \(title)", Self.duration(seconds) + " — до " + fmt.time(now.addingTimeInterval(Double(seconds))),
+                   "«Часы»"]
         }
         if expired(now: now) { out.append("Время уже прошло — измени его") }
         return out
@@ -97,7 +104,21 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
             return "change reminder «\(oldTitle)» → «\(title)»" + (due.map { " at \(f.string(from: $0))" } ?? "")
         case .reminderComplete(_, let title, _): return "mark reminder «\(title)» done"
         case .reminderDelete(_, let title, _): return "delete reminder «\(title)»"
+        case .timer(let title, let seconds): return "Clock timer «\(title)» for \(seconds) s"
         }
+    }
+
+    /// «45 с», «5 мин», «1 ч 30 мин», «2 ч», «1 д 2 ч».
+    public static func duration(_ seconds: Int) -> String {
+        let s = max(0, seconds)
+        if s < 60 { return "\(s) с" }
+        let d = s / 86400, h = s % 86400 / 3600, m = s % 3600 / 60, sec = s % 60
+        var parts: [String] = []
+        if d > 0 { parts.append("\(d) д") }
+        if h > 0 { parts.append("\(h) ч") }
+        if m > 0 { parts.append("\(m) мин") }
+        if sec > 0, d == 0, h == 0 { parts.append("\(sec) с") }
+        return parts.joined(separator: " ")
     }
 }
 
@@ -105,6 +126,20 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
 struct CardFormat {
     let calendar: Calendar
     let now: Date
+
+    /// «23:52», «01:10 завтра», further — «Пт, 9 окт., 10:00».
+    func time(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.dateFormat = "HH:mm"
+        if calendar.isDate(d, inSameDayAs: now) { return f.string(from: d) }
+        if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(d, inSameDayAs: t) {
+            return f.string(from: d) + " завтра"
+        }
+        return when(d, guessedPart: false, guessedDay: false)
+    }
 
     func when(_ d: Date, guessedPart: Bool, guessedDay: Bool) -> String {
         let time = DateFormatter()

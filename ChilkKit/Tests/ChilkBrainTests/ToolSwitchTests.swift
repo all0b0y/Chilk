@@ -20,9 +20,20 @@ struct ToolSwitchTests {
         var s = ToolSwitches()
         s.set(.timers, on: false)
         let list = names(ChilkToolCatalog.tools(for: s))
-        for gone in ["chilk_timer", "chilk_schedule", "chilk_timers", "chilk_cancel_timer"] { #expect(!list.contains(gone)) }
-        for kept in ["chilk_status", "chilk_water", "chilk_mode", "chilk_reminder", "chilk_find_files"] { #expect(list.contains(kept)) }
+        for gone in ["chilk_schedule", "chilk_timers", "chilk_cancel_timer"] { #expect(!list.contains(gone)) }
+        for kept in ["chilk_status", "chilk_water", "chilk_mode", "chilk_reminder", "chilk_find_files", "chilk_timer"] {
+            #expect(list.contains(kept))
+        }
         #expect(list.first == "chilk_status")
+    }
+
+    /// Slice 8d: «Таймеры („Часы“)» is its own switch.
+    @Test func clockOffRemovesTheClockTools() {
+        var s = ToolSwitches()
+        s.set(.clock, on: false)
+        let list = names(ChilkToolCatalog.tools(for: s))
+        for gone in ["chilk_timer", "chilk_clock_open"] { #expect(!list.contains(gone)) }
+        #expect(list.contains("chilk_schedule"))
     }
 
     @Test func remindersOffRemovesBothReminderTools() {
