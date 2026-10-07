@@ -40,6 +40,9 @@ public enum ChilkAction: Equatable, Sendable {
     case emote(Emotion, strong: Bool)
     /// Slice 6d: hide behind the screen edge (`true`) or come back out for good (`false`), when the conversation closes.
     case hide(Bool)
+    /// Slice 7a: open the notebook with a game (`nil` = Chilk picks the one not played for longest) and a match of
+    /// `length` games (`nil` = the user picks on the first sheet).
+    case game(GameKind?, length: Int?)
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -92,6 +95,9 @@ public enum ChilkToolCatalog {
                   "strong": ["type": "boolean"]]),
             tool("chilk_hide", "Only on the user's request: hidden=true — Chilk hides behind the screen edge («спрячься», «уйди за край»); hidden=false — he comes back out for good («выходи», «вернись», «не прячься»). It happens when the conversation closes; just say it briefly. [контекст] says whether he is hidden now. While hidden he still counts breaks and peeks out now and then. changed=false: he already was.",
                  ["hidden": ["type": "boolean"]]),
+            tool("chilk_game", "Only when the user wants to play with Chilk («давай поиграем», «сыграем в крестики-нолики», «нет, в крестики»). game: a game by name, or \"any\" when none is named — Chilk picks the one not played for longest; the result has its name, say it. length: games in the match, 1–6, only from the user's words («до пяти» → 5); 0 = not said (they choose on the notebook's first sheet). The notebook opens next to Chilk when the conversation closes; just say it briefly. Playing is sitting, not a rest. Refused: chilk_exhausted (he is worn out — help first), top_stage (a break first), in_exercise, not_ready (that game is not here yet — offer one that is).",
+                 ["game": ["type": "string", "enum": .array([.string("any")] + GameKind.ready.map { .string($0.rawValue) })],
+                  "length": ["type": "integer", "minimum": 0, "maximum": 6]]),
         ]
     }()
 
@@ -259,6 +265,13 @@ public enum ChilkToolCatalog {
         case "chilk_hide":
             guard Set(fields.keys) == ["hidden"], let hidden = fields["hidden"]?.bool else { throw ToolError.invalidArguments }
             return .hide(hidden)
+        case "chilk_game":
+            guard Set(fields.keys) == ["game", "length"], let raw = fields["game"]?.string,
+                  case .number(let n) = fields["length"], n.isFinite, n.rounded(.towardZero) == n, n >= 0, n <= 6
+            else { throw ToolError.invalidArguments }
+            if raw == "any" { return .game(nil, length: n == 0 ? nil : Int(n)) }
+            guard let kind = GameKind(rawValue: raw) else { throw ToolError.invalidArguments }
+            return .game(kind, length: n == 0 ? nil : Int(n))
         case "chilk_mode":
             guard Set(fields.keys) == ["mode"], let raw = fields["mode"]?.string,
                   let mode = BalanceMode(rawValue: raw) else { throw ToolError.invalidArguments }

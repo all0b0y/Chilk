@@ -12,6 +12,8 @@ public struct ChatChip: Codable, Equatable, Sendable {
         case deferRequest, focus, endFocus
         /// Slice 6d: hid behind the screen edge / came back out (`subject` = "hidden" / "shown").
         case hide
+        /// Slice 7a: opened the notebook with a game (`subject` = the game's raw value, e.g. "tictactoe").
+        case game
     }
     public var kind: Kind
     /// What it was about: a timer's title, a file's name, a mode, a break — never what a file or page said.

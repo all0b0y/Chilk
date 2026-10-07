@@ -1,4 +1,5 @@
 import AppKit
+import ChilkBrain
 import ChilkCore
 import SwiftUI
 
@@ -19,7 +20,8 @@ final class GameController: NSObject, NSWindowDelegate {
 
     private var waiting: Timer?
     private var waitStarted: Date?
-    private static let waitLimit: TimeInterval = 15
+    /// A voice conversation keeps him until its follow-up window ends.
+    private static let waitLimit: TimeInterval = 30
 
     /// The notebook holds Chilk: he is not at the edge.
     private(set) var holdsChilk = false
@@ -92,6 +94,25 @@ final class GameController: NSObject, NSWindowDelegate {
 
     func close() {
         window?.close()                                    // → windowWillClose
+    }
+
+    /// The games ready now, for the popover's «Игры» page; and why not now (`nil` = can play).
+    var ready: [GameKind] { GameKind.ready }
+    func refusalLine(_ kind: GameKind = .ticTacToe) -> String? { balance.gameRefusal(kind).map(GameLines.refusal) }
+
+    /// `chilk_game` (voice or chat): `nil` = Chilk picks the game not played for longest. The notebook opens when he is
+    /// free (the conversation closes); refusals carry the codes Codex explains.
+    func request(_ kind: GameKind?, length: Int?) -> CodexToolResult {
+        let chosen = kind ?? GameChooser.pick(ready: GameKind.ready, lastPlayed: history.lastPlayed)
+        if let r = balance.gameRefusal(chosen) {
+            log("game \(chosen.rawValue) refused: \(r.rawValue)")
+            return .failure("\(r.rawValue): " + (r == .notReady
+                ? "not here yet; ready: " + GameKind.ready.map(\.rawValue).joined(separator: ", ")
+                : GameLines.refusal(r)))
+        }
+        open(chosen, length: length)
+        return .ok(["game": .string(chosen.rawValue), "name": .string(GameLines.name(chosen)),
+                    "length": .number(Double(length ?? 0))])
     }
 
     // MARK: The match

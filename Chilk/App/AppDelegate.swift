@@ -145,6 +145,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   seed: ProcessInfo.processInfo.environment["CHILK_DEMO_GAME_SEED"].flatMap { UInt64($0) })
         game.log = { [weak balance] in balance?.log($0) }
         game.isFree = { [weak tray] in tray?.isFree() ?? false }
+        actions.openGame = { [weak game] kind, length in game?.request(kind, length: length) ?? .failure("Games unavailable") }
+        tray.playGame = { [weak game] kind in game?.open(kind) }
+        tray.gameRefusal = { [weak game] in game?.refusalLine() }
         self.game = game
 
         // Slice 5c: the main window — Сегодня, Неделя, Память, Инструменты, Настройки.

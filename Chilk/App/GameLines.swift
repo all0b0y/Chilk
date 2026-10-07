@@ -35,5 +35,14 @@ enum GameLines {
         }
     }
 
+    static func name(_ kind: GameKind) -> String {
+        switch kind {
+        case .ticTacToe: String(localized: "Крестики-нолики")
+        case .basketball: String(localized: "Баскетбол")
+        case .battleship: String(localized: "Морской бой")
+        case .checkers: String(localized: "Шашки")
+        }
+    }
+
     static var busy: String { String(localized: "Сейчас занят — давай чуть позже") }
 }

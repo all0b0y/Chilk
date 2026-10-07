@@ -33,6 +33,9 @@ final class Tray: NSObject, NSPopoverDelegate {
     private(set) var holdsChilk = false
     /// Free for the hand-off: nothing holds him at the edge (set by the app; includes the greeting).
     var isFree: () -> Bool = { true }
+    /// Slice 7a: «Игры» → the notebook (after the popover gives Chilk back); why not now (`nil` = can play).
+    var playGame: (GameKind) -> String? = { _ in nil }
+    var gameRefusal: () -> String? = { nil }
     /// The right-click menu («Позвать», «Проверка ▸», «О Чилке», «Выйти»), built fresh each time.
     var menu: () -> NSMenu = { NSMenu() }
     /// «Чат» (slice 5b): opens the chat window.
@@ -146,11 +149,13 @@ final class Tray: NSObject, NSPopoverDelegate {
         Timer.scheduledTimer(withTimeInterval: 2.2, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.snapshot(to: URL(fileURLWithPath: dir).appending(path: "popover-main.png"))
-                guard env["CHILK_DEMO_TRAY_PAGE"] == "tools" else { return }
-                self?.model.page = .tools
+                // «tools» or «games» (slice 7a).
+                let page = env["CHILK_DEMO_TRAY_PAGE"]
+                guard page == "tools" || page == "games" else { return }
+                self?.model.page = page == "games" ? .games : .tools
                 Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
                     MainActor.assumeIsolated {
-                        self?.snapshot(to: URL(fileURLWithPath: dir).appending(path: "popover-tools.png"))
+                        self?.snapshot(to: URL(fileURLWithPath: dir).appending(path: "popover-\(page ?? "tools").png"))
                     }
                 }
             }
@@ -234,6 +239,7 @@ final class Tray: NSObject, NSPopoverDelegate {
     private func refreshModel() {
         let engine = balance.engine
         model.now = Date()
+        model.gameRefusal = gameRefusal()
         let card = HeroCard.make(pressure: { engine.pressure($0) }, exitsLeft: engine.state.exitsLeft,
                                  exitsMax: engine.config.emergencyExits, mode: balance.mode, off: engine.config.needsOff)
         if card != model.card { model.card = card }
@@ -257,6 +263,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         model.drank = { [weak self] in self?.closing { self?.balance.drankWater() } }
         model.warmup = { [weak self] in self?.closing { self?.balance.startWarmup() } }
         model.walk = { [weak self] in self?.closing { self?.balance.startWalk() } }
+        model.play = { [weak self] kind in self?.closing { _ = self?.playGame(kind) } }
         model.setMode = { [weak self] m in
             guard let self else { return false }
             let ok = self.balance.setMode(m)

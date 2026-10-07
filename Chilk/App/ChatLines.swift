@@ -74,6 +74,8 @@ extension Lines {
         case .focus:
             if let at = c.at { String(localized: "Фокус до \(at.formatted(date: .omitted, time: .shortened))") } else { String(localized: "Фокус") }
         case .endFocus: c.failed ? String(localized: "Закончить фокус") : String(localized: "Фокус закончен")
+        case .game:
+            c.failed ? String(localized: "Игра") : (GameKind(rawValue: s).map(GameLines.name) ?? String(localized: "Игра"))
         case .hide:
             s == "hidden"
                 ? (c.failed ? String(localized: "Спрятаться") : String(localized: "Спрятался за край"))
@@ -98,6 +100,7 @@ extension Lines {
         case .deferRequest: "clock.arrow.circlepath"
         case .focus, .endFocus: "scope"
         case .hide: "rectangle.righthalf.inset.filled.arrow.right"
+        case .game: "gamecontroller"
         }
     }
 

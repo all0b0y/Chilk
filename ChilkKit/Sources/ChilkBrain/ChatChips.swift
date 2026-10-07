@@ -35,6 +35,8 @@ public enum ChatChips {
             chip.at = result.value["until"]?.string.flatMap(ChilkToolCatalog.timestamp)
         case .hide(let hidden):
             chip.subject = hidden ? "hidden" : "shown"
+        case .game(let kind, _):
+            chip.subject = result.value["game"]?.string ?? kind?.rawValue
         case .takeBreak(let b):
             switch b {
             case .eyeGym: chip.subject = "eyeGym"
@@ -78,6 +80,7 @@ public enum ChatChips {
         case "chilk_focus": .focus
         case "chilk_end_focus": .endFocus
         case "chilk_hide": .hide
+        case "chilk_game": .game
         default: nil
         }
     }

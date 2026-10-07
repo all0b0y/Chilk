@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class TrayModel {
-    enum Page { case main, tools }
+    enum Page { case main, tools, games }
     enum Problem: Equatable {
         case codexSignedOut, codexDown(String), earsBroken(String)
     }
@@ -44,6 +44,10 @@ final class TrayModel {
     var addFolder: (ChilkFileScope) -> Void = { _ in }
     var login: () -> Void = {}
     var openChat: () -> Void = {}
+    /// Slice 7a: the «Игры» page — the ready games and why not now (`nil` = can play).
+    var games: [GameKind] = GameKind.ready
+    var gameRefusal: String?
+    var play: (GameKind) -> Void = { _ in }
     /// «Открыть Чилка» → the main window on «Сегодня»; «Настройки» → on «Настройки» (slice 5c).
     var openMain: () -> Void = {}
     var openSettings: () -> Void = {}
@@ -79,6 +83,7 @@ struct TrayView: View {
             switch model.page {
             case .main: main
             case .tools: tools
+            case .games: games
             }
         }
         .padding(14)
@@ -179,6 +184,18 @@ struct TrayView: View {
     /// Slice 4b: «Фокус…» (1 / 2 / 3 h), or «Фокус до 18:00 · Закончить» while it runs.
     private var focusRow: some View {
         HStack(spacing: 6) {
+            Group { focusControls }.help(Lines.focusHelp)
+            if model.focusUntil == nil { Spacer(minLength: 4) }
+            // Slice 7a (decision 26): «Игры» flips to the games page. Here, not in the bottom row: five labels there wrap.
+            Button { model.page = .games } label: { Label(String(localized: "Игры"), systemImage: "gamecontroller") }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .fixedSize()
+        }
+    }
+
+    @ViewBuilder private var focusControls: some View {
+        HStack(spacing: 6) {
             if let until = model.focusUntil {
                 Image(systemName: "scope").foregroundStyle(Self.peach)
                 Text(Lines.focusRow(until.formatted(date: .omitted, time: .shortened))).font(.callout)
@@ -200,7 +217,6 @@ struct TrayView: View {
                 .fixedSize()
             }
         }
-        .help(Lines.focusHelp)
     }
 
     private var timers: some View {
@@ -250,6 +266,56 @@ struct TrayView: View {
         .labelStyle(VerticalLabel())
         .buttonStyle(.borderless)
         .padding(.horizontal, 6)
+    }
+
+    // MARK: Games page (slice 7a, decision 26)
+
+    private var games: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Button { model.page = .main } label: { Label(String(localized: "Назад"), systemImage: "chevron.left") }
+                    .buttonStyle(.borderless)
+                Spacer()
+                Text(String(localized: "Игры")).font(.headline)
+                Spacer()
+            }
+            if let refusal = model.gameRefusal {
+                Label(refusal, systemImage: "hand.raised").font(.callout).foregroundStyle(.secondary)
+            }
+            ForEach(model.games, id: \.self) { kind in
+                Button { model.play(kind) } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: Self.gameIcon(kind)).font(.title2).frame(width: 30)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(GameLines.name(kind)).font(.body.weight(.medium))
+                            Text(Self.gameNote(kind)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Self.peach.opacity(0.14)))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(model.gameRefusal != nil)
+            }
+        }
+    }
+
+    private static func gameIcon(_ kind: GameKind) -> String {
+        switch kind {
+        case .ticTacToe: "number"
+        case .basketball: "basketball"
+        case .battleship: "water.waves"
+        case .checkers: "circle.grid.3x3"
+        }
+    }
+
+    private static func gameNote(_ kind: GameKind) -> String {
+        switch kind {
+        case .ticTacToe: String(localized: "Ты — крестики, матч из 1–6 партий")
+        default: ""
+        }
     }
 
     // MARK: Tools page (decision 9)

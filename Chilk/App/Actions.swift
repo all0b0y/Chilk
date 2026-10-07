@@ -68,6 +68,8 @@ final class Actions {
                     ["ended": .bool(balance?.endFocus() ?? false)]
                 }, hide: { [weak balance] hidden in
                     balance?.hideout?.request(hidden) ?? ["changed": false]
+                }, game: { [gameRelay] kind, length in
+                    gameRelay.open(kind, length)
                 })
         } catch {
             executor = nil
@@ -87,6 +89,16 @@ final class Actions {
         return result
     }
 
+    /// Slice 7a: `chilk_game` → the notebook (set by the app). A relay object: the executor is built in `init`, before
+    /// `self` may be captured.
+    final class GameRelay {
+        var open: (GameKind?, Int?) -> CodexToolResult = { _, _ in .failure("Games unavailable") }
+    }
+    private let gameRelay = GameRelay()
+    var openGame: (GameKind?, Int?) -> CodexToolResult {
+        get { gameRelay.open }
+        set { gameRelay.open = newValue }
+    }
     /// Chips of the turn in flight, by thread (set by the app: the chat collects them).
     var onChip: (String, ChatChip) -> Void = { _, _ in }
     /// Chilk's memory (slice 5b, decision 17).
