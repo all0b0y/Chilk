@@ -68,6 +68,28 @@ enum GameLines {
     static var resumeLater: String { String(localized: "Потом") }
 
     static var busy: String { String(localized: "Сейчас занят — давай чуть позже") }
+
+    // Slice 7c: battleship.
+    static var yourSea: String { String(localized: "Твоё море") }
+    static var hisSea: String { String(localized: "Море Чилка") }
+    static var placeShips: String { String(localized: "Расставь корабли: тащи, клик — повернуть") }
+    static var shuffle: String { String(localized: "Случайно") }
+    static var toBattle: String { String(localized: "В бой!") }
+    static var doesNotFit: String { String(localized: "Так не встанет: корабли не касаются даже углами") }
+    static var fireAtHim: String { String(localized: "Твой выстрел — по морю Чилка") }
+
+    /// What a shot did, on the status line.
+    static func shot(_ r: ShotResult, byYou: Bool) -> String {
+        switch (r, byYou) {
+        case (.miss, true): String(localized: "Мимо. Ход Чилка")
+        case (.hit, true): String(localized: "Ранил! Стреляй ещё")
+        case (.sunk, true): String(localized: "Потопил! Стреляй ещё")
+        case (.miss, false): String(localized: "Чилк промахнулся — твой ход")
+        case (.hit, false): String(localized: "Чилк ранил твой корабль")
+        case (.sunk, false): String(localized: "Чилк потопил твой корабль")
+        case (.wasted, _): ""
+        }
+    }
 }
 
 /// Slice 7b: basketball's words (decisions 27–28, 32).

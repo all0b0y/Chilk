@@ -296,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
         if let spec = env["CHILK_DEMO_GAME"] { game.demo(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
+        if let spec = env["CHILK_DEMO_SEA"] { game.demoSea(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         if let spec = env["CHILK_DEMO_COURT"] { game.demoCourt(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         // SPEC «Умолчания»: launch at login is on until the user switches it off (not in isolated acceptance runs).
         // Saved only once it really worked: a failed registration is tried again at the next launch.

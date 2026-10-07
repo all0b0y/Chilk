@@ -318,6 +318,7 @@ struct TrayView: View {
         switch kind {
         case .ticTacToe: String(localized: "Ты — крестики, матч из 1–6 партий")
         case .basketball: String(localized: "Чилк бросает — ты угадываешь")
+        case .battleship: String(localized: "Поле 10×10, матч из 1–3 партий")
         default: ""
         }
     }

@@ -50,10 +50,15 @@ final class GameController: NSObject, NSWindowDelegate {
     private var cardReactions: [Reaction] = []
     private var afterClose: (() -> Void)?
     /// A game paused for a break (stage 3, «измотан», «Иду»): «Доиграем?» after the rest, until the end of the day.
+    /// The board of a game paused in the middle (`nil` between games).
+    enum SavedBoard {
+        case ticTacToe(TicTacToe)
+        case battleship(BattleshipGame)
+    }
     struct SavedGame {
         let kind: GameKind
         let match: GameMatch
-        let board: TicTacToe?
+        let board: SavedBoard?
         let youToMove: Bool
         let at: Date
         /// The engine clock of the latest counted rest at the pause: «Доиграем?» waits for a newer one.
@@ -84,6 +89,16 @@ final class GameController: NSObject, NSWindowDelegate {
         model.again = { [weak self] in self?.again() }
         model.close = { [weak self] in self?.close() }
         model.answer = { [weak self] i in self?.answer(i) }
+        model.fire = { [weak self] c in self?.fire(c) }
+        model.place = { [weak self] i, x, y, h in
+            guard let self, self.model.phase == .placing else { return }
+            if !self.model.placing.move(i, to: x, y, horizontal: h) { self.flash(GameLines.doesNotFit) }
+        }
+        model.shuffle = { [weak self] in
+            guard let self, self.model.phase == .placing else { return }
+            self.model.placing = Fleet.random(rng: &self.rng)
+        }
+        model.battle = { [weak self] in self?.battle() }
     }
 
     /// Opens the notebook (from the popover, by voice or chat). `length` skips the first sheet. Returns the line Chilk
@@ -96,7 +111,7 @@ final class GameController: NSObject, NSWindowDelegate {
             return GameLines.refusal(refusal)
         }
         balance.yieldToGame()                              // a request bubble (stage 1–2) moves into the game
-        if kind == .ticTacToe, let window {                // already open: just bring it up
+        if kind != .basketball, let window, model.kind == kind {   // already open: just bring it up
             if let length, model.phase == .setup || model.phase == .matchOver { begin(length: length) }
             window.makeKeyAndOrderFront(nil)
             return nil
@@ -145,8 +160,10 @@ final class GameController: NSObject, NSWindowDelegate {
         }
         notebookHolds = true
         edge.sim.standOut = .away                          // he ducks behind the screen edge …
+        model.kind = kind
         model.match = GameMatch()
         model.board = TicTacToe()
+        model.sea = nil
         model.strike = nil
         model.card = nil
         waitingForNext = false
@@ -186,7 +203,8 @@ final class GameController: NSObject, NSWindowDelegate {
 
     private func begin(length: Int) {
         cancelTimers()
-        model.length = min(GameMatch.lengths.upperBound, max(GameMatch.lengths.lowerBound, length))
+        let range = model.kind == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths
+        model.length = min(range.upperBound, max(range.lowerBound, length))
         model.match = GameMatch(length: model.length)
         log("game: match of \(model.match.length)")
         newGame()
@@ -203,14 +221,70 @@ final class GameController: NSObject, NSWindowDelegate {
         model.match = s.match
         model.length = s.match.length
         log("game: resumed at \(s.match.you):\(s.match.chilk)")
-        guard let board = s.board else { return newGame() }
-        startBoard(board)
-        if s.youToMove { setPhase(.yourMove) } else { chilkTurn() }
+        switch s.board {
+        case nil:
+            newGame()
+        case .ticTacToe(let board)?:
+            startBoard(board)
+            if s.youToMove { setPhase(.yourMove) } else { chilkTurn() }
+        case .battleship(let sea)?:
+            startBoard(TicTacToe())
+            model.sea = sea
+            if s.youToMove { setPhase(.yourMove) } else { seaChilkTurn() }
+        }
     }
 
     private func newGame() {
         startBoard(TicTacToe())
+        if model.kind == .battleship {                     // decision 30: place your fleet first
+            model.sea = nil
+            model.placing = Fleet.random(rng: &rng)
+            hisFleet = Fleet.random(rng: &rng)
+            setPhase(.placing)
+            return
+        }
         if model.match.youStart { setPhase(.yourMove) } else { chilkTurn() }
+    }
+
+    // MARK: Battleship (slice 7c, decision 30)
+
+    private var hisFleet = Fleet(ships: [])
+
+    private func battle() {
+        guard model.phase == .placing, model.card == nil, model.placing.isValid else { return }
+        model.sea = BattleshipGame(yours: model.placing, his: hisFleet)
+        log("game: battle — \(model.match.youStart ? "you" : "Chilk") first")
+        if model.match.youStart { setPhase(.yourMove) } else { seaChilkTurn() }
+    }
+
+    private func fire(_ cell: Int) {
+        guard model.phase == .yourMove, !lent, var sea = model.sea else { return }
+        let r = sea.his.fire(cell)
+        guard r != .wasted else { return }
+        model.sea = sea
+        if let w = sea.winner { return finish(w) }
+        if r.again { setPhase(.yourMove, status: GameLines.shot(r, byYou: true)) } else {
+            model.status = GameLines.shot(r, byYou: true)
+            after(0.6) { [weak self] in self?.seaChilkTurn() }
+            model.phase = .chilkThinks
+        }
+    }
+
+    private func seaChilkTurn() {
+        guard var sea = model.sea else { return }
+        if model.phase != .chilkThinks { setPhase(.chilkThinks) } else { onPhase(.chilkThinks) }
+        let think = BattleshipAI.thinkTime(rng: &rng)
+        hero.sim.perform(.think(seconds: think))
+        after(think) { [weak self] in
+            guard let self, self.model.phase == .chilkThinks else { return }
+            let r = sea.yours.fire(BattleshipAI.move(sea.yours, rng: &self.rng))
+            self.model.sea = sea
+            if let w = sea.winner { return self.finish(w) }
+            self.model.status = GameLines.shot(r, byYou: false)
+            if r.again { self.seaChilkTurn() } else {
+                self.after(0.5) { [weak self] in self?.setPhase(.yourMove, status: GameLines.shot(r, byYou: false)) }
+            }
+        }
     }
 
     /// A board on a fresh sheet: the pencil's wobble and the marks drawn anew, the score up top.
@@ -250,6 +324,10 @@ final class GameController: NSObject, NSWindowDelegate {
         case .draw:
             result = .draw
         }
+        finish(result)
+    }
+
+    private func finish(_ result: GameResult) {
         model.match.record(result)
         model.headline = GameLines.score(you: model.match.you, chilk: model.match.chilk, game: model.match.played,
                                          of: model.match.length)
@@ -296,8 +374,10 @@ final class GameController: NSObject, NSWindowDelegate {
         model.phase = phase
         switch phase {
         case .setup:
-            model.headline = GameLines.ticTacToe
+            model.headline = GameLines.name(model.kind)
             model.status = GameLines.howMany
+        case .placing: model.status = GameLines.placeShips
+        case .yourMove where model.kind == .battleship: model.status = status ?? GameLines.fireAtHim
         case .yourMove: model.status = GameLines.yourMove
         case .chilkThinks: model.status = GameLines.chilkThinks
         case .gameOver, .matchOver: model.status = status ?? ""
@@ -310,11 +390,12 @@ final class GameController: NSObject, NSWindowDelegate {
     /// `activate`: a click in the popover or a chat answer — the notebook takes the keyboard. Opened later (after a
     /// voice conversation) it only comes to the front and does not take the keys from what the user types into.
     private func show(activate: Bool) {
-        let w = NSWindow(contentRect: NSRect(origin: .zero, size: NotebookView.size),
+        let size = NotebookView.size(for: model.kind)
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                          styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
-        w.title = GameLines.ticTacToe
+        w.title = GameLines.name(model.kind)
         w.isMovableByWindowBackground = true
         w.isReleasedWhenClosed = false
         w.level = .floating
@@ -322,7 +403,7 @@ final class GameController: NSObject, NSWindowDelegate {
         w.contentView = NSHostingView(rootView: NotebookView(model: model, hero: hero))
         if let screen = NSScreen.main {
             let f = screen.visibleFrame
-            w.setFrameOrigin(NSPoint(x: f.midX - NotebookView.size.width / 2, y: f.midY - NotebookView.size.height / 2))
+            w.setFrameOrigin(NSPoint(x: f.midX - size.width / 2, y: f.midY - size.height / 2))
         }
         window = w
         if activate {
@@ -398,7 +479,7 @@ final class GameController: NSObject, NSWindowDelegate {
         // The first sheet counts as «between games»: a waiting request comes before the first game too.
         switch GameBreakPolicy.decide(stage: request?.stage, need: request?.need, slumped: balance.slumpedNow,
                                       silent: balance.mode == .silent,
-                                      betweenGames: waitingForNext || model.phase == .setup,
+                                      betweenGames: waitingForNext || model.phase == .setup || model.phase == .placing,
                                       waiting: requestSince.map { Date().timeIntervalSince($0) } ?? 0) {
         case .pause:
             pauseForBreak()
@@ -422,7 +503,7 @@ final class GameController: NSObject, NSWindowDelegate {
         model.card = GameCard(text: GameLines.firstThenRematch(request.need),
                               buttons: request.buttons.map { Lines.button($0, for: request.need) })
         log("game: card \(request.need.rawValue) stage \(request.stage)"
-            + (waitingForNext || model.phase == .setup ? " between games" : " mid-game"))
+            + (waitingForNext || model.phase == .setup || model.phase == .placing ? " between games" : " mid-game"))
         onCard()
     }
 
@@ -453,10 +534,11 @@ final class GameController: NSObject, NSWindowDelegate {
         let mark = balance.lastRestMark
         switch model.phase {
         case .yourMove, .chilkThinks:
-            saved = SavedGame(kind: .ticTacToe, match: model.match, board: model.board, youToMove: model.phase == .yourMove,
+            let board: SavedBoard? = model.kind == .battleship ? model.sea.map { .battleship($0) } : .ticTacToe(model.board)
+            saved = SavedGame(kind: model.kind, match: model.match, board: board, youToMove: model.phase == .yourMove,
                               at: Date(), restMark: mark)
-        case .gameOver where !model.match.isOver:
-            saved = SavedGame(kind: .ticTacToe, match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
+        case .gameOver where !model.match.isOver, .placing:
+            saved = SavedGame(kind: model.kind, match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
         default:
             saved = nil                                    // the first sheet or a finished match: nothing to resume
         }
@@ -667,6 +749,54 @@ extension GameController {
                 guard let self else { return }
                 _ = self.open(.basketball, length: length > 0 ? length : nil)   // 0: the scoreboard's length choice
             }
+        }
+    }
+}
+
+extension GameController {
+    /// CHILK_DEMO_SEA="<length>" — battleship 3 s after launch: the random fleet goes into battle after 2 s, your
+    /// shots are played by the same honest AI (0.35 s each); CHILK_DEMO_GAME_SNAPSHOT=/dir writes the sheet when
+    /// placing, every 15th shot of yours and at the end of each game; a request card gets its first button.
+    func demoSea(_ spec: String, snapshots: String?) {
+        let length = Int(spec) ?? 1
+        var shot = 0, shots = 0
+        let snap: (String) -> Void = { [weak self] name in
+            guard let self, let dir = snapshots else { return }
+            shot += 1
+            let n = shot
+            self.after(0.6) { self.snapshot(to: URL(fileURLWithPath: dir).appending(path: String(format: "sea-%02d-%@.png", n, name))) }
+        }
+        onPhase = { [weak self] phase in
+            guard let self else { return }
+            switch phase {
+            case .placing:
+                snap("placing")
+                self.after(2) { self.model.battle() }
+            case .yourMove:
+                @MainActor func attempt() {
+                    self.after(0.35) {
+                        guard self.model.phase == .yourMove, let sea = self.model.sea else { return }
+                        if self.lent { return attempt() }
+                        shots += 1
+                        if shots % 15 == 0 { snap("battle") }
+                        self.fire(BattleshipAI.move(sea.his, rng: &self.rng))
+                    }
+                }
+                attempt()
+            case .gameOver: snap("over")
+            case .matchOver:
+                snap("match")
+                self.after(4) { self.close() }
+            default: break
+            }
+        }
+        onCard = { [weak self] in
+            guard let self else { return }
+            snap("card")
+            self.after(1.5) { self.answer(0) }
+        }
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.open(.battleship, length: length) }
         }
     }
 }

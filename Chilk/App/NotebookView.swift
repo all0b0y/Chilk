@@ -7,8 +7,10 @@ import SwiftUI
 @MainActor
 @Observable
 final class TicTacToeModel {
-    enum Phase: Equatable { case setup, yourMove, chilkThinks, gameOver, matchOver }
+    enum Phase: Equatable { case setup, placing, yourMove, chilkThinks, gameOver, matchOver }
 
+    /// Slice 7c: the notebook holds tic-tac-toe or battleship.
+    var kind = GameKind.ticTacToe
     var phase = Phase.setup
     var board = TicTacToe()
     var match = GameMatch()
@@ -31,6 +33,13 @@ final class TicTacToeModel {
 
     var start: (Int) -> Void = { _ in }
     var tap: (Int) -> Void = { _ in }
+    // Slice 7c: battleship — both seas once the battle starts, your fleet while you place it.
+    var sea: BattleshipGame?
+    var placing = Fleet(ships: [])
+    var fire: (Int) -> Void = { _ in }
+    var place: (Int, Int, Int, Bool?) -> Void = { _, _, _, _ in }
+    var shuffle: () -> Void = {}
+    var battle: () -> Void = {}
     var again: () -> Void = {}
     var close: () -> Void = {}
 }
@@ -47,6 +56,8 @@ struct NotebookView: View {
     let hero: HeroView
 
     static let size = CGSize(width: 600, height: 440)
+    /// Slice 7c: two seas need a wider sheet.
+    static func size(for kind: GameKind) -> CGSize { kind == .battleship ? CGSize(width: 900, height: 470) : size }
     static let paper = Color(red: 0.985, green: 0.975, blue: 0.94)
     static let grid = Color(red: 0.55, green: 0.72, blue: 0.86).opacity(0.38)
     static let margin = Color(red: 0.9, green: 0.45, blue: 0.45).opacity(0.55)
@@ -66,10 +77,17 @@ struct NotebookView: View {
                     }
                 }
                 .foregroundStyle(Self.graphite)
-                Group {
-                    if model.phase == .setup { setup } else { board }
+                if model.kind == .battleship {
+                    Group {
+                        if model.phase == .setup { setup } else { SeaBoards(model: model) }
+                    }
+                    .frame(height: 240, alignment: .topLeading)
+                } else {
+                    Group {
+                        if model.phase == .setup { setup } else { board }
+                    }
+                    .frame(width: 270, height: 270, alignment: .topLeading)
                 }
-                .frame(width: 270, height: 270, alignment: .topLeading)
                 Spacer(minLength: 0)
                 footer
             }
@@ -86,7 +104,7 @@ struct NotebookView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(width: Self.size(for: model.kind).width, height: Self.size(for: model.kind).height)
         .environment(\.colorScheme, .light)
         .tint(TrayView.peach)
     }
@@ -94,11 +112,13 @@ struct NotebookView: View {
     private var setup: some View {
         VStack(alignment: .leading, spacing: 18) {
             Picker("", selection: $model.length) {
-                ForEach(Array(GameMatch.lengths), id: \.self) { Text(verbatim: "\($0)").tag($0) }
+                ForEach(Array(model.kind == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths), id: \.self) {
+                    Text(verbatim: "\($0)").tag($0)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: 250)
+            .frame(width: model.kind == .battleship ? 140 : 250)
             Button(GameLines.start) { model.start(model.length) }
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.card != nil)
@@ -143,6 +163,10 @@ struct NotebookView: View {
 
     private var footer: some View {
         HStack(spacing: 10) {
+            if model.phase == .placing {
+                Button(GameLines.shuffle) { model.shuffle() }
+                Button(GameLines.toBattle) { model.battle() }.keyboardShortcut(.defaultAction).disabled(model.card != nil)
+            }
             if model.phase == .matchOver {
                 Button(GameLines.again) { model.again() }.keyboardShortcut(.defaultAction).disabled(model.card != nil)
             }
