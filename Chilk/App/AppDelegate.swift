@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phrases: PhraseBatches?
     private var tray: Tray?
     private var game: GameController?
+    private var crashTimer: Timer?
     private var greeting: FirstMeeting?
     private var hide: HideController?
     private var ambience: AmbienceController?
@@ -295,6 +296,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
+        // Slice 8a (decision 15): «Я упал в ЧЧ:ММ — уже снова тут» after a real crash; then this run's marker.
+        if let crashed = CrashWatch.launch() {
+            let line = Lines.crashed(at: crashed)
+            balance.log("crash notice: the last run crashed at \(crashed)")
+            var tries = 0
+            crashTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self, weak tray, weak hide, weak edge] _ in
+                MainActor.assumeIsolated {
+                    tries += 1
+                    guard let self, let edge else { return }
+                    if hide?.isHidden == true { self.balance?.log("crash notice: hidden — journal only"); self.crashTimer?.invalidate(); return }
+                    guard tries >= 3, tray?.isFree() == true || tries > 30 else { return }
+                    self.crashTimer?.invalidate()
+                    edge.sim.say(line, duration: 5)
+                    self.balance?.log("crash notice said")
+                }
+            }
+        }
+        if let s = env["CHILK_DEMO_CRASH"].flatMap(Double.init), env["CHILK_STATE_DIR"] != nil {
+            Timer.scheduledTimer(withTimeInterval: s, repeats: false) { _ in fatalError("CHILK_DEMO_CRASH: acceptance crash") }
+        }
         if let spec = env["CHILK_DEMO_GAME"] { game.demo(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         if let spec = env["CHILK_DEMO_DRAUGHTS"] { game.demoDraughts(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         if let spec = env["CHILK_DEMO_SEA"] { game.demoSea(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
@@ -351,6 +372,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        CrashWatch.quitNormally()
         balance?.save()
         settings.flush()
         actions?.shutdown()

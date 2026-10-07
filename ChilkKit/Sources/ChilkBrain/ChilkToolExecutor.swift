@@ -67,7 +67,7 @@ public final class ChilkToolExecutor {
         } catch {
             // No paths or argument text are copied into an error response.
             if let reason = error as? LocalTimers.TimerError { return .failure(reason.description) }
-            if error is ChilkToolCatalog.ToolError { return .failure("Unknown tool or invalid arguments") }
+            if error is ChilkToolCatalog.ToolError { return .failure(ChilkToolCatalog.explain(name: name, arguments: arguments)) }
             return .failure("Could not persist Chilk state; the operation was not completed")
         }
     }

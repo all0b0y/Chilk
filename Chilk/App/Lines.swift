@@ -20,4 +20,9 @@ enum Lines {
         String(localized: "О, ты вернулся! Я чуть-чуть вздремнул"),
         String(localized: "Ура, ты тут! Я скучал"),
     ]
+
+    /// Slice 8a (decision 15): after a real crash, once.
+    static func crashed(at date: Date) -> String {
+        String(localized: "Я упал в \(date.formatted(date: .omitted, time: .shortened)) — уже снова тут")
+    }
 }

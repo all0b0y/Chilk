@@ -146,10 +146,19 @@ final class Actions {
         }
     }
 
+    /// Slice 8a (decision 14): `tools.log` — tool, outcome code, seconds; never names, times, paths or texts.
+    private let journal = ToolJournal(url: AppState.directory.appendingPathComponent("tools.log"))
+
     private func run(_ call: CodexToolCall) async -> CodexToolResult {
+        let started = Date()
+        func record(_ outcome: ToolJournal.Outcome) {
+            journal.write(ToolJournal.line(at: started, tool: call.name, outcome: outcome,
+                                           seconds: Date().timeIntervalSince(started)))
+        }
         let kinds = Dictionary(files.grants.map { ($0.name, $0.kind) }, uniquingKeysWith: { first, _ in first })
         if let off = ChilkToolCatalog.switchedOff(name: call.name, arguments: call.arguments, switches: switches(),
                                                   kindOf: { kinds[$0] }) {
+            record(.refused("switched_off"))
             balance?.log("tool \(call.name) refused: \(off.rawValue) switched off")
             return .failure("Switched off by the user in Chilk's tray → Инструменты (\(off.rawValue)). Nothing was done; "
                             + "tell the user it is switched off there.")
@@ -157,6 +166,8 @@ final class Actions {
         let result: CodexToolResult
         if let refused = ClockCheck.refusal(for: call) {
             result = refused                                     // 6d+: «в 3» — ночи или дня? Ask first.
+            record(.refused(ToolJournal.code(of: refused.value["error"]?.string ?? "")))
+            return result
         } else if call.name == "chilk_remember" {
             result = remember(call)
         } else if call.name == "chilk_emote" {
@@ -170,6 +181,7 @@ final class Actions {
         } else {
             result = .failure("Chilk actions unavailable: timer storage could not be loaded")
         }
+        record(result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")))
         balance?.log("tool \(call.name) success=\(result.success)"
                      + (result.success ? "" : " \(result.value["error"]?.string ?? "")"))
         return result

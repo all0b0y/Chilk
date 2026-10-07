@@ -52,7 +52,7 @@ public struct ChilkReminderExecutor: Sendable {
         } catch is CancellationError {
             return .failure("Cancelled")
         } catch is ChilkToolCatalog.ToolError {
-            return .failure("Unknown tool or invalid arguments")
+            return .failure(ChilkToolCatalog.explain(name: name, arguments: arguments))
         } catch {
             return .failure("Could not reach Apple Reminders; nothing was created")
         }
