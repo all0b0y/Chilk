@@ -49,12 +49,13 @@ final class GameController: NSObject, NSWindowDelegate {
     private var waitingForNext = false
     private var cardReactions: [Reaction] = []
     private var afterClose: (() -> Void)?
-    /// A game paused for a break (stage 3, «измотан», «Иду»): «Доиграем?» after the rest, until the end of the day.
     /// The board of a game paused in the middle (`nil` between games).
     enum SavedBoard {
         case ticTacToe(TicTacToe)
         case battleship(BattleshipGame)
     }
+    /// A game paused for a break (stage 3, «измотан», «Иду») or a battle closed midway (decision 30): «Доиграем?» after
+    /// the rest, until the end of the day.
     struct SavedGame {
         let kind: GameKind
         let match: GameMatch
@@ -91,11 +92,11 @@ final class GameController: NSObject, NSWindowDelegate {
         model.answer = { [weak self] i in self?.answer(i) }
         model.fire = { [weak self] c in self?.fire(c) }
         model.place = { [weak self] i, x, y, h in
-            guard let self, self.model.phase == .placing else { return }
+            guard let self, self.model.phase == .placing, self.model.card == nil else { return }
             if !self.model.placing.move(i, to: x, y, horizontal: h) { self.flash(GameLines.doesNotFit) }
         }
         model.shuffle = { [weak self] in
-            guard let self, self.model.phase == .placing else { return }
+            guard let self, self.model.phase == .placing, self.model.card == nil else { return }
             self.model.placing = Fleet.random(rng: &self.rng)
         }
         model.battle = { [weak self] in self?.battle() }
@@ -150,7 +151,8 @@ final class GameController: NSObject, NSWindowDelegate {
         }
         let deferred = waitStarted != nil
         waitStarted = nil
-        saved = nil                                        // a new game (or the resumed one) replaces a paused game
+        // A new game of the same kind (or the resumed one) replaces a paused game; another game's stays for later.
+        if restoring != nil || saved?.kind == kind { saved = nil }
         stopOffer()
         history.played(kind, at: Date())
         try? history.save(to: Self.historyFile)
@@ -161,6 +163,7 @@ final class GameController: NSObject, NSWindowDelegate {
         notebookHolds = true
         edge.sim.standOut = .away                          // he ducks behind the screen edge …
         model.kind = kind
+        model.length = kind == .battleship ? GameMatch.battleshipLengths.upperBound : GameMatch.defaultLength
         model.match = GameMatch()
         model.board = TicTacToe()
         model.sea = nil
@@ -194,9 +197,15 @@ final class GameController: NSObject, NSWindowDelegate {
                 ? "not here yet; ready: " + GameKind.ready.map(\.rawValue).joined(separator: ", ")
                 : GameLines.refusal(r)))
         }
-        open(chosen, length: length)
-        return .ok(["game": .string(chosen.rawValue), "name": .string(GameLines.name(chosen)),
-                    "length": .number(Double(length ?? 0))])
+        // «Давай в морской бой» with a battle paused today: that battle goes on.
+        let resume = saved?.kind == chosen ? saved : nil
+        let range = chosen == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths
+        let clamped = resume == nil ? length.map { min(range.upperBound, max(range.lowerBound, $0)) } : nil
+        open(chosen, length: clamped, restoring: resume)
+        var result: [String: JSON] = ["game": .string(chosen.rawValue), "name": .string(GameLines.name(chosen)),
+                                      "length": .number(Double(clamped ?? 0))]
+        if let resume { result["resumed"] = .string(GameLines.finalScore(you: resume.match.you, chilk: resume.match.chilk)) }
+        return .ok(.object(result))
     }
 
     // MARK: The match
@@ -264,28 +273,34 @@ final class GameController: NSObject, NSWindowDelegate {
         model.sea = sea
         if let w = sea.winner { return finish(w) }
         if r.again { setPhase(.yourMove, status: GameLines.shot(r, byYou: true)) } else {
+            setPhase(.chilkThinks)
             model.status = GameLines.shot(r, byYou: true)
             after(0.6) { [weak self] in self?.seaChilkTurn() }
-            model.phase = .chilkThinks
         }
     }
 
     private func seaChilkTurn() {
-        guard var sea = model.sea else { return }
-        if model.phase != .chilkThinks { setPhase(.chilkThinks) } else { onPhase(.chilkThinks) }
+        guard model.sea != nil else { return }
+        if model.phase != .chilkThinks { setPhase(.chilkThinks) }
         let think = BattleshipAI.thinkTime(rng: &rng)
         hero.sim.perform(.think(seconds: think))
         after(think) { [weak self] in
-            guard let self, self.model.phase == .chilkThinks else { return }
+            guard let self, self.model.phase == .chilkThinks, var sea = self.model.sea else { return }
             let r = sea.yours.fire(BattleshipAI.move(sea.yours, rng: &self.rng))
             self.model.sea = sea
             if let w = sea.winner { return self.finish(w) }
-            self.model.status = GameLines.shot(r, byYou: false)
-            if r.again { self.seaChilkTurn() } else {
-                self.after(0.5) { [weak self] in self?.setPhase(.yourMove, status: GameLines.shot(r, byYou: false)) }
+            // The turn passes at once with the shot (a pause right now must not give him a second one).
+            if r.again {
+                self.model.status = GameLines.shot(r, byYou: false)
+                self.seaChilkTurn()
+            } else {
+                self.setPhase(.yourMove, status: GameLines.shot(r, byYou: false))
             }
         }
     }
+
+    /// Between games: the first sheet, placing the fleet, or a finished game.
+    private var betweenGames: Bool { waitingForNext || model.phase == .setup || model.phase == .placing }
 
     /// A board on a fresh sheet: the pencil's wobble and the marks drawn anew, the score up top.
     private func startBoard(_ board: TicTacToe) {
@@ -396,7 +411,8 @@ final class GameController: NSObject, NSWindowDelegate {
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
         w.title = GameLines.name(model.kind)
-        w.isMovableByWindowBackground = true
+        // Battleship drags its ships on the sheet: the window moves by its top strip only.
+        w.isMovableByWindowBackground = model.kind != .battleship
         w.isReleasedWhenClosed = false
         w.level = .floating
         w.delegate = self
@@ -419,6 +435,13 @@ final class GameController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Decision 30: a battle closed midway («Хватит», Esc) is kept until the end of the day.
+        if afterClose == nil, model.kind == .battleship, let sea = model.sea, sea.winner == nil,
+           model.phase == .yourMove || model.phase == .chilkThinks {
+            saved = SavedGame(kind: .battleship, match: model.match, board: .battleship(sea), youToMove: model.phase == .yourMove,
+                              at: Date(), restMark: balance.lastRestMark)
+            log("game: the battle is kept for later at \(model.match.you):\(model.match.chilk)")
+        }
         cancelTimers()
         watchTimer?.invalidate()
         watchTimer = nil
@@ -479,7 +502,7 @@ final class GameController: NSObject, NSWindowDelegate {
         // The first sheet counts as «between games»: a waiting request comes before the first game too.
         switch GameBreakPolicy.decide(stage: request?.stage, need: request?.need, slumped: balance.slumpedNow,
                                       silent: balance.mode == .silent,
-                                      betweenGames: waitingForNext || model.phase == .setup || model.phase == .placing,
+                                      betweenGames: betweenGames,
                                       waiting: requestSince.map { Date().timeIntervalSince($0) } ?? 0) {
         case .pause:
             pauseForBreak()
@@ -503,7 +526,7 @@ final class GameController: NSObject, NSWindowDelegate {
         model.card = GameCard(text: GameLines.firstThenRematch(request.need),
                               buttons: request.buttons.map { Lines.button($0, for: request.need) })
         log("game: card \(request.need.rawValue) stage \(request.stage)"
-            + (waitingForNext || model.phase == .setup || model.phase == .placing ? " between games" : " mid-game"))
+            + (betweenGames ? " between games" : " mid-game"))
         onCard()
     }
 
@@ -537,7 +560,7 @@ final class GameController: NSObject, NSWindowDelegate {
             let board: SavedBoard? = model.kind == .battleship ? model.sea.map { .battleship($0) } : .ticTacToe(model.board)
             saved = SavedGame(kind: model.kind, match: model.match, board: board, youToMove: model.phase == .yourMove,
                               at: Date(), restMark: mark)
-        case .gameOver where !model.match.isOver, .placing:
+        case .gameOver where !model.match.isOver, .placing where model.match.played > 0:
             saved = SavedGame(kind: model.kind, match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
         default:
             saved = nil                                    // the first sheet or a finished match: nothing to resume
@@ -797,6 +820,21 @@ extension GameController {
         }
         Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.open(.battleship, length: length) }
+        }
+        // CHILK_DEMO_SEA_CLOSE=<s>: «Хватит» that long after launch (a battle closed midway is kept), reopened 3 s later
+        // through the voice path (`request`), which resumes it.
+        if let s = ProcessInfo.processInfo.environment["CHILK_DEMO_SEA_CLOSE"].flatMap(Double.init) {
+            Timer.scheduledTimer(withTimeInterval: s, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.close()
+                    Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+                        MainActor.assumeIsolated {
+                            guard let self else { return }
+                            self.log("game demo: voice asks for battleship → \(self.request(.battleship, length: nil))")
+                        }
+                    }
+                }
+            }
         }
     }
 }

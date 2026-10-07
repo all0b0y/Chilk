@@ -6,7 +6,8 @@ import SwiftUI
 struct SeaBoards: View {
     @Bindable var model: TicTacToeModel
 
-    static let cell: CGFloat = 19
+    /// The sheet's own squares (18 pt): the seas lie on the notebook's grid.
+    static let cell: CGFloat = 18
     static let side = cell * CGFloat(Sea.size)
     static let letters = ["А", "Б", "В", "Г", "Д", "Е", "Ж", "З", "И", "К"]
 
@@ -64,7 +65,7 @@ struct SeaBoards: View {
                 }
             } else if let sea = model.sea?.yours {
                 ForEach(Array(sea.fleet.ships.enumerated()), id: \.offset) { _, ship in
-                    ShipOutline(rect: Self.rect(ship), sunk: sea.isSunk(ship), pen: true)
+                    ShipOutline(rect: Self.rect(ship), sunk: sea.isSunk(ship))
                 }
                 Marks(sea: sea, pen: false, gameIndex: model.gameIndex)        // his shots, in pencil
             }
@@ -78,7 +79,7 @@ struct SeaBoards: View {
             Grid(seed: model.seed &+ 50)
             if let sea = model.sea?.his {
                 ForEach(Array(sea.sunkShips.enumerated()), id: \.offset) { _, ship in
-                    ShipOutline(rect: Self.rect(ship), sunk: true, pen: true)
+                    ShipOutline(rect: Self.rect(ship), sunk: true)
                 }
                 Marks(sea: sea, pen: true, gameIndex: model.gameIndex)         // your shots, in blue pen
             }
@@ -95,32 +96,38 @@ struct SeaBoards: View {
     }
 
     /// The sea's frame and its pencil grid.
+    /// The sea's frame drawn by hand in pencil over the sheet's squares.
     private struct Grid: View {
         let seed: UInt64
         var body: some View {
-            Canvas { ctx, size in
-                var p = Path()
-                for i in 0...Sea.size {
-                    let v = CGFloat(i) * SeaBoards.cell
-                    p.move(to: CGPoint(x: v, y: 0)); p.addLine(to: CGPoint(x: v, y: size.height))
-                    p.move(to: CGPoint(x: 0, y: v)); p.addLine(to: CGPoint(x: size.width, y: v))
+            ZStack {
+                Canvas { ctx, size in
+                    var p = Path()
+                    for i in 1..<Sea.size {
+                        let v = CGFloat(i) * SeaBoards.cell
+                        p.move(to: CGPoint(x: v, y: 0)); p.addLine(to: CGPoint(x: v, y: size.height))
+                        p.move(to: CGPoint(x: 0, y: v)); p.addLine(to: CGPoint(x: size.width, y: v))
+                    }
+                    ctx.stroke(p, with: .color(NotebookView.graphite.opacity(0.22)), lineWidth: 0.7)
                 }
-                ctx.stroke(p, with: .color(NotebookView.graphite.opacity(0.35)), lineWidth: 0.8)
-                ctx.stroke(Path(CGRect(origin: .zero, size: size)), with: .color(NotebookView.graphite.opacity(0.85)), lineWidth: 1.6)
+                PencilBox(seed: seed, wobble: 0.006)
+                    .stroke(NotebookView.graphite.opacity(0.85), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
             }
         }
     }
 
+    /// A ship drawn in blue pen: a hand-drawn box, lightly shaded.
     private struct ShipOutline: View {
         let rect: CGRect
         let sunk: Bool
-        let pen: Bool
         var body: some View {
-            RoundedRectangle(cornerRadius: 3)
-                .fill(NotebookView.ink.opacity(sunk ? 0.08 : 0.16))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(NotebookView.ink, lineWidth: 2))
-                .frame(width: rect.width - 3, height: rect.height - 3)
-                .offset(x: rect.minX + 1.5, y: rect.minY + 1.5)
+            ZStack {
+                Rectangle().fill(NotebookView.ink.opacity(sunk ? 0.08 : 0.14))
+                PencilBox(seed: UInt64(rect.minX * 31 + rect.minY * 7 + rect.width), wobble: 0.05)
+                    .stroke(NotebookView.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            }
+            .frame(width: rect.width - 3, height: rect.height - 3)
+            .offset(x: rect.minX + 1.5, y: rect.minY + 1.5)
         }
     }
 
@@ -176,9 +183,11 @@ struct SeaBoards: View {
 
         var body: some View {
             let r = SeaBoards.rect(ship)
-            RoundedRectangle(cornerRadius: 3)
-                .fill(NotebookView.ink.opacity(drag == .zero ? 0.16 : 0.28))
-                .overlay(RoundedRectangle(cornerRadius: 3).stroke(NotebookView.ink, lineWidth: 2))
+            ZStack {
+                Rectangle().fill(NotebookView.ink.opacity(drag == .zero ? 0.14 : 0.28))
+                PencilBox(seed: UInt64(index * 97 + 5), wobble: 0.05)
+                    .stroke(NotebookView.ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            }
                 .frame(width: r.width - 3, height: r.height - 3)
                 .contentShape(Rectangle())
                 .offset(x: r.minX + 1.5 + drag.width, y: r.minY + 1.5 + drag.height)
@@ -192,5 +201,21 @@ struct SeaBoards: View {
                     })
                 .onTapGesture { model.place(index, ship.x, ship.y, !ship.horizontal) }
         }
+    }
+}
+
+/// Four hand-drawn sides of a box (the sea's frame, a ship), steady for its seed.
+struct PencilBox: Shape {
+    let seed: UInt64
+    var wobble: CGFloat = 0.02
+
+    func path(in rect: CGRect) -> Path {
+        let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)]
+        var p = Path()
+        for i in 0..<4 {
+            let side = PencilStroke(from: corners[i], to: corners[(i + 1) % 4], seed: seed &+ UInt64(i), wobble: wobble)
+            p.addPath(side.path(in: rect))
+        }
+        return p
     }
 }
