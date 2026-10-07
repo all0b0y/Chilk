@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotkey: Hotkey?
     private var phrases: PhraseBatches?
     private var tray: Tray?
+    private var game: GameController?
     private var greeting: FirstMeeting?
     private var hide: HideController?
     private var ambience: AmbienceController?
@@ -139,6 +140,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tray.menu = { [weak self] in self?.trayMenu() ?? NSMenu() }
         tray.openChat = { [weak chat] in chat?.show() }
         self.tray = tray
+        // Slice 7a: the notebook with the games; Chilk leaves the edge for it.
+        let game = GameController(edge: edge, balance: balance,
+                                  seed: ProcessInfo.processInfo.environment["CHILK_DEMO_GAME_SEED"].flatMap { UInt64($0) })
+        game.log = { [weak balance] in balance?.log($0) }
+        game.isFree = { [weak tray] in tray?.isFree() ?? false }
+        self.game = game
 
         // Slice 5c: the main window — Сегодня, Неделя, Память, Инструменты, Настройки.
         let main = MainWindowController(balance: balance, settings: settings, profile: profile, chats: chats, memory: memory,
@@ -159,22 +166,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.greeting = greeting
 
         // Who holds the stage: a conversation, a due timer, Chilk on the hero card, the greeting, a typed question.
-        balance.isBusy = { [weak conversation, weak actions, weak tray, weak greeting, weak chat] in
+        balance.isBusy = { [weak conversation, weak actions, weak tray, weak greeting, weak chat, weak game] in
             (conversation?.isActive ?? false) || (actions?.ownsStage ?? false) || (tray?.holdsChilk ?? false)
-                || (greeting?.isActive ?? false) || (chat?.thinking ?? false)
+                || (greeting?.isActive ?? false) || (chat?.thinking ?? false) || (game?.holdsChilk ?? false)
         }
-        chat.chilkFree = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak edge] in
+        chat.chilkFree = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak edge, weak game] in
             guard let edge else { return false }
             return !(conversation?.isActive ?? true) && !(actions?.noticeWaiting ?? true) && !(balance?.isOccupied ?? true)
                 && !(tray?.holdsChilk ?? true) && !(greeting?.isActive ?? true) && !edge.sim.isTalking
+                && !(game?.holdsChilk ?? true)
                 && !edge.sim.hidden                           // 6d: hidden, no thinking pose (and no emotions)
         }
         actions.conversationActive = { [weak conversation, weak tray, weak greeting] in
             (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
         }
-        greeting.canPresent = { [weak conversation, weak actions, weak balance, weak tray] in
+        greeting.canPresent = { [weak conversation, weak actions, weak balance, weak tray, weak game] in
             !(conversation?.isActive ?? true) && !(actions?.ownsStage ?? true) && !(balance?.isOccupied ?? true)
-                && !(tray?.holdsChilk ?? true)
+                && !(tray?.holdsChilk ?? true) && !(game?.holdsChilk ?? true)
         }
         tray.isFree = { [weak conversation, weak actions, weak balance, weak greeting, weak edge] in
             guard let edge else { return false }
@@ -182,10 +190,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 && !(greeting?.isActive ?? true) && !edge.sim.isTalking && edge.sim.standOut == .docked
         }
         // Slice 6e: a leap to another monitor waits until Chilk is free.
-        edge.hopBusy = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak chat, weak edge] in
+        edge.hopBusy = { [weak conversation, weak actions, weak balance, weak tray, weak greeting, weak chat, weak edge,
+                          weak game] in
             (conversation?.isActive ?? false) || (actions?.noticeWaiting ?? false) || (balance?.isOccupied ?? false)
                 || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false) || (chat?.thinking ?? false)
-                || (edge?.sim.isTalking ?? false)
+                || (edge?.sim.isTalking ?? false) || (game?.holdsChilk ?? false)
         }
         edge.log = { [weak balance] in balance?.log($0) }
         // Slice 6f-1: the light around him (the built-in display's brightness).
@@ -253,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
+        if let spec = env["CHILK_DEMO_GAME"] { game.demo(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         // SPEC «Умолчания»: launch at login is on until the user switches it off (not in isolated acceptance runs).
         // Saved only once it really worked: a failed registration is tried again at the next launch.
         if settings.settings.launchAtLogin == nil, env["CHILK_STATE_DIR"] == nil {

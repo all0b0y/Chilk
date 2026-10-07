@@ -94,6 +94,12 @@ final class BalanceController {
         return false
     }
 
+    /// Slice 7a (decision 26): no games while he is «измотан», on stages 3–4 or in a guided exercise or walk.
+    func gameRefusal(_ kind: GameKind) -> GameRefusal? {
+        GameGate.refusal(kind: kind, exhausted: engine.slumped, stage: stageThreeOrMore ? 3 : (shownStage ?? 0),
+                         exercise: activity != nil || walking || guidedRun != nil)
+    }
+
     /// «Лежит» (6b, decision 8): the ready line he answers with instead of a conversation; `nil` = he talks.
     func refusal() -> String? {
         guard engine.refusesToTalk else { return nil }
