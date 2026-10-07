@@ -75,6 +75,9 @@ enum GameLines {
     static var placeShips: String { String(localized: "Расставь корабли: тащи, клик — повернуть") }
     static var shuffle: String { String(localized: "Случайно") }
     static var toBattle: String { String(localized: "В бой!") }
+    // Slice 7d: draughts.
+    static var yourMoveDraughts: String { String(localized: "Твой ход — ты синие, снизу") }
+    static var mustTake: String { String(localized: "Бить обязательно!") }
     static var doesNotFit: String { String(localized: "Так не встанет: корабли не касаются даже углами") }
     static var fireAtHim: String { String(localized: "Твой выстрел — по морю Чилка") }
 

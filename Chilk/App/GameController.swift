@@ -53,6 +53,7 @@ final class GameController: NSObject, NSWindowDelegate {
     enum SavedBoard {
         case ticTacToe(TicTacToe)
         case battleship(BattleshipGame)
+        case draughts(Draughts)
     }
     /// A game paused for a break (stage 3, «измотан», «Иду») or a battle closed midway (decision 30): «Доиграем?» after
     /// the rest, until the end of the day.
@@ -100,6 +101,7 @@ final class GameController: NSObject, NSWindowDelegate {
             self.model.placing = Fleet.random(rng: &self.rng)
         }
         model.battle = { [weak self] in self?.battle() }
+        model.square = { [weak self] s in self?.square(s) }
     }
 
     /// Opens the notebook (from the popover, by voice or chat). `length` skips the first sheet. Returns the line Chilk
@@ -163,10 +165,13 @@ final class GameController: NSObject, NSWindowDelegate {
         notebookHolds = true
         edge.sim.standOut = .away                          // he ducks behind the screen edge …
         model.kind = kind
-        model.length = kind == .battleship ? GameMatch.battleshipLengths.upperBound : GameMatch.defaultLength
+        model.length = kind.clampLength(GameMatch.defaultLength)
         model.match = GameMatch()
         model.board = TicTacToe()
         model.sea = nil
+        model.draughts = nil
+        model.selected = nil
+        model.lastMove = nil
         model.strike = nil
         model.card = nil
         waitingForNext = false
@@ -199,8 +204,7 @@ final class GameController: NSObject, NSWindowDelegate {
         }
         // «Давай в морской бой» with a battle paused today: that battle goes on.
         let resume = saved?.kind == chosen ? saved : nil
-        let range = chosen == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths
-        let clamped = resume == nil ? length.map { min(range.upperBound, max(range.lowerBound, $0)) } : nil
+        let clamped = resume == nil ? length.map(chosen.clampLength) : nil
         open(chosen, length: clamped, restoring: resume)
         var result: [String: JSON] = ["game": .string(chosen.rawValue), "name": .string(GameLines.name(chosen)),
                                       "length": .number(Double(clamped ?? 0))]
@@ -212,8 +216,7 @@ final class GameController: NSObject, NSWindowDelegate {
 
     private func begin(length: Int) {
         cancelTimers()
-        let range = model.kind == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths
-        model.length = min(range.upperBound, max(range.lowerBound, length))
+        model.length = model.kind.clampLength(length)
         model.match = GameMatch(length: model.length)
         log("game: match of \(model.match.length)")
         newGame()
@@ -240,6 +243,10 @@ final class GameController: NSObject, NSWindowDelegate {
             startBoard(TicTacToe())
             model.sea = sea
             if s.youToMove { setPhase(.yourMove) } else { seaChilkTurn() }
+        case .draughts(let board)?:
+            startBoard(TicTacToe())
+            model.draughts = board
+            if board.toMove == .you { setPhase(.yourMove) } else { draughtsChilkTurn() }
         }
     }
 
@@ -252,7 +259,66 @@ final class GameController: NSObject, NSWindowDelegate {
             setPhase(.placing)
             return
         }
+        if model.kind == .checkers {                       // decision 31: the first move alternates like the other games
+            model.draughts = Draughts(toMove: model.match.youStart ? .you : .chilk)
+            model.selected = nil
+            model.lastMove = nil
+            if model.match.youStart { setPhase(.yourMove) } else { draughtsChilkTurn() }
+            return
+        }
         if model.match.youStart { setPhase(.yourMove) } else { chilkTurn() }
+    }
+
+    // MARK: Draughts (slice 7d, decision 31)
+
+    private func square(_ s: Int) {
+        guard model.phase == .yourMove, !lent, var board = model.draughts, board.toMove == .you else { return }
+        let legal = board.moves
+        if let p = board.squares[s], p.side == .you {
+            if legal.contains(where: { $0.from == s }) {
+                model.selected = s
+            } else if !legal.isEmpty, legal[0].captured.count > 0 {
+                flash(GameLines.mustTake)                  // another piece has to take
+            }
+            return
+        }
+        guard let from = model.selected, let m = legal.first(where: { $0.from == from && $0.to == s }) else { return }
+        board.play(m)
+        model.draughts = board
+        model.selected = nil
+        model.lastMove = nil
+        if let o = board.outcome { return finish(o) }
+        draughtsChilkTurn()
+    }
+
+    private func draughtsChilkTurn() {
+        guard let board = model.draughts else { return }
+        setPhase(.chilkThinks)
+        let think = DraughtsAI.thinkTime(rng: &rng)
+        hero.sim.perform(.think(seconds: think))
+        let seed = UInt64(rng.next() * 1_000_000_000)
+        let started = Date()
+        // The search runs off the main thread while he «thinks»; the move lands after both.
+        Task.detached(priority: .userInitiated) {
+            var search = SeededRandom(seed: seed)
+            let pick = DraughtsAI.move(board, rng: &search)
+            let spent = Date().timeIntervalSince(started)
+            await MainActor.run { [weak self] in self?.land(pick, on: board, after: max(0, think - spent), spent: spent) }
+        }
+    }
+
+    private func land(_ pick: (move: DraughtsMove, yawned: Bool), on board: Draughts, after wait: Double, spent: Double) {
+        after(wait) { [weak self] in
+            guard let self, self.model.phase == .chilkThinks, var b = self.model.draughts, b == board else { return }
+            b.play(pick.move)
+            self.model.draughts = b
+            self.model.lastMove = pick.move
+            self.log(String(format: "game: Chilk moves %d→%d%@%@ (search %.0f ms)", pick.move.from, pick.move.to,
+                            pick.move.captured.isEmpty ? "" : ", takes \(pick.move.captured.count)",
+                            pick.yawned ? ", yawned" : "", spent * 1000))
+            if let o = b.outcome { return self.finish(o) }
+            self.setPhase(.yourMove, status: b.moves.first?.captured.isEmpty == false ? GameLines.mustTake : nil)
+        }
     }
 
     // MARK: Battleship (slice 7c, decision 30)
@@ -393,6 +459,7 @@ final class GameController: NSObject, NSWindowDelegate {
             model.status = GameLines.howMany
         case .placing: model.status = GameLines.placeShips
         case .yourMove where model.kind == .battleship: model.status = status ?? GameLines.fireAtHim
+        case .yourMove where model.kind == .checkers: model.status = status ?? GameLines.yourMoveDraughts
         case .yourMove: model.status = GameLines.yourMove
         case .chilkThinks: model.status = GameLines.chilkThinks
         case .gameOver, .matchOver: model.status = status ?? ""
@@ -436,11 +503,17 @@ final class GameController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         // Decision 30: a battle closed midway («Хватит», Esc) is kept until the end of the day.
-        if afterClose == nil, model.kind == .battleship, let sea = model.sea, sea.winner == nil,
-           model.phase == .yourMove || model.phase == .chilkThinks {
-            saved = SavedGame(kind: .battleship, match: model.match, board: .battleship(sea), youToMove: model.phase == .yourMove,
-                              at: Date(), restMark: balance.lastRestMark)
-            log("game: the battle is kept for later at \(model.match.you):\(model.match.chilk)")
+        if afterClose == nil, model.phase == .yourMove || model.phase == .chilkThinks {
+            let board: SavedBoard? = switch model.kind {
+            case .battleship: model.sea.flatMap { $0.winner == nil ? .battleship($0) : nil }
+            case .checkers: model.draughts.flatMap { $0.outcome == nil ? .draughts($0) : nil }
+            default: nil
+            }
+            if let board {                                 // decisions 30–31: a long game closed midway waits for later
+                saved = SavedGame(kind: model.kind, match: model.match, board: board, youToMove: model.phase == .yourMove,
+                                  at: Date(), restMark: balance.lastRestMark)
+                log("game: the \(model.kind.rawValue) game is kept for later at \(model.match.you):\(model.match.chilk)")
+            }
         }
         cancelTimers()
         watchTimer?.invalidate()
@@ -557,7 +630,11 @@ final class GameController: NSObject, NSWindowDelegate {
         let mark = balance.lastRestMark
         switch model.phase {
         case .yourMove, .chilkThinks:
-            let board: SavedBoard? = model.kind == .battleship ? model.sea.map { .battleship($0) } : .ticTacToe(model.board)
+            let board: SavedBoard? = switch model.kind {
+            case .battleship: model.sea.map { .battleship($0) }
+            case .checkers: model.draughts.map { .draughts($0) }
+            default: .ticTacToe(model.board)
+            }
             saved = SavedGame(kind: model.kind, match: model.match, board: board, youToMove: model.phase == .yourMove,
                               at: Date(), restMark: mark)
         case .gameOver where !model.match.isOver, .placing where model.match.played > 0:
@@ -835,6 +912,54 @@ extension GameController {
                     }
                 }
             }
+        }
+    }
+}
+
+extension GameController {
+    /// CHILK_DEMO_DRAUGHTS="<length>" — draughts 3 s after launch; your moves are played by a shallow search (0.4 s
+    /// each, the selected piece shown first); snapshots of the sheet every 8th move of yours and at the end of each
+    /// game; a request card gets its first button.
+    func demoDraughts(_ spec: String, snapshots: String?) {
+        let length = Int(spec) ?? 1
+        var shot = 0, moves = 0
+        let snap: (String) -> Void = { [weak self] name in
+            guard let self, let dir = snapshots else { return }
+            shot += 1
+            let n = shot
+            self.after(0.6) { self.snapshot(to: URL(fileURLWithPath: dir).appending(path: String(format: "draughts-%02d-%@.png", n, name))) }
+        }
+        onPhase = { [weak self] phase in
+            guard let self else { return }
+            switch phase {
+            case .yourMove:
+                @MainActor func attempt() {
+                    self.after(0.4) {
+                        guard self.model.phase == .yourMove, let b = self.model.draughts, b.toMove == .you else { return }
+                        if self.lent { return attempt() }
+                        var r = SeededRandom(seed: UInt64(moves + 1))
+                        let m = DraughtsAI.move(b, rng: &r, depth: 2).move
+                        moves += 1
+                        self.square(m.from)
+                        if moves % 8 == 0 { snap("game") }
+                        self.after(0.3) { self.square(m.to) }
+                    }
+                }
+                attempt()
+            case .gameOver: snap("over")
+            case .matchOver:
+                snap("match")
+                self.after(4) { self.close() }
+            default: break
+            }
+        }
+        onCard = { [weak self] in
+            guard let self else { return }
+            snap("card")
+            self.after(1.5) { self.answer(0) }
+        }
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { _ = self?.open(.checkers, length: length) }
         }
     }
 }

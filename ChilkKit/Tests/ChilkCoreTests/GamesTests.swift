@@ -137,10 +137,11 @@ struct GameLaunchTests {
         #expect(GameChooser.pick(ready: [.ticTacToe], lastPlayed: [.ticTacToe: now]) == .ticTacToe)
     }
 
-    @Test func threeGamesAreReadyInSevenC() {
-        #expect(GameKind.ready == [.ticTacToe, .basketball, .battleship])
-        #expect(GameGate.refusal(kind: .battleship, exhausted: false, stage: 0, exercise: false) == nil)
-        #expect(GameGate.refusal(kind: .checkers, exhausted: false, stage: 0, exercise: false) == .notReady)
+    @Test func allFourGamesAreReadyInSevenD() {
+        #expect(GameKind.ready == GameKind.allCases)
+        #expect(GameGate.refusal(kind: .checkers, exhausted: false, stage: 0, exercise: false) == nil)
+        #expect(GameKind.checkers.clampLength(5) == 3 && GameKind.ticTacToe.clampLength(5) == 5)
+        #expect(GameKind.battleship.matchLengths == 1...3 && GameKind.basketball.clampLength(9) == 6)
     }
 
     @Test func gamesAreRefusedWhileExhaustedOnTheTopStagesAndInAnExercise() {
@@ -149,7 +150,6 @@ struct GameLaunchTests {
         #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 3, exercise: false) == .topStage)
         #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 4, exercise: false) == .topStage)
         #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 0, exercise: true) == .exercise)
-        #expect(GameGate.refusal(kind: .checkers, exhausted: false, stage: 0, exercise: false) == .notReady)
     }
 
     @Test func theHistoryKeepsAReadableJSONObject() throws {

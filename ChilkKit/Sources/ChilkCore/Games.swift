@@ -6,8 +6,8 @@ import Foundation
 public enum GameKind: String, CaseIterable, Codable, Sendable, CodingKeyRepresentable {
     case ticTacToe = "tictactoe", basketball, battleship, checkers
 
-    /// Slice 7a ships tic-tac-toe, 7b basketball, 7c battleship; 7d checkers.
-    public static let ready: [GameKind] = [.ticTacToe, .basketball, .battleship]
+    /// Slice 7a ships tic-tac-toe, 7b basketball, 7c battleship, 7d checkers.
+    public static let ready: [GameKind] = [.ticTacToe, .basketball, .battleship, .checkers]
 }
 
 /// When each game was last played — «давай поиграем» without a name picks the one not played for longest.
@@ -38,6 +38,18 @@ public struct GameHistory: Codable, Equatable, Sendable {
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         try e.encode(self).write(to: url, options: .atomic)
     }
+}
+
+extension GameKind {
+    /// How long a match may be: games (throws in basketball); long board games 1–3 (decisions 28–31).
+    public var matchLengths: ClosedRange<Int> {
+        switch self {
+        case .ticTacToe, .basketball: GameMatch.lengths
+        case .battleship, .checkers: 1...3
+        }
+    }
+
+    public func clampLength(_ n: Int) -> Int { min(matchLengths.upperBound, max(matchLengths.lowerBound, n)) }
 }
 
 public enum GameChooser {

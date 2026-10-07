@@ -40,6 +40,11 @@ final class TicTacToeModel {
     var place: (Int, Int, Int, Bool?) -> Void = { _, _, _, _ in }
     var shuffle: () -> Void = {}
     var battle: () -> Void = {}
+    // Slice 7d: draughts — the board, your selected piece, Chilk's last move.
+    var draughts: Draughts?
+    var selected: Int?
+    var lastMove: DraughtsMove?
+    var square: (Int) -> Void = { _ in }
     var again: () -> Void = {}
     var close: () -> Void = {}
 }
@@ -57,7 +62,13 @@ struct NotebookView: View {
 
     static let size = CGSize(width: 600, height: 440)
     /// Slice 7c: two seas need a wider sheet.
-    static func size(for kind: GameKind) -> CGSize { kind == .battleship ? CGSize(width: 900, height: 470) : size }
+    static func size(for kind: GameKind) -> CGSize {
+        switch kind {
+        case .battleship: CGSize(width: 900, height: 470)
+        case .checkers: CGSize(width: 640, height: 470)
+        default: size
+        }
+    }
     static let paper = Color(red: 0.985, green: 0.975, blue: 0.94)
     static let grid = Color(red: 0.55, green: 0.72, blue: 0.86).opacity(0.38)
     static let margin = Color(red: 0.9, green: 0.45, blue: 0.45).opacity(0.55)
@@ -82,6 +93,11 @@ struct NotebookView: View {
                         if model.phase == .setup { setup } else { SeaBoards(model: model) }
                     }
                     .frame(height: 240, alignment: .topLeading)
+                } else if model.kind == .checkers {
+                    Group {
+                        if model.phase == .setup { setup } else { DraughtsBoard(model: model) }
+                    }
+                    .frame(width: DraughtsBoard.side, height: DraughtsBoard.side, alignment: .topLeading)
                 } else {
                     Group {
                         if model.phase == .setup { setup } else { board }
@@ -112,13 +128,13 @@ struct NotebookView: View {
     private var setup: some View {
         VStack(alignment: .leading, spacing: 18) {
             Picker("", selection: $model.length) {
-                ForEach(Array(model.kind == .battleship ? GameMatch.battleshipLengths : GameMatch.lengths), id: \.self) {
+                ForEach(Array(model.kind.matchLengths), id: \.self) {
                     Text(verbatim: "\($0)").tag($0)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .frame(width: model.kind == .battleship ? 140 : 250)
+            .frame(width: model.kind.matchLengths.count <= 3 ? 140 : 250)
             Button(GameLines.start) { model.start(model.length) }
                 .keyboardShortcut(.defaultAction)
                 .disabled(model.card != nil)
