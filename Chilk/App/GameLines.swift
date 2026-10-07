@@ -69,3 +69,31 @@ enum GameLines {
 
     static var busy: String { String(localized: "Сейчас занят — давай чуть позже") }
 }
+
+/// Slice 7b: basketball's words (decisions 27–28, 32).
+enum CourtLines {
+    static var willIScore: String { String(localized: "Попаду?") }
+    static var hit: String { String(localized: "Попадёт") }
+    static var miss: String { String(localized: "Мимо") }
+    static var throwsLabel: String { String(localized: "Бросков:") }
+    static var guessIt: String { String(localized: "Попадёт или мимо?") }
+    static var guessed: String { String(localized: "Угадал!") }
+    static var notGuessed: String { String(localized: "Не угадал") }
+    static var highFive: String { String(localized: "Пять!") }
+    static var putAway: String { String(localized: "Ладно, мяч убрал") }
+    static var goOn: String { String(localized: "Продолжить") }
+
+    static func score(you: Int, chilk: Int, shot: Int, of length: Int) -> String {
+        String(localized: "Ты \(you) : \(chilk) Чилк · бросок \(shot) из \(length)")
+    }
+
+    static func goOnAfterCall(you: Int, chilk: Int) -> String {
+        String(localized: "Ну что, продолжаем? Счёт \(you) : \(chilk)")
+    }
+
+    /// Decision 32: a call — the only exception from his tact; a line from the day's Codex batch now and then.
+    static var shush: [String] {
+        [String(localized: "Ой, у тебя созвон — сори, сворачиваюсь 🤫"), String(localized: "Всё-всё, меня тут нет"),
+         String(localized: "Доброшу потом. Тсс!"), String(localized: "Кольцо унёс, не палимся")]
+    }
+}

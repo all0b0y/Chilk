@@ -137,6 +137,13 @@ public enum Act: Sendable, Equatable {
     case leap(seconds: Double, dir: Double)
     /// Slice 6f-2: the disco dance — sways on the beat, arms up in turn, a spin now and then, no jumps; a bow at the end.
     case dance(seconds: Double)
+    /// Slice 7b (decision 27): a basketball throw — the ball up over his head in both hands, a little crouch, and off
+    /// it goes into the screen at `shootRelease`; the arms follow through.
+    case shoot
+    /// Slice 7b (decision 28, you won the match): claps — the mittens meet in front of him six times, a happy face.
+    case clap
+    /// Slice 7b (decision 28, a draw): «пять!» — one arm up towards the screen, the palm open, a little hop.
+    case highFive
 
     public var duration: Double {
         switch self {
@@ -157,13 +164,21 @@ public enum Act: Sendable, Equatable {
         case .mope: 2.8
         case .leap(let s, _): s
         case .dance(let s): s
+        case .shoot: 1.15
+        case .clap: 1.9
+        case .highFive: 1.8
         }
     }
+
+    /// The ball leaves his hands this long after the throw starts (the app's flight takes over there).
+    public static let shootRelease = 0.7
+    /// The ball in his hands at the release, figure space (body centre = origin, y down, the screen edge at +x).
+    public static let releaseBall = CGPoint(x: -52, y: -44)
 
     /// An emotion (slice 6c): he comes out to show it; petting and antics wait.
     public var isEmotion: Bool {
         switch self {
-        case .cheer, .laugh, .clown, .sulk, .spin, .mope, .shrug: true
+        case .cheer, .laugh, .clown, .sulk, .spin, .mope, .shrug, .clap, .highFive: true
         default: false
         }
     }
@@ -215,6 +230,8 @@ public struct CharacterPose: Sendable, Equatable {
     /// The eyes mirror (decision 4): 0 = fine, 1 = eyes at ¾ with clear lavender bags under them.
     public var eyeStrain: Double = 0
     public var hands: [Hand] = []
+    /// Slice 7b: the basketball in his hands (figure space), `nil` when he has none.
+    public var ball: CGPoint?
     /// The speck he is about to catch (scene coordinates).
     public var speck: CGPoint?
     /// Extra spin of the two leaves around the stem tip (propeller while cheering).
@@ -483,6 +500,7 @@ public final class CharacterSim {
             m.deadpan = a == .clown && k >= 1.7 && k < 3.2
             m.sulking = a == .sulk && k >= 0.7
             m.shrugging = a == .shrug && k < 1.4
+            if a == .clap || a == .highFive { m.cheering = k < a.duration - 0.2 }     // 7b: the happy ^ ^ face
         }
         if currentAntic == .catchSpeck, time < anticUntil {
             let k = time - anticStart
@@ -690,6 +708,40 @@ public final class CharacterSim {
         case .offended: perform(.sulk)
         case .shrug: perform(.shrug)
         }
+    }
+
+    /// Slice 7b (decision 28): the end of a basketball match — he claps (with your big firework), cheers, or «пять!».
+    public func finale(_ f: CourtFinale) {
+        switch f {
+        case .fireworksAndClap: perform(.clap)
+        case .cheer: perform(.cheer)
+        case .highFive: perform(.highFive)
+        }
+    }
+
+    /// Slice 7b: the ball in his hands during a throw, in figure space; `nil` once it is gone. Held at his chest, a
+    /// dip, then pushed up and forward into the screen (his arms are too short to hold it over his head).
+    public var ballInHands: CGPoint? {
+        guard act == .shoot else { return nil }
+        let k = time - actStart
+        guard k < Act.shootRelease else { return nil }
+        let r = Act.releaseBall
+        if k < 0.3 {                                                    // picked up: from his side to his chest
+            let u = Self.ease(k / 0.3)
+            return CGPoint(x: -40 + 34 * u, y: 24 - 10 * u)
+        }
+        if k < 0.55 {                                                   // a dip for the push
+            let u = Self.ease((k - 0.3) / 0.25)
+            return CGPoint(x: -6, y: 14 + 8 * u)
+        }
+        let u = Self.ease((k - 0.55) / (Act.shootRelease - 0.55))       // and up, forward into the screen
+        return CGPoint(x: -6 + (r.x + 6) * u, y: 22 + (r.y - 22) * u)
+    }
+
+    /// The point in scene space (y down) of a point in his figure space.
+    public func scenePoint(figure p: CGPoint) -> CGPoint {
+        let c = bodyCenter
+        return CGPoint(x: c.x + p.x, y: c.y + p.y)
     }
 
     /// Slice 6c (decision 11): an emotion Codex asked for, played at once.
@@ -994,6 +1046,19 @@ public final class CharacterSim {
                 }
             }
             if k >= landAt, actBeats < 1000 { squash.impulse(8); leaf.impulse(-6 * dir); actBeats = 1000 }   // landing
+        case .shoot:
+            beat(0.35) { squash.impulse(3) }                                   // a little crouch under the ball
+            beat(0.6) { squash.impulse(-5); leaf.impulse(-6) }                 // and up into the throw
+            lookX.target = -0.8
+            lookY.target = k < Act.shootRelease ? -0.55 : -0.35               // at the hoop, then after the ball
+        case .clap:
+            if k < 1.7, k >= Double(actBeats) * 0.28 { squash.impulse(1.6); leaf.impulse(actBeats % 2 == 0 ? 3 : -3); actBeats += 1 }
+            lookX.target = -0.4
+            lookY.target = -0.1
+        case .highFive:
+            beat(0.45) { squash.impulse(4); hop.impulse(-120); leaf.impulse(5) }
+            lookX.target = -0.7
+            lookY.target = -0.3
         case .dance(let s):
             let beat = Self.danceBeat, bowAt = s - Self.danceBow
             if k < bowAt {
@@ -1134,6 +1199,32 @@ public final class CharacterSim {
             let left = Int(k / Self.danceBeat) % 2 == 0
             let w = sin(k * 14) * 0.15
             return [left ? Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true) : Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]
+        }
+        if act == .shoot {
+            // 7b: the mittens on both sides of the ball; after the push, the arm on the screen side follows through.
+            let k = t - actStart
+            if let b = ballInHands {
+                let x = Double(b.x) / metrics.radiusX, y = Double(b.y) / metrics.radiusY, w = 13 / metrics.radiusX
+                return [Hand(x: x - w, y: y + 0.05, angle: -1.35), Hand(x: x + w, y: y + 0.05, angle: 1.35)]
+            }
+            guard k < 1.05 else { return [] }
+            let down = Self.ease((k - 0.85) / 0.2)
+            return [Hand(x: -0.8, y: -0.3, angle: -0.75 - 0.9 * down, arm: true)]
+        }
+        if act == .clap {
+            // 7b: palms facing each other in front of his tummy, meeting on every beat.
+            let k = t - actStart
+            guard k < 1.75 else { return [] }
+            let open = abs(cos(k * .pi / 0.28))
+            return [Hand(x: -0.13 - 0.3 * open, y: 0.42, angle: -1.35 + 0.25 * open),
+                    Hand(x: 0.13 + 0.3 * open, y: 0.42, angle: 1.35 - 0.25 * open)]
+        }
+        if act == .highFive {
+            // 7b: «пять!» — one arm up towards the screen (and you), the palm open.
+            let k = t - actStart
+            let u = Self.ease(min(1, k / 0.25)) * (1 - Self.ease(max(0, (k - 1.5) / 0.25)))
+            guard u > 0.15 else { return [] }
+            return [Hand(x: -0.8, y: -0.25, angle: -0.2 - 0.45 * u, arm: true)]
         }
         if act == .shrug {
             // 7a: both arms out, palms up — open within 0.2 s, held, lowered over the last 0.3 s.
@@ -1378,6 +1469,7 @@ public final class CharacterSim {
         p.sag = sag
         p.eyeStrain = strainShown
         p.hands = hands
+        p.ball = ballInHands
         p.speck = currentAntic == .catchSpeck && t < anticUntil ? speckPoint(k: t - anticStart) : nil
         if act == .cheer, t - actStart < 1.7 {
             let u = (t - actStart) / 1.7

@@ -172,6 +172,13 @@ func previews(into dir: URL) throws {
         ("68-shrug", sim({ $0.react(.shrug) }, seconds: 0.7, pointer: lookIn), false),
         ("69-shrug-left", sim({ $0.react(.shrug) }, seconds: 0.7, pointer: lookIn), true),
         ("70-game-think", sim({ $0.perform(.think(seconds: 1.2)) }, seconds: 0.6, pointer: lookIn), false),
+        // Slice 7b: basketball — the ball over his head, the swing, the follow-through; claps; «пять!».
+        ("71-shoot-hold", sim({ $0.perform(.shoot) }, seconds: 0.25, pointer: lookIn), false),
+        ("72-shoot-swing", sim({ $0.perform(.shoot) }, seconds: 0.64, pointer: lookIn), false),
+        ("73-shoot-follow", sim({ $0.perform(.shoot) }, seconds: 0.85, pointer: lookIn), true),
+        ("74-clap", sim({ $0.finale(.fireworksAndClap) }, seconds: 0.5, pointer: lookIn), false),
+        ("75-high-five", sim({ $0.say("Пять!", duration: 20); $0.finale(.highFive) }, seconds: 0.7, pointer: lookIn), false),
+        ("76-high-five-left", sim({ $0.finale(.highFive) }, seconds: 0.7, pointer: lookIn), true),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),
         ("61-bubble-laugh", sim({ $0.say("Почему программисты путают Хэллоуин и Рождество? 31 OCT = 25 DEC", duration: 20)
@@ -207,6 +214,22 @@ func previews(into dir: URL) throws {
         DiscoBall.draw(in: ctx, width: DiscoBall.width, drop: 170, time: 2.3)
     }
     writePNG(ball, to: dir.appendingPathComponent("58-disco-ball.png"))
+    // Slice 7b: the hoop (he is to the right of it), a ball in flight, a small firework over it.
+    let court = render(CGSize(width: 300, height: 300)) { ctx in
+        ctx.setFillColor(CGColor(srgbRed: 0.98, green: 0.95, blue: 0.89, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 300, height: 300))
+        let outline = palette.outline.cgColor
+        ctx.saveGState(); ctx.translateBy(x: 120, y: 170)
+        CourtArt.hoop(ctx, facing: 1, swing: 0.3, outline: outline)
+        ctx.restoreGState()
+        ctx.saveGState(); ctx.translateBy(x: 236, y: 120)
+        CourtArt.ball(ctx, spin: 0.6, outline: outline, lw: 1)
+        ctx.restoreGState()
+        var rng = SeededRandom(seed: 3)
+        let show = Fireworks.small(at: CGPoint(x: 140, y: 230), rng: &rng)
+        CourtArt.sparks(ctx, show, at: 0.35, origin: .zero, height: 300)
+    }
+    writePNG(court, to: dir.appendingPathComponent("77-court.png"))
     let dock = render(CGSize(width: 200, height: 70)) { ctx in
         ctx.setFillColor(CGColor(srgbRed: 0.2, green: 0.21, blue: 0.25, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 70))

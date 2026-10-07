@@ -6,8 +6,8 @@ import Foundation
 public enum GameKind: String, CaseIterable, Codable, Sendable, CodingKeyRepresentable {
     case ticTacToe = "tictactoe", basketball, battleship, checkers
 
-    /// Slice 7a ships tic-tac-toe; 7b–7d add the rest.
-    public static let ready: [GameKind] = [.ticTacToe]
+    /// Slice 7a ships tic-tac-toe, 7b basketball; 7c–7d add the rest.
+    public static let ready: [GameKind] = [.ticTacToe, .basketball]
 }
 
 /// When each game was last played — «давай поиграем» without a name picks the one not played for longest.

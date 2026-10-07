@@ -147,6 +147,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         game.conversationActive = { [weak conversation, weak actions] in
             (conversation?.isActive ?? false) || (actions?.noticeWaiting ?? false)
         }
+        game.court.log = { [weak balance] in balance?.log($0) }
+        game.court.conversationActive = game.conversationActive
+        // Decision 32: the user's call puts the hoop away with a «тсс»; full screen — quietly.
+        let demoCall = ProcessInfo.processInfo.environment["CHILK_DEMO_CALL"].map { $0.split(separator: ",").compactMap { Double($0) } }
+        let launched = Date()
+        game.court.inCall = { [weak balance] in
+            if let d = demoCall, d.count == 2 {
+                let t = Date().timeIntervalSince(launched)
+                return t >= d[0] && t < d[0] + d[1]
+            }
+            return balance?.lastSignals?.inCall ?? false
+        }
+        game.court.fullScreen = { [weak balance] in demoCall == nil && (balance?.lastSignals?.fullscreen ?? false) }
         actions.openGame = { [weak game] kind, length in game?.request(kind, length: length) ?? .failure("Games unavailable") }
         tray.playGame = { [weak game] kind in game?.playFromPopover(kind) }
         tray.savedGame = { [weak game] in game?.savedScore }
@@ -243,9 +256,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Bubble buttons: a conversation's own («Подробнее», «Да / Нет»), the greeting's, then the balance's.
         let balanceButton = edge.onButton
-        edge.onButton = { [weak conversation, weak greeting] i in
+        edge.onButton = { [weak conversation, weak greeting, weak game] i in
             if conversation?.pressedButton(i) == true { return }
             if greeting?.pressedButton(i) == true { return }
+            if game?.pressedButton(i) == true { return }             // 7b: basketball's own bubbles
             balanceButton?(i)
         }
         ears.onWake = { [weak conversation] in conversation?.wake() }
@@ -282,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !registerHotkey(settings.settings.hotkey) { _ = registerHotkey(.standard) }
         let env = ProcessInfo.processInfo.environment
         if let spec = env["CHILK_DEMO_GAME"] { game.demo(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
+        if let spec = env["CHILK_DEMO_COURT"] { game.demoCourt(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         // SPEC «Умолчания»: launch at login is on until the user switches it off (not in isolated acceptance runs).
         // Saved only once it really worked: a failed registration is tried again at the next launch.
         if settings.settings.launchAtLogin == nil, env["CHILK_STATE_DIR"] == nil {

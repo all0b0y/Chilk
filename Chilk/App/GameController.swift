@@ -23,9 +23,13 @@ final class GameController: NSObject, NSWindowDelegate {
     /// A voice conversation keeps him until its follow-up window ends.
     private static let waitLimit: TimeInterval = 60
 
+    /// Slice 7b: basketball on the screen (Chilk plays at his edge).
+    let court: CourtController
     /// The notebook holds Chilk: he is not at the edge.
-    private(set) var holdsChilk = false
-    var isOpen: Bool { window != nil }
+    private var notebookHolds = false
+    /// A game holds Chilk (the notebook, or basketball at his edge): nothing else may use him.
+    var holdsChilk: Bool { notebookHolds || court.holdsChilk }
+    var isOpen: Bool { window != nil || court.isOpen }
     var log: (String) -> Void = { _ in }
     /// Chilk is free at the edge: nothing else holds him (a stage 1–2 request bubble does not — it comes along).
     var isFree: () -> Bool = { true }
@@ -47,6 +51,7 @@ final class GameController: NSObject, NSWindowDelegate {
     private var afterClose: (() -> Void)?
     /// A game paused for a break (stage 3, «измотан», «Иду»): «Доиграем?» after the rest, until the end of the day.
     struct SavedGame {
+        let kind: GameKind
         let match: GameMatch
         let board: TicTacToe?
         let youToMove: Bool
@@ -61,8 +66,17 @@ final class GameController: NSObject, NSWindowDelegate {
     init(edge: EdgeController, balance: BalanceController, seed: UInt64? = nil) {
         self.edge = edge
         self.balance = balance
-        rng = SeededRandom(seed: seed ?? UInt64(Date().timeIntervalSince1970 * 1000))
+        let seed = seed ?? UInt64(Date().timeIntervalSince1970 * 1000)
+        rng = SeededRandom(seed: seed)
+        court = CourtController(edge: edge, balance: balance, seed: seed)
         super.init()
+        court.onPause = { [weak self] match in
+            guard let self else { return }
+            self.saved = SavedGame(kind: .basketball, match: match, board: nil, youToMove: true, at: Date(),
+                                   restMark: self.balance.lastRestMark)
+            self.offerNotBefore = nil
+        }
+        court.onClosed = { [weak self] in if self?.saved != nil { self?.startOfferWatch() } }
         hero.fatigue = { [weak edge] in edge?.sim.fatigue ?? 0 }
         hero.eyeStrain = { [weak edge] in edge?.sim.eyeStrain ?? 0 }
         model.start = { [weak self] n in self?.begin(length: n) }
@@ -81,11 +95,16 @@ final class GameController: NSObject, NSWindowDelegate {
             log("game \(kind.rawValue) refused: \(refusal.rawValue)")
             return GameLines.refusal(refusal)
         }
-        balance.yieldToGame()                              // a request bubble (stage 1–2) moves into the notebook
-        if let window {                                    // already open: just bring it up
+        balance.yieldToGame()                              // a request bubble (stage 1–2) moves into the game
+        if kind == .ticTacToe, let window {                // already open: just bring it up
             if let length, model.phase == .setup || model.phase == .matchOver { begin(length: length) }
             window.makeKeyAndOrderFront(nil)
             return nil
+        }
+        if kind == .basketball, court.isOpen { return nil }
+        if isOpen {                                        // another game is on: it ends, he comes back, then this one
+            log("game \(kind.rawValue): the other game closes first")
+            if window != nil { close() } else { court.close() }
         }
         guard isFree() else {
             // The conversation that asked for the game, a due notice or his entrance: open once he is free (≤ 60 s).
@@ -112,7 +131,11 @@ final class GameController: NSObject, NSWindowDelegate {
         stopOffer()
         history.played(kind, at: Date())
         try? history.save(to: Self.historyFile)
-        holdsChilk = true
+        if kind == .basketball {                           // on the screen: he stays at his edge and throws
+            court.open(length: length, restoring: restoring?.match, activate: !deferred)
+            return nil
+        }
+        notebookHolds = true
         edge.sim.standOut = .away                          // he ducks behind the screen edge …
         model.match = GameMatch()
         model.board = TicTacToe()
@@ -316,8 +339,8 @@ final class GameController: NSObject, NSWindowDelegate {
         model.note = nil
         let then = afterClose
         afterClose = nil
-        if holdsChilk {
-            holdsChilk = false
+        if notebookHolds {
+            notebookHolds = false
             if !lent, edge.sim.standOut == .away {
                 edge.sim.standOut = .docked                // back at his place (hidden: behind the edge again)
                 // «Иду» from a note starts the promised rest itself; otherwise what waited while he played.
@@ -422,10 +445,10 @@ final class GameController: NSObject, NSWindowDelegate {
         let mark = balance.lastRestMark
         switch model.phase {
         case .yourMove, .chilkThinks:
-            saved = SavedGame(match: model.match, board: model.board, youToMove: model.phase == .yourMove, at: Date(),
-                              restMark: mark)
+            saved = SavedGame(kind: .ticTacToe, match: model.match, board: model.board, youToMove: model.phase == .yourMove,
+                              at: Date(), restMark: mark)
         case .gameOver where !model.match.isOver:
-            saved = SavedGame(match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
+            saved = SavedGame(kind: .ticTacToe, match: model.match, board: nil, youToMove: true, at: Date(), restMark: mark)
         default:
             saved = nil                                    // the first sheet or a finished match: nothing to resume
         }
@@ -450,7 +473,7 @@ final class GameController: NSObject, NSWindowDelegate {
     /// «Доиграем?» once a rest was counted after the pause, with nothing on screen and Chilk free at the edge; kept until
     /// the day ends. Unanswered for 30 s, the bubble goes and comes back in 10 min (the popover offers it too).
     private func offerTick() {
-        guard let s = saved, window == nil else { return stopOffer() }
+        guard let s = saved, !isOpen else { return stopOffer() }
         guard Calendar.current.isDate(s.at, inSameDayAs: Date()) else {
             saved = nil
             stopOffer()
@@ -471,7 +494,7 @@ final class GameController: NSObject, NSWindowDelegate {
         log("game: «Доиграем?» offered")
         Timer.scheduledTimer(withTimeInterval: 30, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.saved != nil, self.window == nil else { return }
+                guard let self, self.saved != nil, !self.isOpen else { return }
                 if self.balance.withdrawOffer() { self.log("game: «Доиграем?» unanswered — later") }
                 self.offerNotBefore = Date().addingTimeInterval(600)
                 self.startOfferWatch()
@@ -481,7 +504,7 @@ final class GameController: NSObject, NSWindowDelegate {
 
     private func resumeSaved() {
         guard let s = saved else { return }
-        if let line = open(.ticTacToe, restoring: s) {    // `saved` is cleared only once the notebook really opens
+        if let line = open(s.kind, restoring: s) {        // `saved` is cleared only once the game really opens
             log("game: could not resume — \(line)")
             offerNotBefore = Date().addingTimeInterval(600)
             startOfferWatch()
@@ -489,12 +512,17 @@ final class GameController: NSObject, NSWindowDelegate {
     }
 
     /// The popover's games page resumes a paused game too (in any mode, Тишина included).
-    var savedScore: String? { saved.map { GameLines.finalScore(you: $0.match.you, chilk: $0.match.chilk) } }
+    var savedScore: (kind: GameKind, score: String)? {
+        saved.map { ($0.kind, GameLines.finalScore(you: $0.match.you, chilk: $0.match.chilk)) }
+    }
 
     func playFromPopover(_ kind: GameKind) -> String? {
-        if let s = saved { return open(kind, restoring: s) }
+        if let s = saved, s.kind == kind { return open(kind, restoring: s) }
         return open(kind)
     }
+
+    /// A bubble button at the edge: basketball's question, its request or «продолжаем?» — `true` = taken.
+    func pressedButton(_ i: Int) -> Bool { court.pressedButton(i) }
 
     // MARK: Timers
 
@@ -563,6 +591,71 @@ extension GameController {
         }
         Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { _ = self?.open(.ticTacToe, length: length) }
+        }
+    }
+}
+
+extension GameController {
+    /// CHILK_DEMO_COURT="<length>:<h|m…>" — basketball 3 s after launch with that many throws; each «Попаду?» is
+    /// answered from the list (h = «Попадёт», m = «Мимо») 1.2 s after it shows; a request bubble and «продолжаем?»
+    /// get their first button; CHILK_DEMO_COURT_DRAG="dx,dy" drags the hoop at the first «Попаду?»;
+    /// CHILK_DEMO_GAME_SNAPSHOT=/dir writes the hoop and the sky at every phase. Closes 5 s after the match.
+    func demoCourt(_ spec: String, snapshots: String?) {
+        let parts = spec.split(separator: ":")
+        let length = parts.first.flatMap { Int($0) } ?? 3
+        var script = Array(parts.count > 1 ? String(parts[1]) : "")
+        var shot = 0
+        var drag = ProcessInfo.processInfo.environment["CHILK_DEMO_COURT_DRAG"]?.split(separator: ",").compactMap { Double($0) }
+        if drag?.count != 2 { drag = nil }
+        func snap(_ name: String) {
+            guard let dir = snapshots else { return }
+            shot += 1
+            court.snapshot(to: URL(fileURLWithPath: dir), name: String(format: "court-%02d-%@", shot, name))
+        }
+        court.onPhase = { [weak self] phase in
+            guard let self else { return }
+            switch phase {
+            case .throwing:
+                Timer.scheduledTimer(withTimeInterval: 1.1, repeats: false) { _ in MainActor.assumeIsolated { snap("flight") } }
+            case .result:
+                Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { _ in MainActor.assumeIsolated { snap("result") } }
+            case .asking where drag != nil:
+                let d = drag!
+                drag = nil
+                self.court.demoDrag(CGSize(width: d[0], height: d[1]))
+            case .matchOver:
+                Timer.scheduledTimer(withTimeInterval: 1.2, repeats: false) { _ in MainActor.assumeIsolated { snap("finale") } }
+                Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.court.close() }
+                }
+            default: break
+            }
+        }
+        var seen: (kind: String, since: Date)?
+        Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self, self.court.isOpen else { return }
+                guard let kind = self.court.waitingBubble else { seen = nil; return }
+                if seen?.kind != kind { seen = (kind, Date()); return }
+                guard Date().timeIntervalSince(seen!.since) >= 1.2 else { return }
+                seen = nil
+                var press = 0
+                if kind == "question" {
+                    let c = script.isEmpty ? "h" : script.removeFirst()
+                    press = c == "m" ? 1 : 0
+                    snap("ask")
+                } else {
+                    snap(kind)
+                }
+                self.log("court demo: \(kind) button \(press)")
+                _ = self.court.demoPress(press)
+            }
+        }
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                _ = self.open(.basketball, length: length > 0 ? length : nil)   // 0: the scoreboard's length choice
+            }
         }
     }
 }

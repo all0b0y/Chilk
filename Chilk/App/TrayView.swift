@@ -48,7 +48,7 @@ final class TrayModel {
     var games: [GameKind] = GameKind.ready
     var gameRefusal: String?
     /// A paused game («Доиграть: Ты 1 : 0 Чилк»).
-    var resumeNote: String?
+    var resumeNote: [GameKind: String] = [:]
     var play: (GameKind) -> Void = { _ in }
     /// «Открыть Чилка» → the main window on «Сегодня»; «Настройки» → on «Настройки» (slice 5c).
     var openMain: () -> Void = {}
@@ -290,7 +290,7 @@ struct TrayView: View {
                         Image(systemName: Self.gameIcon(kind)).font(.title2).frame(width: 30)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(GameLines.name(kind)).font(.body.weight(.medium))
-                            Text(model.resumeNote.map(GameLines.resumeNote) ?? Self.gameNote(kind))
+                            Text(model.resumeNote[kind].map(GameLines.resumeNote) ?? Self.gameNote(kind))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -317,6 +317,7 @@ struct TrayView: View {
     private static func gameNote(_ kind: GameKind) -> String {
         switch kind {
         case .ticTacToe: String(localized: "Ты — крестики, матч из 1–6 партий")
+        case .basketball: String(localized: "Чилк бросает — ты угадываешь")
         default: ""
         }
     }

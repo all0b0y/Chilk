@@ -10,13 +10,27 @@ public struct PhraseBatch: Codable, Equatable, Sendable {
     public var day: String
     public var lines: [Need: [Step: [String]]]
     public var ideas: [Period: [String]]
+    /// Slice 7b (decision 32): what he says putting the basketball away when the user's call starts («тсс»).
+    public var shush: [String] = []
 
     public enum Step: String, CaseIterable, Codable, CodingKeyRepresentable, Sendable { case polite, insist }
 
-    public init(day: String, lines: [Need: [Step: [String]]] = [:], ideas: [Period: [String]] = [:]) {
+    public init(day: String, lines: [Need: [Step: [String]]] = [:], ideas: [Period: [String]] = [:], shush: [String] = []) {
         self.day = day
         self.lines = lines
         self.ideas = ideas
+        self.shush = shush
+    }
+
+    private enum CodingKeys: String, CodingKey { case day, lines, ideas, shush }
+
+    /// Field by field: a batch saved before 7b (no `shush`) still loads.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        day = try c.decode(String.self, forKey: .day)
+        lines = (try? c.decodeIfPresent([Need: [Step: [String]]].self, forKey: .lines)) ?? [:]
+        ideas = (try? c.decodeIfPresent([Period: [String]].self, forKey: .ideas)) ?? [:]
+        shush = (try? c.decodeIfPresent([String].self, forKey: .shush)) ?? []
     }
 
     public func lines(for need: Need, stage: Int) -> [String] { lines[need]?[stage >= 2 ? .insist : .polite] ?? [] }
@@ -52,8 +66,9 @@ public struct PhraseBatch: Codable, Equatable, Sendable {
                           "required": needs, "additionalProperties": false],
                 "ideas": ["type": "object", "properties": Dictionary(uniqueKeysWithValues: periods.map { ($0, list) }),
                           "required": periods, "additionalProperties": false],
+                "shush": list,
             ],
-            "required": ["lines", "ideas"],
+            "required": ["lines", "ideas", "shush"],
             "additionalProperties": false,
         ]
     }
@@ -77,6 +92,7 @@ public struct PhraseBatch: Codable, Equatable, Sendable {
             let clean = tidy(ideas[period.rawValue]).map { $0.hasPrefix(ideaPrefix) ? $0 : ideaPrefix + lowercasedFirst($0) }
             if !clean.isEmpty { batch.ideas[period] = clean }
         }
+        batch.shush = tidy(root["shush"])
         return batch.lines.isEmpty && batch.ideas.isEmpty ? nil : batch
     }
 

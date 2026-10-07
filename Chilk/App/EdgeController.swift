@@ -559,12 +559,16 @@ final class EdgeController: NSObject {
     var homeIsBuiltin: Bool { home.builtin }
 
     /// 6f-2: his body centre on screen (AppKit, y-up) and the top of his screen's visible frame (the disco ball).
-    var bodyOnScreen: CGPoint {
-        let c = sim.bodyCenter
+    var bodyOnScreen: CGPoint { screenPoint(scene: sim.bodyCenter) }
+    var screenTop: CGFloat { visibleFrame.maxY }
+    /// 7b: the visible frame of the monitor he lives on (the basketball hoop and the ball's flight stay on it).
+    var homeVisibleFrame: CGRect { visibleFrame }
+
+    /// A point of his scene (y down, docked to the right) on screen (AppKit, y up), mirrored at the left edge.
+    func screenPoint(scene c: CGPoint) -> CGPoint {
         let x = isMirrored ? metrics.width - Double(c.x) : Double(c.x)
         return CGPoint(x: Double(sceneOrigin.x) + x, y: Double(sceneOrigin.y) + metrics.height - Double(c.y))
     }
-    var screenTop: CGFloat { visibleFrame.maxY }
 
     private static func isBuiltin(_ s: NSScreen) -> Bool {
         guard let n = s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return false }

@@ -24,4 +24,17 @@ enum WindowSnapshot {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         return (try? png.write(to: url)) != nil
     }
+
+    /// Acceptance: a screen rectangle (AppKit coordinates) with everything on it that this process may see — without
+    /// Screen Recording only Chilk's own windows (the edge, the hoop, the ball) over an empty background.
+    @discardableResult
+    static func writeScreen(_ rect: CGRect, to url: URL) -> Bool {
+        let onScreenOnly: UInt32 = 1 << 0, bestResolution: UInt32 = 1 << 3
+        guard let create = createImage, let main = NSScreen.screens.first else { return false }
+        let cg = CGRect(x: rect.minX, y: main.frame.maxY - rect.maxY, width: rect.width, height: rect.height)
+        guard let image = create(cg, onScreenOnly, 0, bestResolution)?.takeRetainedValue(),
+              let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else { return false }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        return (try? png.write(to: url)) != nil
+    }
 }

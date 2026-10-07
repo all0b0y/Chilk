@@ -137,8 +137,10 @@ struct GameLaunchTests {
         #expect(GameChooser.pick(ready: [.ticTacToe], lastPlayed: [.ticTacToe: now]) == .ticTacToe)
     }
 
-    @Test func onlyTicTacToeIsReadyInSevenA() {
-        #expect(GameKind.ready == [.ticTacToe])
+    @Test func ticTacToeAndBasketballAreReadyInSevenB() {
+        #expect(GameKind.ready == [.ticTacToe, .basketball])
+        #expect(GameGate.refusal(kind: .basketball, exhausted: false, stage: 0, exercise: false) == nil)
+        #expect(GameGate.refusal(kind: .battleship, exhausted: false, stage: 0, exercise: false) == .notReady)
     }
 
     @Test func gamesAreRefusedWhileExhaustedOnTheTopStagesAndInAnExercise() {

@@ -32,6 +32,8 @@ public enum Part: Hashable, Sendable {
     case strap(lw: Double)
     case hat(lw: Double)
     case mug(lw: Double)
+    /// Slice 7b: the basketball in his hands.
+    case ball(lw: Double)
     case button(title: String, hovered: Bool)
     case ear(lw: Double)
     // Slice 6a
@@ -120,17 +122,18 @@ public enum Slot {
     public static let clownNose = 33    // (6c)
     public static let hand = 34         // +0, +1 — a mitten in front of the body
     public static let mug = 36
-    public static let lamp = 37         // (6f) its warm light falls on him
-    public static let speck = 38
-    public static let confetti = 39     // +0…+7
-    public static let z = 47            // +0…+2
-    public static let ha = 50           // +0…+5 — «ХА» (6c)
-    public static let puff = 56         // +0…+4 — «пф!» (6d)
-    public static let bubbleBox = 61
-    public static let bubbleTail = 62
-    public static let bubbleStroke = 63
-    public static let button = 64       // +index
-    public static let word = 76         // +index
+    public static let ball = 37         // (7b) the basketball in his hands, in front of him
+    public static let lamp = 38         // (6f) its warm light falls on him
+    public static let speck = 39
+    public static let confetti = 40     // +0…+7
+    public static let z = 48            // +0…+2
+    public static let ha = 51           // +0…+5 — «ХА» (6c)
+    public static let puff = 57         // +0…+4 — «пф!» (6d)
+    public static let bubbleBox = 62
+    public static let bubbleTail = 63
+    public static let bubbleStroke = 64
+    public static let button = 65       // +index
+    public static let word = 77         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -198,6 +201,9 @@ extension Part {
             return box(-33, -21, 66, 33, margin: max(5.5, 3 * lw / 2 + 1.5))
         case .mug:
             return box(-16.5, -10, 25, 20, margin: 5.5)
+        case .ball(let lw):
+            let r = CourtArt.ballRadius
+            return box(-r, -r, 2 * r, 2 * r, margin: max(3.5, 2.2 * lw / 2) + 1.5)
         case .button(let title, _):
             return box(0, 0, Props.buttonWidth(title), Props.buttonHeight, margin: 1.5)
         case .ear(let lw):
@@ -449,6 +455,9 @@ extension Part {
                 ctx.addLine(to: CGPoint(x: x, y: 8.5))
             }
             ctx.strokePath()
+
+        case .ball(let lw):                                 // 7b: the basketball, seams and a shine
+            CourtArt.ball(ctx, outline: outline, lw: lw)
 
         case .mug(let lw):                                  // a mint mug, handle towards the viewer's left
             let body = CGPath(roundedRect: CGRect(x: -8, y: -9, width: 16, height: 18), cornerWidth: 3.5, cornerHeight: 3.5, transform: nil)

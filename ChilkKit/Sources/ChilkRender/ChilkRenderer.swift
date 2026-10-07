@@ -225,6 +225,9 @@ public enum ChilkRenderer {
                                  alpha: 1))
         }
 
+        if let b = p.ball {                                 // 7b: the basketball, held over his head
+            out.append(Placement(slot: Slot.ball, part: .ball(lw: lw), transform: base.translatedBy(x: b.x, y: b.y), alpha: 1))
+        }
         for (i, h) in p.hands.prefix(2).enumerated() {
             let t = base.translatedBy(x: h.x * m.radiusX, y: h.y * m.radiusY).rotated(by: h.angle)
             out.append(h.arm ? Placement(slot: Slot.arm + i, part: .arm(lw: lw), transform: t, alpha: 1)
