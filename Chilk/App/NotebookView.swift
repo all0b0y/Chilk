@@ -23,10 +23,19 @@ final class TicTacToeModel {
     var headline = GameLines.ticTacToe
     var status = GameLines.howMany
 
+    /// Decision 32: a request shown in the notebook (between games, or as a sign after 10 min).
+    var card: GameCard?
+    var answer: (Int) -> Void = { _ in }
+
     var start: (Int) -> Void = { _ in }
     var tap: (Int) -> Void = { _ in }
     var again: () -> Void = {}
     var close: () -> Void = {}
+}
+
+struct GameCard: Equatable {
+    let text: String
+    let buttons: [String]
 }
 
 /// The notebook: a sheet of squared paper, the board drawn by hand, Chilk beside it at the sheet's right edge
@@ -64,6 +73,13 @@ struct NotebookView: View {
             .padding(.bottom, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             HeroPortrait(view: hero).frame(width: hero.size.width, height: hero.size.height)
+            if let card = model.card {
+                RequestCard(card: card, answer: model.answer)
+                    .frame(width: 250)
+                    .padding(.top, 64)
+                    .padding(.trailing, 22)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
         }
         .frame(width: Self.size.width, height: Self.size.height)
         .environment(\.colorScheme, .light)
@@ -122,11 +138,36 @@ struct NotebookView: View {
     private var footer: some View {
         HStack(spacing: 10) {
             if model.phase == .matchOver {
-                Button(GameLines.again) { model.again() }.keyboardShortcut(.defaultAction)
+                Button(GameLines.again) { model.again() }.keyboardShortcut(.defaultAction).disabled(model.card != nil)
             }
             Button(GameLines.enough) { model.close() }.keyboardShortcut(.cancelAction)
         }
         .controlSize(.large)
+    }
+}
+
+/// A request pinned to the sheet like a sticky note, with the request's own buttons (decision 32).
+private struct RequestCard: View {
+    let card: GameCard
+    let answer: (Int) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(card.text)
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(NotebookView.graphite)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                ForEach(Array(card.buttons.enumerated()), id: \.offset) { i, title in
+                    Button(title) { answer(i) }.controlSize(.small)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 5).fill(Color(red: 1, green: 0.95, blue: 0.66))
+            .shadow(color: .black.opacity(0.14), radius: 3, y: 2))
+        .rotationEffect(.degrees(-1.2))
     }
 }
 

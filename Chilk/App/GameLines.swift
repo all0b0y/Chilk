@@ -44,5 +44,20 @@ enum GameLines {
         }
     }
 
+    /// Decision 32: between games a waiting request comes first.
+    static func firstThenRematch(_ n: Need) -> String {
+        switch n {
+        case .water: String(localized: "Сначала попей — потом реванш")
+        case .stretch: String(localized: "Сначала разомнись — потом реванш")
+        case .eyes: String(localized: "Сначала дай глазам отдых — потом реванш")
+        case .walk: String(localized: "Сначала прогуляйся — потом реванш")
+        case .endOfDay: String(localized: "Сначала закончим день — потом реванш")
+        }
+    }
+
+    static func resume(you: Int, chilk: Int) -> String { String(localized: "Доиграем? Счёт \(you) : \(chilk)") }
+    static var resumeYes: String { String(localized: "Доиграем") }
+    static var resumeLater: String { String(localized: "Потом") }
+
     static var busy: String { String(localized: "Сейчас занят — давай чуть позже") }
 }

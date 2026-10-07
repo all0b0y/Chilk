@@ -64,6 +64,33 @@ public enum GameGate {
     }
 }
 
+// MARK: - Games and breaks (decision 32)
+
+public enum GameBreakAction: Equatable, Sendable {
+    /// Nothing to show: play on (a waiting request shows when the game ends or the notebook closes).
+    case keepPlaying
+    /// Show the request in the notebook: between games it holds the next one; mid-game (after 10 min) it is a sign.
+    case card
+    /// Stage 3 / 4 or «измотан»: the game is saved and paused, Chilk goes to the edge; «Доиграем?» after the rest.
+    case pause
+}
+
+public enum GameBreakPolicy {
+    /// A request waits for the end of a game at most this long (a long game: battleship, checkers).
+    public static let maxWait: TimeInterval = 600
+
+    /// `stage`/`need`: the request on screen (`nil` = none); `waiting`: how long it has waited for the game.
+    public static func decide(stage: Int?, need: Need?, slumped: Bool, silent: Bool, betweenGames: Bool,
+                              waiting: TimeInterval) -> GameBreakAction {
+        if slumped { return .pause }
+        guard let stage, stage >= 1, let need else { return .keepPlaying }
+        if stage >= 3 { return .pause }
+        // Тишина: no signs. The end of the day concerns work apps only (user story 34): an evening game goes on.
+        if silent || need == .endOfDay { return .keepPlaying }
+        return betweenGames || waiting >= maxWait ? .card : .keepPlaying
+    }
+}
+
 // MARK: - A match (decisions 28–29)
 
 public enum GameResult: String, Codable, Sendable {

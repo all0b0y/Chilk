@@ -184,3 +184,37 @@ struct GameReactionTests {
         #expect(!Emotion.allCases.map(\.rawValue).contains("shrug"))
     }
 }
+
+/// Slice 7a (SPEC decision 32): a request during a game waits for the end of the game, ≤ 10 min; between games the
+/// notebook shows it; stage 3 or «измотан» pause the game; Тишина shows no signs; the evening game is not work.
+struct GameBreakPolicyTests {
+    private func decide(stage: Int?, need: Need? = .water, slumped: Bool = false, silent: Bool = false,
+                        between: Bool = false, waiting: TimeInterval = 0) -> GameBreakAction {
+        GameBreakPolicy.decide(stage: stage, need: need, slumped: slumped, silent: silent, betweenGames: between,
+                               waiting: waiting)
+    }
+
+    @Test func noRequestMeansPlayOn() {
+        #expect(decide(stage: nil, need: nil) == .keepPlaying)
+        #expect(decide(stage: 0, between: true) == .keepPlaying)          // a pantomime hint is not a request
+    }
+
+    @Test func aRequestWaitsForTheEndOfTheGameButNoLongerThanTenMinutes() {
+        #expect(decide(stage: 1) == .keepPlaying)
+        #expect(decide(stage: 2, waiting: 599) == .keepPlaying)
+        #expect(decide(stage: 2, waiting: 600) == .card)
+        #expect(decide(stage: 1, between: true) == .card)
+    }
+
+    @Test func stageThreeOrExhaustedPauseTheGame() {
+        #expect(decide(stage: 3) == .pause)
+        #expect(decide(stage: 4, between: true) == .pause)
+        #expect(decide(stage: nil, need: nil, slumped: true) == .pause)
+    }
+
+    @Test func silenceAndTheEndOfTheDayShowNoSign() {
+        #expect(decide(stage: 1, silent: true, between: true, waiting: 700) == .keepPlaying)
+        #expect(decide(stage: 2, need: .endOfDay, between: true, waiting: 700) == .keepPlaying)
+        #expect(decide(stage: 3, need: .endOfDay) == .pause)                 // Strict's dimming still wins
+    }
+}

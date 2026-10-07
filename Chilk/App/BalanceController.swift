@@ -100,6 +100,30 @@ final class BalanceController {
                          exercise: activity != nil || walking || guidedRun != nil)
     }
 
+    /// Slice 7a (decision 32): the request on screen while the notebook holds Chilk — its need, stage and the buttons
+    /// the notebook shows («Я занят» asks a follow-up at the edge, so not there).
+    var gameRequest: (need: Need, stage: Int, buttons: [Reaction])? {
+        guard let e = engine.state.episode, e.phase == .showing, e.stage >= 1 else { return nil }
+        return (e.need, e.stage, engine.buttons(for: e.need, stage: e.stage).filter { $0 != .busy })
+    }
+    var slumpedNow: Bool { engine.slumped }
+
+    /// A request's button pressed in the notebook: the same rules as at the edge.
+    func answerFromGame(_ r: Reaction) {
+        log("game: request answered \(r.rawValue)")
+        react(r)
+    }
+
+    /// A bubble with buttons at the edge for the notebook («Доиграем?»); `false` = he is not free for it now.
+    func offer(_ text: String, buttons: [(String, () -> Void)]) -> Bool {
+        guard activity == nil, !isBusy(), !engine.slumped, engine.state.episode?.phase != .showing,
+              hideout?.isHidden != true else { return false }
+        sim.standOut = .out
+        sim.say(text, buttons: buttons.map(\.0))
+        buttonActions = buttons.map { b in { [weak self] in self?.sim.standOut = .docked; b.1() } }
+        return true
+    }
+
     /// «Лежит» (6b, decision 8): the ready line he answers with instead of a conversation; `nil` = he talks.
     func refusal() -> String? {
         guard engine.refusesToTalk else { return nil }
@@ -176,15 +200,16 @@ final class BalanceController {
             MainActor.assumeIsolated { self?.tick() }
         }
         timer?.tolerance = 0.2
-        // CHILK_DEMO_DUE=stretch makes a need due 3 s after launch.
+        // CHILK_DEMO_DUE=stretch makes a need due 3 s after launch (CHILK_DEMO_DUE_AFTER=<s>: later, e.g. mid-game).
         if let raw = env["CHILK_DEMO_DUE"], let n = Need(rawValue: raw) {
-            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+            Timer.scheduledTimer(withTimeInterval: env["CHILK_DEMO_DUE_AFTER"].flatMap(Double.init) ?? 3,
+                                 repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.makeDue(n) }
             }
         }
-        // CHILK_DEMO_SLUMP=1 (acceptance): «лежит» 3 s after launch.
-        if env["CHILK_DEMO_SLUMP"] != nil {
-            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in
+        // CHILK_DEMO_SLUMP=1 (acceptance): «лежит» 3 s after launch; a number > 3 — that many seconds (7a: mid-game).
+        if let raw = env["CHILK_DEMO_SLUMP"] {
+            Timer.scheduledTimer(withTimeInterval: Double(raw).map { $0 > 3 ? $0 : 3 } ?? 3, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.makeSlumped() }
             }
         }
