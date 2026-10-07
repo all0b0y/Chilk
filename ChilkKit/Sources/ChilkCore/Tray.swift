@@ -78,16 +78,21 @@ public struct ToolSwitches: Codable, Equatable, Sendable {
         if on { off.remove(a) } else { off.insert(a) }
     }
 
-    private enum CodingKeys: String, CodingKey { case off }
+    private enum CodingKeys: String, CodingKey { case off, version }
+    /// 2 = slice 8d: Clock timers have their own switch.
+    private static let version = 2
 
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let raw = try c.decodeIfPresent([String].self, forKey: .off) ?? []
         off = Set(raw.compactMap(ChilkAbility.init(rawValue:)))
+        // Before 8d one switch «Таймеры и „скажи в 17:00“» governed timers too: switched off, it keeps them off.
+        if (try c.decodeIfPresent(Int.self, forKey: .version) ?? 1) < 2, off.contains(.timers) { off.insert(.clock) }
     }
 
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(off.map(\.rawValue).sorted(), forKey: .off)
+        try c.encode(Self.version, forKey: .version)
     }
 }

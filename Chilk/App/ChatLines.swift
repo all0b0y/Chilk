@@ -50,7 +50,8 @@ extension Lines {
             if let m = c.minutes { s.isEmpty ? String(localized: "Таймер · \(m) мин") : String(localized: "Таймер «\(s)» · \(m) мин") }
             else if let at = c.at { String(localized: "Таймер «\(s)» · \(when(at))") }
             else { String(localized: "Таймер") }
-        case .cancelTimer: String(localized: "Отменил таймер")
+        case .cancelTimer: String(localized: "Отменил сообщение")
+        case .openClock: String(localized: "Открыл «Часы»")
         case .reminder:
             if let at = c.at { String(localized: "Напоминание «\(s)» · \(when(at))") } else { String(localized: "Напоминание") }
         case .webSearch: String(localized: "Искал в интернете")
@@ -88,6 +89,7 @@ extension Lines {
         switch c.kind {
         case .timer: "timer"
         case .cancelTimer: "xmark.circle"
+        case .openClock: "timer"
         case .reminder: "checklist"
         case .webSearch: "globe"
         case .findFiles: "magnifyingglass"

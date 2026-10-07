@@ -310,13 +310,16 @@ final class Actions {
         case .timer(let title, let seconds):
             tool = "card_clock_timer"
             let length = ActionCard.duration(seconds)
-            switch await clock?.start(seconds: seconds) ?? .failed {
+            switch await clock?.start(seconds: seconds, confirmedAt: started) ?? .failed {
             case .started:
                 result = .ok(["started": true])
                 line = String(localized: "Таймер «\(title)» — \(length). Прозвонят «Часы»")
             case .notAdded:
                 result = .failure("shortcut_missing")
                 line = String(localized: "Не поставил: нет команды «Чилк». Добавь её в окне «Быстрых команд» и попроси ещё раз")
+            case .notPrepared:
+                result = .failure("shortcut_unprepared")
+                line = String(localized: "Не поставил: не смог подготовить команду «Чилк» — нет интернета?")
             case .failed:
                 result = .failure("clock_failed")
                 line = String(localized: "Не получилось — «Часы» не ответили")

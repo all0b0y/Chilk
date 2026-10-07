@@ -271,7 +271,7 @@ struct CardEditFields: View {
                 DatePicker(String(localized: "Когда"), selection: $model.date, in: Date()..., displayedComponents: [.date, .hourAndMinute])
                     .environment(\.locale, Locale(identifier: "ru_RU"))
             }
-            if model.hasMinutes { MinutesField(minutes: $model.minutes) }
+            if model.hasMinutes { MinutesField(text: $model.minutesText) }
         }
         .frame(maxWidth: 360)
     }

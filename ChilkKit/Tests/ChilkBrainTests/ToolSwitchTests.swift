@@ -27,6 +27,16 @@ struct ToolSwitchTests {
         #expect(list.first == "chilk_status")
     }
 
+    /// Slice 8d: the old one switch «Таймеры и „скажи в 17:00“» switched off keeps Clock timers off too.
+    @Test func anOldFileWithTimersOffKeepsTheClockOff() throws {
+        let old = try JSONDecoder().decode(ToolSwitches.self, from: Data(#"{"off":["timers"]}"#.utf8))
+        #expect(!old.isOn(.clock) && !old.isOn(.timers))
+        var s = ToolSwitches()
+        s.set(.timers, on: false)
+        let now = try JSONDecoder().decode(ToolSwitches.self, from: JSONEncoder().encode(s))
+        #expect(now.isOn(.clock) && !now.isOn(.timers))                 // a new file: the switches are separate
+    }
+
     /// Slice 8d: «Таймеры („Часы“)» is its own switch.
     @Test func clockOffRemovesTheClockTools() {
         var s = ToolSwitches()

@@ -50,23 +50,35 @@ public struct ClockShortcut: Sendable {
 
     // MARK: Using it
 
-    /// Added and of this version.
+    /// Added and of this version (two `shortcuts` runs: at launch and while waiting for the user's click only).
     public func state() async -> State {
-        let list = await run(["list"])
-        guard list.status == 0, list.output.split(whereSeparator: \.isNewline).contains(where: { $0 == Self.name })
-        else { return .missing }
-        return await ask(["do": "version"]).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) == Self.version }
-            == true ? .ready : .outdated
+        guard await isListed() else { return .missing }
+        return Self.isCurrent(await ask(["do": "version"])) ? .ready : .outdated
     }
 
-    /// Starts a Clock timer for `seconds` (counted from now).
-    public func startTimer(seconds: Int) async throws(Failure) {
-        let result = await runShortcut(["do": "start", "seconds": max(1, seconds)])
-        guard result.status == 0 else {
-            if await state() != .ready { throw .notInstalled }
-            throw .runFailed(Self.firstLine(result.error))
-        }
+    /// A shortcut named «Чилк» is in the user's list (one cheap `shortcuts list`).
+    public func isListed() async -> Bool {
+        let list = await run(["list"])
+        return list.status == 0 && list.output.split(whereSeparator: \.isNewline).contains { $0 == Self.name }
     }
+
+    private static func isCurrent(_ output: String?) -> Bool {
+        output?.trimmingCharacters(in: .whitespacesAndNewlines) == version
+    }
+
+    /// Starts a Clock timer for `seconds` (counted from now) — one run: the shortcut answers with its version.
+    /// Returns `false` when the timer started but the shortcut is an older version (offer the new one).
+    @discardableResult
+    public func startTimer(seconds: Int) async throws(Failure) -> Bool {
+        let result = await runShortcut(["do": "start", "seconds": max(1, seconds)])
+        if result.status == 0 { return Self.isCurrent(result.output) }
+        if result.status == Self.timedOut { throw .runFailed("timeout") }
+        if await !isListed() { throw .notInstalled }
+        throw .runFailed(Self.firstLine(result.error))
+    }
+
+    /// The status a run gets when it was stopped after 60 s.
+    public static let timedOut: Int32 = -2
 
     private func ask(_ input: [String: Any]) async -> String? {
         let result = await runShortcut(input)
@@ -182,26 +194,52 @@ public struct ClockShortcut: Sendable {
 
     /// `/usr/bin/shortcuts` off the main thread, 60 s at most (a stuck run must not hold the card's result forever).
     public static let processRunner: Runner = { args in
+        await run(executable: "/usr/bin/shortcuts", args, timeout: 60)
+    }
+
+    /// Output goes to files, not pipes (a full pipe would block the child). After `timeout`: SIGTERM, 3 s later
+    /// SIGKILL; the run then reports `timedOut`.
+    public static func run(executable: String, _ args: [String], timeout: TimeInterval) async -> Run {
         await withCheckedContinuation { (done: CheckedContinuation<Run, Never>) in
             DispatchQueue.global(qos: .userInitiated).async {
+                let dir = FileManager.default.temporaryDirectory
+                let id = UUID().uuidString
+                let outURL = dir.appending(path: "chilk-sc-\(id).out"), errURL = dir.appending(path: "chilk-sc-\(id).err")
+                defer {
+                    try? FileManager.default.removeItem(at: outURL)
+                    try? FileManager.default.removeItem(at: errURL)
+                }
+                guard FileManager.default.createFile(atPath: outURL.path, contents: nil),
+                      FileManager.default.createFile(atPath: errURL.path, contents: nil),
+                      let out = try? FileHandle(forWritingTo: outURL), let err = try? FileHandle(forWritingTo: errURL)
+                else { done.resume(returning: Run(status: -1, output: "", error: "could not create output files")); return }
                 let p = Process()
-                p.executableURL = URL(fileURLWithPath: "/usr/bin/shortcuts")
+                p.executableURL = URL(fileURLWithPath: executable)
                 p.arguments = args
-                let out = Pipe(), err = Pipe()
                 p.standardOutput = out
                 p.standardError = err
+                p.standardInput = FileHandle.nullDevice
+                let exited = DispatchSemaphore(value: 0)
+                p.terminationHandler = { _ in exited.signal() }
                 do { try p.run() } catch {
-                    done.resume(returning: Run(status: -1, output: "", error: "could not start shortcuts"))
+                    try? out.close(); try? err.close()
+                    done.resume(returning: Run(status: -1, output: "", error: "could not start \(executable)"))
                     return
                 }
-                let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
-                DispatchQueue.global().asyncAfter(deadline: .now() + 60, execute: killer)
-                let o = out.fileHandleForReading.readDataToEndOfFile()
-                let e = err.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                killer.cancel()
-                done.resume(returning: Run(status: p.terminationStatus, output: String(decoding: o, as: UTF8.self),
-                                           error: String(decoding: e, as: UTF8.self)))
+                var timedOut = false
+                if exited.wait(timeout: .now() + timeout) == .timedOut {
+                    timedOut = true
+                    p.terminate()
+                    if exited.wait(timeout: .now() + 3) == .timedOut {
+                        kill(p.processIdentifier, SIGKILL)
+                        exited.wait()
+                    }
+                }
+                try? out.close(); try? err.close()
+                let o = (try? String(contentsOf: outURL, encoding: .utf8)) ?? ""
+                let e = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
+                done.resume(returning: Run(status: timedOut ? Self.timedOut : p.terminationStatus, output: o,
+                                           error: timedOut ? "timeout" : e))
             }
         }
     }

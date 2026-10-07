@@ -28,6 +28,9 @@ final class CardDesk {
     private(set) var correcting = false
     /// Expiry as last shown (the bubble and the chat are redrawn once when «Да» goes away).
     private var shownExpired = false
+    /// The minute a timer card was drawn in: its «до HH:MM» moves on with the clock.
+    private var shownMinute = 0
+    private static var minuteNow: Int { Int(Date().timeIntervalSince1970 / 60) }
     /// A result waiting for a free stage (it must not cover another bubble).
     private var pendingResult: (line: String, until: Date)?
     private var timer: Timer?
@@ -92,6 +95,7 @@ final class CardDesk {
              (.reminderComplete(let i1, _, _), .reminderChange(let i2, _, _, _, _)),
              (.reminderDelete(let i1, _, _), .reminderChange(let i2, _, _, _, _)): i1 == i2
         case (.reminder, .message), (.message, .reminder): a.when == b.when
+        case (.timer, .timer): true                       // «нет, на 10 минут» / «назови его чай»
         default: false
         }
     }
@@ -108,6 +112,7 @@ final class CardDesk {
         sim.say(words, duration: .infinity, buttons: labels)
         shown = (card.id, labels)
         shownExpired = card.expired(now: Date())
+        shownMinute = Self.minuteNow
         if let snapshot {
             shots += 1
             let name = String(format: "card-%02d-talk", shots)
@@ -274,8 +279,10 @@ final class CardDesk {
         }
         guard let card = current else { return }
         let expired = card.expired(now: Date())
-        if expired != shownExpired {                       // «Да» goes away once the time has passed — once
+        let timerMoved: Bool = if case .timer = card.kind { Self.minuteNow != shownMinute } else { false }
+        if expired != shownExpired || timerMoved {         // «Да» goes away once — or a timer's «до HH:MM» moves on
             shownExpired = expired
+            shownMinute = Self.minuteNow
             onChange()
             if showing { present(again: false) } else if inConversation { refreshInConversation() }
             return
@@ -304,6 +311,7 @@ final class CardDesk {
         shownWords = words
         shown = (card.id, labels)
         shownExpired = card.expired(now: Date())
+        shownMinute = Self.minuteNow
         showing = true
         displaced = false
         log("card shown\(again ? " again" : "")")
@@ -410,8 +418,11 @@ final class CardEditModel {
     var text: String
     let hasText: Bool
     let hasDate: Bool
-    /// Slice 8d: a Clock timer has minutes instead of a date (decision 5: «у таймера — минуты»).
-    var minutes: Int = 0
+    /// Slice 8d: a Clock timer has minutes instead of a date (decision 5: «у таймера — минуты»). Kept as typed text: a
+    /// macOS number field commits only on Return, so «Готово» clicked right after typing would save the old value.
+    var minutesText = ""
+    var minutes: Int? { Int(minutesText.trimmingCharacters(in: .whitespaces)) }
+    private var startMinutes = 0
     let hasMinutes: Bool
     /// The date the card started with: a rename of a reminder keeps its time unless the user moves it.
     private let startDate: Date?
@@ -429,7 +440,9 @@ final class CardEditModel {
             title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false; startDate = d
         case .timer(let t, let seconds):
             title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil
-            minutes = max(1, (seconds + 30) / 60)
+            let m = min(1439, max(1, (seconds + 30) / 60))
+            startMinutes = m
+            minutesText = String(m)
         }
         if case .timer = card.kind { hasMinutes = true } else { hasMinutes = false }
     }
@@ -439,7 +452,7 @@ final class CardEditModel {
     var valid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (!hasDate || date > Date() || (isChange && !dateTouched))
-            && (!hasMinutes || (1...1439).contains(minutes))
+            && (!hasMinutes || minutes.map { (1...1439).contains($0) } == true)
     }
 
     private var isChange: Bool { if case .reminderChange = original.kind { true } else { false } }
@@ -455,7 +468,8 @@ final class CardEditModel {
             kind = .reminderChange(id: id, oldTitle: old, oldDue: oldDue, title: t, due: hasDate && dateTouched ? date : due)
         case .timer(_, let seconds):
             // Untouched minutes keep the exact seconds («через 90 секунд» stays 90 s).
-            kind = .timer(title: t, seconds: minutes == max(1, (seconds + 30) / 60) ? seconds : minutes * 60)
+            let m = minutes ?? startMinutes
+            kind = .timer(title: t, seconds: m == startMinutes ? seconds : m * 60)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)
@@ -478,7 +492,7 @@ struct CardEditView: View {
                            displayedComponents: [.date, .hourAndMinute])
                     .environment(\.locale, Locale(identifier: "ru_RU"))
             }
-            if model.hasMinutes { MinutesField(minutes: $model.minutes) }
+            if model.hasMinutes { MinutesField(text: $model.minutesText) }
             HStack {
                 Spacer()
                 Button(String(localized: "Отмена"), action: cancel).keyboardShortcut(.cancelAction)
@@ -491,16 +505,22 @@ struct CardEditView: View {
     }
 }
 
-/// «Минуты: [ 25 ] ±» — a Clock timer (1 min … 23 h 59 min).
+/// «Минуты: [ 25 ] ±» — a Clock timer (1 min … 23 h 59 min); a wrong number turns the field red and «Готово» off.
 struct MinutesField: View {
-    @Binding var minutes: Int
+    @Binding var text: String
+
+    private var value: Int? { Int(text.trimmingCharacters(in: .whitespaces)) }
+    private var stepped: Binding<Int> {
+        Binding(get: { min(1439, max(1, value ?? 1)) }, set: { text = String($0) })
+    }
 
     var body: some View {
         HStack {
             Text(String(localized: "Минуты"))
             Spacer()
-            TextField("", value: $minutes, format: .number).frame(width: 64).multilineTextAlignment(.trailing)
-            Stepper("", value: $minutes, in: 1...1439).labelsHidden()
+            TextField("", text: $text).frame(width: 64).multilineTextAlignment(.trailing)
+                .foregroundStyle(value.map { (1...1439).contains($0) } == true ? Color.primary : Color.red)
+            Stepper("", value: stepped, in: 1...1439).labelsHidden()
         }
     }
 }

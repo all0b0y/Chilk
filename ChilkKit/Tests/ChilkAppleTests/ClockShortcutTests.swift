@@ -68,6 +68,32 @@ struct ClockShortcutTests {
         #expect(((try? FileManager.default.contentsOfDirectory(atPath: work.path)) ?? []).isEmpty)
     }
 
+    @Test func anOlderShortcutStillStartsButSaysSo() async throws {
+        let fake = FakeShortcuts()
+        fake.installed = ["Чилк"]
+        fake.version = "chilk-shortcut 0"
+        let current = try await ClockShortcut(workDir: dir(), run: fake.runner).startTimer(seconds: 60)
+        #expect(!current)
+        #expect(fake.calls.count == 1)                                   // one run: start answers with its version
+    }
+
+    @Test func everyReferenceInTheWorkflowPointsToAnEarlierAction() throws {
+        let actions = try #require(ClockShortcut.workflow()["WFWorkflowActions"] as? [[String: Any]])
+        var seen: Set<String> = []
+        func refs(_ v: Any) -> [String] {
+            if let d = v as? [String: Any] {
+                return (d["OutputUUID"] as? String).map { [$0] } ?? d.values.flatMap(refs)
+            }
+            if let a = v as? [Any] { return a.flatMap(refs) }
+            return []
+        }
+        for a in actions {
+            let params = a["WFWorkflowActionParameters"] as? [String: Any] ?? [:]
+            for r in refs(params) { #expect(seen.contains(r), "\(a["WFWorkflowActionIdentifier"] ?? "")") }
+            if let id = params["UUID"] as? String { seen.insert(id) }
+        }
+    }
+
     @Test func failuresSayWhetherTheShortcutIsMissing() async {
         let fake = FakeShortcuts()
         let shortcut = ClockShortcut(workDir: dir(), run: fake.runner)
@@ -118,5 +144,23 @@ struct ClockShortcutRealSignTests {
         let url = try await ClockShortcut(workDir: dir).signedFile()
         let head = try FileHandle(forReadingFrom: url).read(upToCount: 4)
         #expect(head == Data("AEA1".utf8))
+    }
+}
+
+/// The real process runner: big stderr does not block, a stuck child is stopped (SIGTERM, then SIGKILL).
+struct ClockShortcutRunnerTests {
+    @Test func aChattyChildDoesNotBlock() async {
+        let run = await ClockShortcut.run(executable: "/bin/sh",
+                                          ["-c", "head -c 300000 /dev/zero | tr '\\\\0' x >&2; echo done"], timeout: 10)
+        #expect(run.status == 0)
+        #expect(run.output == "done\n")
+        #expect(run.error.count == 300_000)
+    }
+
+    @Test func aStuckChildIsKilled() async {
+        let started = Date()
+        let run = await ClockShortcut.run(executable: "/bin/sh", ["-c", "trap '' TERM; sleep 30"], timeout: 1)
+        #expect(run.status == ClockShortcut.timedOut)
+        #expect(Date().timeIntervalSince(started) < 8)
     }
 }

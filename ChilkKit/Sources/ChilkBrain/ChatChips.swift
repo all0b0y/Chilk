@@ -70,6 +70,7 @@ public enum ChatChips {
         switch name {
         case "chilk_timer", "chilk_schedule": .timer
         case "chilk_cancel_timer": .cancelTimer
+        case "chilk_clock_open": .openClock
         case "chilk_reminder": .reminder
         case "chilk_find_files": .findFiles
         case "chilk_read_file": .readFile

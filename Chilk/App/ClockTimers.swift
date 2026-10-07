@@ -3,31 +3,25 @@ import ChilkApple
 import ChilkCore
 
 /// Slice 8d (SPEC «Срез 8», decision 9): timers ring in Apple's Clock through the shortcut «Чилк».
-/// - At launch (a new install or update) the shortcut is offered once: Chilk signs it on this Mac and opens the
-///   Shortcuts import window; the user clicks «Добавить» — no API adds a shortcut silently.
-/// - On a timer card's «Да» a missing shortcut is offered again and the timer starts as soon as it is added (≤ 90 s).
+/// - At launch of a new build the shortcut is offered: Chilk signs it on this Mac and opens the Shortcuts import
+///   window; the user clicks «Добавить» — no API adds a shortcut silently. Marked done only once it was offered.
+/// - On a timer card's «Да» the timer starts in one `shortcuts run` (it answers with its version). A missing shortcut
+///   is offered again and the timer starts as soon as it is added (≤ 90 s), still counted from «Да».
 /// - Cancel / pause / resume: macOS refuses to sign Clock's intents into a shared shortcut, so Chilk opens Clock (the
 ///   user's choice «A»).
 @MainActor
 final class ClockTimers {
     private let shortcut: ClockShortcut
     private let fake: FakeClock?
-    private let stateFile = AppState.directory.appendingPathComponent("clock-shortcut.json")
+    private let markFile = AppState.directory.appendingPathComponent("clock-shortcut-offered.txt")
     var log: (String) -> Void = { _ in }
     /// Chilk's line while he waits for the user's click: shown when the stage is free (waits up to 30 s for it).
     var speak: (String) -> Void = { _ in }
     var stageFree: () -> Bool = { false }
-
-    private func say(_ line: String) {
-        Task {
-            for _ in 0..<15 {
-                if stageFree() { speak(line); return }
-                try? await Task.sleep(for: .seconds(2))
-            }
-            log("clock: a line not shown (the stage stayed busy)")
-        }
-    }
-    private var offering: Task<Bool, Never>?
+    /// One shared «offer and wait for the click»: a second «Да» meanwhile waits for the same window, never opens another.
+    private var addition: Task<Addition, Never>?
+    private var sayTask: Task<Void, Never>?
+    private var updateOffered = false
 
     init() {
         let work = AppState.directory.appendingPathComponent("clock", isDirectory: true)
@@ -46,68 +40,105 @@ final class ClockTimers {
         (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?") + " · " + ClockShortcut.version
     }
 
+    /// The latest line only; a line still waiting for the stage is dropped when a newer one comes or it is stale.
+    private func say(_ line: String, while relevant: @escaping @MainActor () -> Bool = { true }) {
+        sayTask?.cancel()
+        sayTask = Task {
+            for _ in 0..<15 {
+                guard !Task.isCancelled, relevant() else { return }
+                if stageFree() { speak(line); return }
+                try? await Task.sleep(for: .seconds(2))
+            }
+            log("clock: a line not shown (the stage stayed busy)")
+        }
+    }
+
     /// Once per installed build: the shortcut is checked and, if missing or old, offered. Demo runs with an isolated
     /// state dir never pop the import window unless the Clock is fake.
     func checkAtLaunch() {
         let isolated = ProcessInfo.processInfo.environment["CHILK_STATE_DIR"] != nil
         guard !isolated || fake != nil else { return }
-        let offered = (try? String(contentsOf: stateFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let offered = (try? String(contentsOf: markFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard offered != Self.build else { return }
         Task {
             let state = await shortcut.state()
             log("clock shortcut at launch: \(state)")
-            guard state != .ready, offered != Self.build else { return }
-            try? Self.build.write(to: stateFile, atomically: true, encoding: .utf8)
-            say(state == .missing
-                ? String(localized: "Добавь команду «Чилк» — нажми «Добавить» в окне «Быстрых команд». Через неё ставлю таймеры в «Часах»")
-                : String(localized: "Обнови команду «Чилк» — нажми «Заменить» в окне «Быстрых команд»"))
-            _ = await offer()
-        }
-    }
-
-    /// Signs the shortcut and opens the import window. `false`: it could not even be prepared.
-    @discardableResult
-    func offer() async -> Bool {
-        if let offering { return await offering.value }
-        let task = Task { () -> Bool in
-            do {
-                let file = try await shortcut.signedFile()
-                if let fake { fake.userAdds() } else { NSWorkspace.shared.open(file) }
-                log("clock shortcut offered")
-                return true
-            } catch {
-                log("clock shortcut not offered: \(error)")
-                return false
+            if state != .ready {
+                guard await offer() else { return }               // offline: offered again at the next launch
+                say(state == .missing
+                    ? String(localized: "Добавь команду «Чилк» — нажми «Добавить» в окне «Быстрых команд». Через неё ставлю таймеры в «Часах»")
+                    : String(localized: "Обнови команду «Чилк» — нажми «Заменить» в окне «Быстрых команд»"))
             }
+            try? Self.build.write(to: markFile, atomically: true, encoding: .utf8)
         }
-        offering = task
-        let ok = await task.value
-        offering = nil
-        return ok
     }
 
-    enum StartResult { case started, notAdded, failed }
+    /// Signs the shortcut and opens the import window. `false`: it could not be prepared (no network / iCloud?).
+    private func offer() async -> Bool {
+        do {
+            let file = try await shortcut.signedFile()
+            if let fake { fake.userAdds() } else { NSWorkspace.shared.open(file) }
+            log("clock shortcut offered")
+            return true
+        } catch {
+            log("clock shortcut not offered: \(error)")
+            return false
+        }
+    }
 
-    /// The card's «Да». A missing shortcut is offered and waited for (≤ 90 s): one «Да», one click.
-    func start(seconds: Int) async -> StartResult {
-        if await shortcut.state() != .ready {
-            say(String(localized: "Нажми «Добавить» в окне «Быстрых команд» — и таймер пойдёт"))
-            guard await offer() else { return .failed }
-            var ready = false
+    private enum Addition { case added, notAdded, notPrepared }
+
+    /// Offer + wait (≤ 90 s) for «Чилк» to appear in the list; shared by every caller meanwhile.
+    private func waitForAddition() async -> Addition {
+        if let addition { return await addition.value }
+        let task = Task { () -> Addition in
+            guard await offer() else { return .notPrepared }
             for _ in 0..<45 {
                 try? await Task.sleep(for: .seconds(2))
-                if await shortcut.state() == .ready { ready = true; break }
+                if await shortcut.isListed() { return .added }
             }
-            guard ready else { log("clock shortcut not added in 90 s"); return .notAdded }
-        }
-        do {
-            try await shortcut.startTimer(seconds: seconds)
-            return .started
-        } catch .notInstalled {
+            log("clock shortcut not added in 90 s")
             return .notAdded
-        } catch {
-            log("clock timer failed: \(error)")
-            return .failed
         }
+        addition = task
+        let result = await task.value
+        addition = nil
+        return result
+    }
+
+    enum StartResult { case started, notAdded, notPrepared, failed }
+
+    /// The card's «Да» (`confirmedAt`): the timer counts from it even when the shortcut had to be added first.
+    func start(seconds: Int, confirmedAt: Date) async -> StartResult {
+        func remaining() -> Int { max(1, seconds - Int(Date().timeIntervalSince(confirmedAt).rounded())) }
+        var waiting = false
+        for attempt in 0..<2 {
+            do {
+                let current = try await shortcut.startTimer(seconds: remaining())
+                if !current, !updateOffered {
+                    updateOffered = true                           // started by the old one; offer the new once a run
+                    if await offer() {
+                        say(String(localized: "Обнови команду «Чилк» — нажми «Заменить» в окне «Быстрых команд»"))
+                    }
+                }
+                sayTask?.cancel()
+                return .started
+            } catch .notInstalled {
+                guard attempt == 0 else { return .notAdded }
+                waiting = true
+                say(String(localized: "Нажми «Добавить» в окне «Быстрых команд» — и таймер пойдёт"),
+                    while: { [weak self] in self?.addition != nil })
+                switch await waitForAddition() {
+                case .added: continue
+                case .notAdded: return .notAdded
+                case .notPrepared: return .notPrepared
+                }
+            } catch {
+                log("clock timer failed: \(error)\(waiting ? " (after adding the shortcut)" : "")")
+                return .failed
+            }
+        }
+        return .notAdded
     }
 
     /// Cancel / pause / resume: the user does it in Clock.
