@@ -35,9 +35,11 @@ struct EndOfSpeechTests {
             #expect(d.verdict(at: 4.9) == .keepListening, "\(text)")
             #expect(d.verdict(at: 5) == .done, "\(text)")
         }
-        var asked = EndOfSpeech(start: 0)
-        asked.heard("А это что?", isFinal: true, at: 1)                     // a question ends there
-        #expect(asked.verdict(at: 3) == .done)
+        for text in ["А это что?", "Напомни мне", "Что это", "Сделай так"] {     // these end a phrase
+            var asked = EndOfSpeech(start: 0)
+            asked.heard(text, isFinal: true, at: 1)
+            #expect(asked.verdict(at: 3) == .done, "\(text)")
+        }
     }
 
     @Test func aVoiceWithoutWordsWaitsAndANewWordStartsAgain() {
@@ -48,6 +50,12 @@ struct EndOfSpeechTests {
         d.voice(at: 1.8)                                                    // «э-э-э»
         #expect(d.verdict(at: 4.9) == .keepListening)
         #expect(d.waited(at: 3) == 0.5)
+        var long = d
+        long.voice(at: 4.5)                                                 // still «э-э-э» at 4.5 s
+        #expect(long.verdict(at: 5.9) == .keepListening)                    // 1.5 s quiet after the voice
+        #expect(long.verdict(at: 6.0) == .done)
+        for t in stride(from: 5.0, through: 9.0, by: 0.5) { long.voice(at: t) } // a fan that never stops
+        #expect(long.verdict(at: 9.0) == .done)                             // 8 s after the last word at most
         d.heard("Поставь таймер на пять минут", isFinal: false, at: 4)
         #expect(d.waited(at: 4) == 0)
         #expect(d.verdict(at: 5.9) == .keepListening)

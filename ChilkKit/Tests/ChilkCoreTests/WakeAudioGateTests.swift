@@ -96,7 +96,7 @@ struct WakeAudioGateTests {
         _ = feed(&quiet, Array(repeating: 0, count: 20), speech: false)
         _ = feed(&quiet, Array(repeating: 2, count: 10), speech: true)
         _ = feed(&quiet, Array(repeating: 0, count: 3), speech: false)
-        #expect(quiet.isChecking && quiet.lastClipSpeechShare < 0.2)
+        #expect(quiet.isChecking && quiet.lastClipSpeechShare < 0.5)              // 1 s of ~3 s armed: not a TV
     }
 
     /// Slice 8b (decision 17): early = the first short pause or 1.5 s; a miss goes on to the whole phrase.
@@ -108,13 +108,42 @@ struct WakeAudioGateTests {
         #expect(clips.count == 1 && gate.lastClipWasEarly)
         gate.reject()
         #expect(feed(&gate, [2, 2, 2], speech: true).isEmpty)
-        let whole = feed(&gate, [0, 0, 0, 0, 0, 0], speech: false)
+        let again = feed(&gate, [0, 0], speech: false)                              // the second early look
+        #expect(again.count == 1 && gate.lastClipWasEarly)
+        #expect(again[0].count == 2 + 5 + 2 + 3 + 2)                               // from the phrase's pre-roll
+        gate.reject()
+        #expect(feed(&gate, [0, 0, 0, 0], speech: false).isEmpty)                  // over, nothing new: no third check
+        _ = feed(&gate, [4, 4, 4, 4], speech: true)                                 // a new phrase
+        #expect(feed(&gate, [0, 0], speech: false).count == 1)
+        gate.reject()
+        _ = feed(&gate, [5, 5, 5, 5], speech: true)
+        #expect(feed(&gate, [0, 0], speech: false).count == 1 && gate.lastClipWasEarly)   // second look
+        gate.reject()
+        _ = feed(&gate, [6, 6, 6], speech: true)
+        let whole = feed(&gate, [0, 0, 0, 0, 0, 0], speech: false)                  // early looks used → whole phrase
         #expect(whole.count == 1 && !gate.lastClipWasEarly)
-        #expect(whole[0].count == 2 + 5 + 2 + 3 + 6)                               // the whole phrase from its pre-roll
+        #expect(whole[0].count == 2 + 4 + 2 + 4 + 2 + 3 + 6)
         var long = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12, early: true)
         _ = feed(&long, [0, 0], speech: false)
         let early = feed(&long, Array(repeating: 1, count: 15), speech: true)       // 1.5 s without a pause
         #expect(early.count == 1 && long.lastClipWasEarly)
+        var second = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12, early: true)
+        _ = feed(&second, [0, 0], speech: false)
+        _ = feed(&second, [1, 1, 1], speech: true)                                 // «Так,»
+        #expect(feed(&second, [0, 0], speech: false).count == 1)
+        second.reject()
+        _ = feed(&second, [2, 2, 2, 2], speech: true)                              // «Чилк,»
+        #expect(feed(&second, [0, 0], speech: false).count == 1 && second.lastClipWasEarly)
+        second.reject()
+        _ = feed(&second, [3, 3, 3, 3], speech: true)
+        #expect(feed(&second, [0, 0], speech: false).isEmpty)                      // two early looks at most
+        var over = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12, early: true)
+        _ = feed(&over, [0, 0], speech: false)
+        _ = feed(&over, [1, 1, 1, 1], speech: true)
+        _ = feed(&over, [0, 0], speech: false)                                      // early check…
+        _ = feed(&over, [0, 0, 0, 0], speech: false)                                // …the phrase ends during it
+        over.reject()
+        #expect(feed(&over, [0, 0, 0], speech: false).isEmpty)                     // nothing new: no second check
         var off = WakeAudioGate(sampleRate: 10, preRoll: 0.2, pause: 0.6, maxPhrase: 5, capacity: 12)
         _ = feed(&off, [0, 0], speech: false)
         #expect(feed(&off, Array(repeating: 1, count: 15), speech: true).isEmpty)  // off by default

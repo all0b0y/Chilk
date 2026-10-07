@@ -259,10 +259,23 @@ final class Conversation {
             sim.say(Lines.listening, duration: .infinity)
             if !wake.request.isEmpty { sim.updateBubble(request("")) }
             log("early wake amid speech: waiting for the whole phrase")
+            // The gate checks the phrase at most 5 s after it began; 8 s without an answer = the ears are stuck.
+            let deadline = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, generation == self.listeningGeneration, self.phase == .listening else { return }
+                    self.log("whole phrase: no answer in 8 s")
+                    self.stopEars()                               // suspends the input: the wait ends as cancelled
+                }
+            }
             earsTask = Task {
                 let whole = await ears.wholePhrase()
+                deadline.invalidate()
                 guard generation == listeningGeneration, !Task.isCancelled, phase == .listening else { return }
-                if let whole { heardInCheck = whole }
+                switch whole {
+                case .heard(let text?): heardInCheck = text
+                case .heard(nil): break                           // no name in the whole phrase: the early request stands
+                case .cancelled: heardInCheck = nil
+                }
                 if heardInCheck?.isEmpty != false { stopEars(); return leave(saying: Lines.didntHear, after: 3) }
                 startPoll()
                 finishListening()

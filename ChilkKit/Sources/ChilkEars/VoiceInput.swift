@@ -26,10 +26,18 @@ public final class VoiceInput {
     public typealias Recognize = @Sendable ([Float]) async throws -> String
     public enum Mode: Sendable { case suspended, wake, preparing, dictating, wholePhrase }
     public enum InputError: Error { case bufferOverrun }
+    /// The whole-phrase check after an early wake amid speech (decision 17).
+    public enum WholePhrase: Sendable, Equatable {
+        /// Whisper's request after the name in the whole phrase; nil = the name was not in it (keep the early one).
+        case heard(String?)
+        /// The ears stopped (suspend, an error, another listening) before the whole phrase was checked.
+        case cancelled
+    }
     public private(set) var mode: Mode = .suspended
     /// Bench only: the voice share before the last checked clip.
     public var lastSpeechShare: Double { gate.lastClipSpeechShare }
-    public var isChecking: Bool { (mode == .wake || mode == .wholePhrase) && gate.isChecking }
+    /// A wake check is being recognised right now.
+    public private(set) var isChecking = false
     /// When the microphone last heard a voice while dictating (systemUptime of the packet): «э-э-э» without words
     /// keeps him listening longer (slice 8b, decision 1).
     public private(set) var lastVoiceAt: TimeInterval = -.infinity
@@ -49,8 +57,12 @@ public final class VoiceInput {
     private var dictationCutoff: TimeInterval?
     private var frame: [Float] = []
     private var heardInCheck: WakeHeard?
-    private var whole: CheckedContinuation<String?, Never>?
-    private var wholeResult: String??
+    private var whole: CheckedContinuation<WholePhrase, Never>?
+    private var wholeResult: WholePhrase?
+    /// Samples of the early clip's end replayed to dictation (the 1.5 s timer may cut a word in two).
+    private var replayOverlap = 0
+    private var dictationFrame: [Float] = []
+    private var voiceRun = 0
     private let pendingLimit = 16_000 * 12
 
     public init(recognize: @escaping Recognize, gate: WakeAudioGate = WakeAudioGate()) {
@@ -77,7 +89,11 @@ public final class VoiceInput {
         dictationCutoff = nil
         heardInCheck = nil
         lastVoiceAt = -.infinity
-        resolveWhole(nil)
+        isChecking = false
+        replayOverlap = 0
+        dictationFrame.removeAll(keepingCapacity: false)
+        voiceRun = 0
+        resolveWhole(.cancelled)
         wholeResult = nil
         gate.reset()
         vad.reset()
@@ -89,6 +105,7 @@ public final class VoiceInput {
     @discardableResult
     public func prepareDictation(replayWake: Bool, at: TimeInterval = ProcessInfo.processInfo.systemUptime) throws -> WakeHeard? {
         let heard = replayWake ? heardInCheck : nil
+        if mode == .wholePhrase { resolveWhole(.cancelled) }     // a new listening ends a pending whole-phrase wait
         if let heard, heard.wholePending {
             // Keep collecting the phrase into the gate; its whole check gives the request (`wholePhrase()`).
             heardInCheck = nil
@@ -97,7 +114,7 @@ public final class VoiceInput {
             mode = .wholePhrase
             return heard
         }
-        let audio = !replayWake ? [] : heard != nil ? gate.replayAfterClip() : gate.replay()
+        let audio = !replayWake ? [] : heard != nil ? gate.replayAfterClip(overlap: replayOverlap) : gate.replay()
         guard let audio else { throw InputError.bufferOverrun }
         generation += 1             // invalidates any wake check still in flight
         task?.cancel()
@@ -108,19 +125,24 @@ public final class VoiceInput {
         overrun = false
         sink = nil
         heardInCheck = nil
+        replayOverlap = 0
+        dictationFrame.removeAll(keepingCapacity: true)
+        voiceRun = 0
         return heard
     }
 
     /// After an early wake amid speech: the request from the whole phrase (Whisper's text after the name), or nil
     /// when the whole phrase did not carry the name (then the early clip's request stands).
-    public func wholePhrase() async -> String? {
+    public func wholePhrase() async -> WholePhrase {
         if let done = wholeResult { wholeResult = nil; return done }
-        guard mode == .wholePhrase else { return nil }
+        guard mode == .wholePhrase else { return .cancelled }
+        if let old = whole { whole = nil; old.resume(returning: .cancelled) }   // one waiter at a time
         return await withCheckedContinuation { whole = $0 }
     }
 
-    private func resolveWhole(_ text: String?) {
-        if let w = whole { whole = nil; w.resume(returning: text) } else if mode == .wholePhrase { wholeResult = .some(text) }
+    private func resolveWhole(_ result: WholePhrase) {
+        if let w = whole { whole = nil; w.resume(returning: result) }
+        else if mode == .wholePhrase, result != .cancelled { wholeResult = result }
     }
 
     public func attach(_ feed: @escaping ([Float]) -> Void) throws {
@@ -146,10 +168,17 @@ public final class VoiceInput {
         case .suspended: return
         case .dictating:
             sink?(accepted)
-            // Voice activity only (decision 1): a 20 ms frame of the packet is enough, no words are kept.
-            if accepted.count >= 320, speech ?? vad.isSpeech(Array(accepted.suffix(320))) {
-                lastVoiceAt = ProcessInfo.processInfo.systemUptime    // the conversation's clock (packets arrive live)
+            // Voice activity only (decision 1), every 20 ms frame; no words are kept. A voice counts after 200 ms
+            // in a row — a key click or a knock is not «э-э-э».
+            dictationFrame += accepted
+            var used = 0
+            while dictationFrame.count - used >= 320 {
+                let chunk = Array(dictationFrame[used..<(used + 320)])
+                used += 320
+                voiceRun = (speech ?? vad.isSpeech(chunk)) ? voiceRun + 1 : 0
+                if voiceRun >= 10 { lastVoiceAt = ProcessInfo.processInfo.systemUptime }  // the conversation's clock
             }
+            dictationFrame.removeFirst(used)
         case .preparing:
             if pending.count + accepted.count <= pendingLimit { pending += accepted }
             else { pending.removeAll(); overrun = true }
@@ -168,7 +197,9 @@ public final class VoiceInput {
     private func check(_ clip: [Float]) {
         let id = generation
         let recognize = self.recognize
+        isChecking = true
         task = Task { [weak self] in
+            defer { if let self, self.generation == id { self.isChecking = false } }
             let start = ProcessInfo.processInfo.systemUptime
             do {
                 // The gate already supplies 0.7 s of pre-roll. Extra leading silence makes Whisper
@@ -182,11 +213,19 @@ public final class VoiceInput {
                 let end = ProcessInfo.processInfo.systemUptime
                 self.onCheck(text, hit, end - start)
                 if self.mode == .wholePhrase {
-                    self.resolveWhole(request)
+                    self.resolveWhole(.heard(request))
                     return
                 }
-                if let request {
+                if var request {
                     let amid = self.gate.lastClipSpeechShare > 0.5
+                    if self.gate.lastClipEarlyByTimer, !amid {
+                        // Cut by the 1.5 s timer: its last word may be half a word. Drop it and let dictation hear
+                        // the clip's last 0.5 s again.
+                        request = request.split(separator: " ").dropLast().joined(separator: " ")
+                        self.replayOverlap = 8_000
+                    } else {
+                        self.replayOverlap = 0
+                    }
                     self.heardInCheck = WakeHeard(request: request, amidSpeech: amid,
                                                   wholePending: amid && self.gate.lastClipWasEarly)
                     self.onWake()

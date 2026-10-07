@@ -157,7 +157,7 @@ final class Ears {
     var lastVoiceAt: TimeInterval { input.lastVoiceAt }
 
     /// After an early wake amid other speech: the request from the whole phrase (decision 17).
-    func wholePhrase() async -> String? { await input.wholePhrase() }
+    func wholePhrase() async -> VoiceInput.WholePhrase { await input.wholePhrase() }
 
     func attach(_ dictation: Dictation) throws {
         try input.attach { samples in

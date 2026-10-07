@@ -104,7 +104,10 @@ enum Bench {
             // Slice 8b: an early wake amid speech — the request is the whole phrase; feed on (real time) until it is checked.
             final class Box: @unchecked Sendable { var done = false; var text: String? }
             let box = Box()
-            let waiter = Task { @MainActor in box.text = await input.wholePhrase(); box.done = true }
+            let waiter = Task { @MainActor in
+                if case .heard(let text) = await input.wholePhrase() { box.text = text }
+                box.done = true
+            }
             while !box.done, i < samples.count {
                 feedChunk()
                 guard input.isChecking else { continue }

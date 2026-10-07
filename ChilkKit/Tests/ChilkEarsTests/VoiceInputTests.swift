@@ -205,7 +205,45 @@ struct VoiceInputTests {
         input.feed(Array(repeating: 0.5, count: 16_000), speech: true)
         input.feed(Array(repeating: 0, count: 9_600), speech: false)               // the phrase ends → whole check
         let whole = await input.wholePhrase()
-        #expect(whole == "поставь таймер на 10 минут")
+        #expect(whole == .heard("поставь таймер на 10 минут"))
+        input.suspend()
+    }
+
+    /// Review 8b: a pending whole-phrase wait ends when the ears stop (no eternal «Слушаю…»).
+    @Test func stoppingTheEarsEndsAWholePhraseWait() async throws {
+        let input = VoiceInput(recognize: { $0.contains(0.3) ? "Чилк, поста" : "tv" }, gate: WakeAudioGate(continuous: true, early: true))
+        var woke = false
+        input.arm { woke = true }
+        for _ in 0..<3 {
+            input.feed(Array(repeating: 0.1, count: 80_000), speech: true)
+            input.feed(Array(repeating: 0.2, count: 16_000), speech: true)
+            await until { !input.isChecking }
+        }
+        input.feed(Array(repeating: 0, count: 9_600), speech: false)
+        await until { !input.isChecking }
+        input.feed(Array(repeating: 0.3, count: 24_000), speech: true)
+        await until { woke }
+        _ = try input.prepareDictation(replayWake: true)
+        let waiting = Task { await input.wholePhrase() }
+        try? await Task.sleep(for: .milliseconds(20))
+        input.suspend()
+        #expect(await waiting.value == .cancelled)
+    }
+
+    /// Review 8b: an early check cut by the 1.5 s timer may halve its last word — it is dropped and dictation hears
+    /// the clip's last 0.5 s again.
+    @Test func anEarlyCheckCutByTheTimerDropsItsLastWord() async throws {
+        let input = VoiceInput(recognize: { _ in "Чилк, поставь тай" }, gate: WakeAudioGate(early: true))
+        var woke = false
+        input.arm { woke = true }
+        input.feed(Array(repeating: 0, count: 11_200), speech: false)
+        input.feed(Array(repeating: 0.3, count: 24_000), speech: true)             // 1.5 s without a pause
+        await until { woke }
+        input.feed(Array(repeating: 0.4, count: 1_600), speech: true)
+        #expect(try input.prepareDictation(replayWake: true) == WakeHeard(request: "поставь", amidSpeech: false))
+        var delivered: [Float] = []
+        try input.attach { delivered += $0 }
+        #expect(runs(delivered) == ["0.3×8000", "0.4×1600"])
         input.suspend()
     }
 

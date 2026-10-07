@@ -5,8 +5,9 @@ import Foundation
 ///
 /// Slice 8b (decision 1, «умная пауза»): a finished phrase ends after 2 s without new words (was 1.5 s, and 1.05 s
 /// after a final segment — the speed-up is gone). A phrase that stops on a preposition or a conjunction («…на»,
-/// «…о том что», «…и»), or a voice the microphone hears without new words («э-э-э»), waits up to 4 s. Any new word
-/// starts the count again. A whole phrase may last 45 s (was 25).
+/// «…о том что», «…и») waits 4 s. A voice the microphone hears without new words («э-э-э») waits until 1.5 s after
+/// that voice, at least 4 s and at most 8 s after the last word (a fan or a TV must not keep him for 45 s). Any new
+/// word starts the count again. A whole phrase may last 45 s (was 25).
 public struct EndOfSpeech: Sendable, Equatable {
     public enum Verdict: Sendable, Equatable {
         case keepListening
@@ -24,6 +25,9 @@ public struct EndOfSpeech: Sendable, Equatable {
     public private(set) var text = ""
     /// The microphone heard a voice after the last new word (not the tail of that word: dictation lags ~0.3 s).
     public private(set) var voiceWithoutWords = false
+    public private(set) var lastVoice: TimeInterval?
+    public var quietAfterVoice: TimeInterval = 1.5
+    public var hesitationLimit: TimeInterval = 8
     private static let lag: TimeInterval = 0.4
 
     public init(start: TimeInterval) {
@@ -36,6 +40,7 @@ public struct EndOfSpeech: Sendable, Equatable {
             self.text = clean
             lastChange = t
             voiceWithoutWords = false
+            lastVoice = nil
         }
     }
 
@@ -43,6 +48,7 @@ public struct EndOfSpeech: Sendable, Equatable {
     public mutating func voice(at t: TimeInterval) {
         guard let last = lastChange, !text.isEmpty, t - last >= Self.lag else { return }
         voiceWithoutWords = true
+        lastVoice = max(lastVoice ?? t, t)
     }
 
     /// The silence he waits for now: longer after an unfinished phrase or a voice without words.
@@ -54,6 +60,10 @@ public struct EndOfSpeech: Sendable, Equatable {
         if t - started >= maxDuration { return text.isEmpty ? .nothingHeard : .tooLong }
         guard let last = lastChange, !text.isEmpty else {
             return t - started >= nothingHeardAfter ? .nothingHeard : .keepListening
+        }
+        if voiceWithoutWords, let voice = lastVoice {
+            let quiet = t - last >= pauseWhenUnfinished && t - voice >= quietAfterVoice
+            return quiet || t - last >= hesitationLimit ? .done : .keepListening
         }
         return t - last >= pause ? .done : .keepListening
     }
@@ -68,9 +78,8 @@ public struct EndOfSpeech: Sendable, Equatable {
     static let unfinishedWords: Set<String> = [
         "в", "во", "на", "о", "об", "обо", "по", "к", "ко", "с", "со", "у", "за", "из", "от", "до", "для", "про", "при",
         "без", "над", "под", "через", "между", "перед", "после", "около", "возле", "вокруг", "среди", "насчёт", "насчет",
-        "и", "а", "но", "или", "либо", "что", "чтобы", "если", "когда", "потому", "поэтому", "так", "как", "где", "куда",
-        "пока", "хотя", "чем", "ни", "то", "ну", "типа", "короче", "значит", "это", "который", "которая", "которое",
-        "которые", "мой", "моя", "моё", "мое", "мои", "мне", "меня",
+        "и", "а", "но", "или", "либо", "что", "чтобы", "если", "когда", "потому", "поэтому", "где", "куда",
+        "пока", "хотя", "чем", "ни", "ну", "типа", "короче", "значит", "который", "которая", "которое", "которые",
     ]
 
     public static func endsUnfinished(_ text: String) -> Bool {
