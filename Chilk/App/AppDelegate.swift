@@ -271,7 +271,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         cards.commit = { [weak actions] card in await actions?.commit(card) ?? (false, String(localized: "Не получилось — ничего не изменилось")) }
         cards.onChange = { [weak chat] in chat?.refreshCard() }
-        cards.onResult = { [weak chat] line, _ in chat?.cardResult(line) }
+        cards.onResult = { [weak chat] id, line, _ in chat?.cardResult(id, line) }
+        cards.onLeftConversation = { [weak conversation] in conversation?.cardLeft() }
         if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             cards.snapshot = { [weak edge, weak chat] name in

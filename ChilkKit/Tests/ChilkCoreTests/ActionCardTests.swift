@@ -48,9 +48,17 @@ struct ActionCardTests {
         for no in ["нет", "Нет, не надо", "не надо", "отмена", "не ставь", "отбой"] {
             #expect(CardAnswer.parse(no) == .no, "\(no)")
         }
-        for other in ["да, но в 11", "да 11", "нет, в пятницу", "перенеси на вечер", "а что с погодой?"] {
+        for other in ["да, но в 11", "да 11", "нет, в пятницу", "перенеси на вечер", "а что с погодой?",
+                      "нет, надо", "нет, ставь", "точно?", "да?", "да нет", "не знаю"] {
             #expect(CardAnswer.parse(other) == .correction(other), "\(other)")
         }
+    }
+
+    @Test func theResultLineHasNoGuessMarks() {
+        let card = ActionCard(kind: .reminder(title: "Хлеб", due: at(8, 15)), guessedPart: true)
+        #expect(card.lines(now: now, calendar: cal)[1].contains("день?"))
+        #expect(card.whenText(at(8, 15), now: now, calendar: cal) == "Завтра (Чт, 8 окт.), 15:00")
+        #expect(card.whenText(at(7, 23), now: now, calendar: cal) == "Сегодня (Ср, 7 окт.), 23:00")
     }
 
     @Test func theQueueShowsTheFirstAndACorrectionTakesItsPlace() {

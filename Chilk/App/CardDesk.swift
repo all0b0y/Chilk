@@ -7,6 +7,7 @@ import SwiftUI
 /// Chilk's message only proposes; the card shows what will really be written; «Да» writes it with the card's values
 /// (the model takes no part then), «Нет» drops it, «Изменить» opens the panel, other words are a correction (a new
 /// model turn with the card in [контекст]). No timeout; other bubbles may come over it, then it comes back.
+/// Every button press names the card it was shown for: a stale bubble never answers the next card.
 @MainActor
 final class CardDesk {
     enum Source: String { case edge, voice, chat, panel }
@@ -17,12 +18,18 @@ final class CardDesk {
     private(set) var showing = false
     /// Another bubble took its place: when it comes back, «А карточку-то подтвердишь?».
     private var displaced = false
-    /// The words of the card's bubble, to notice another bubble taking its place.
+    /// What the bubble shows (words, the card and its buttons): another bubble taking its place is noticed, and a
+    /// press maps to the button that was really on screen.
     private var shownWords: String?
+    private var shown: (id: UUID, buttons: [String])?
     /// The conversation shows the card in its own bubble (decision 3 of the plan).
-    var inConversation = false
-    /// The next proposal corrects the card on screen (a correction turn is running): it takes its place.
-    var correcting = false
+    private(set) var inConversation = false
+    /// A turn whose words were not «да / нет» while a card was up: its proposal of the same card replaces it.
+    private(set) var correcting = false
+    /// Expiry as last shown (the bubble and the chat are redrawn once when «Да» goes away).
+    private var shownExpired = false
+    /// A result waiting for a free stage (it must not cover another bubble).
+    private var pendingResult: (line: String, until: Date)?
     private var timer: Timer?
     private let panel = CardEditPanel()
     /// Counts proposals: a conversation shows the card in its bubble only if its own turn proposed one.
@@ -37,7 +44,11 @@ final class CardDesk {
     var commit: (ActionCard) async -> (ok: Bool, line: String) = { _ in (false, "") }
     /// The chat mirrors the queue's first card.
     var onChange: () -> Void = {}
-    /// Acceptance only (CHILK_DEMO_CARD_SNAPSHOT=/dir): the screen around him 1.5 s after a card shows.
+    /// The result of a «Да» (the chat shows it).
+    var onResult: (UUID, String, Bool) -> Void = { _, _, _ in }
+    /// The card left a conversation's bubble (answered elsewhere): the conversation stops routing its buttons.
+    var onLeftConversation: () -> Void = {}
+    /// Acceptance only (CHILK_DEMO_CARD_SNAPSHOT=/dir): the screen around him a few seconds after a card shows.
     var snapshot: ((String) -> Void)?
     private var shots = 0
     private var demoPressed = false
@@ -52,14 +63,18 @@ final class CardDesk {
 
     var current: ActionCard? { queue.current }
     var hasCard: Bool { !queue.isEmpty }
-    /// At the edge he is out for the card (balance waits like for a due notice only while it is up).
+    /// At the edge he is out for the card.
     var ownsStage: Bool { showing }
+    /// The user can see the card at the edge or in the conversation's bubble right now.
+    var visible: Bool { showing || inConversation }
 
     // MARK: Proposals
 
     func propose(_ card: ActionCard) {
-        let replacing = correcting && !queue.isEmpty
-        correcting = false
+        // A correction replaces the card only if it is the same thing (the same kind and title, or the same time):
+        // «напомни ещё…» during a correction turn is a new card in the queue.
+        let replacing = correcting && queue.current.map { Self.sameThing($0, card) } == true
+        if replacing { panel.close() }                  // an open editor would edit a card that is gone
         queue.add(card, replacingCurrent: replacing)
         proposals += 1
         log("card proposed\(replacing ? " (correction)" : ""): \(card.summary())")
@@ -67,11 +82,32 @@ final class CardDesk {
         onChange()
     }
 
+    static func sameThing(_ a: ActionCard, _ b: ActionCard) -> Bool {
+        switch (a.kind, b.kind) {
+        case (.reminder(let t1, let d1), .reminder(let t2, let d2)): t1 == t2 || d1 == d2
+        case (.message(let t1, let m1, let d1), .message(let t2, let m2, let d2)): t1 == t2 || m1 == m2 || d1 == d2
+        case (.reminderChange(let i1, _, _, _, _), .reminderChange(let i2, _, _, _, _)),
+             (.reminderChange(let i1, _, _, _, _), .reminderComplete(let i2, _, _)),
+             (.reminderChange(let i1, _, _, _, _), .reminderDelete(let i2, _, _)),
+             (.reminderComplete(let i1, _, _), .reminderChange(let i2, _, _, _, _)),
+             (.reminderDelete(let i1, _, _), .reminderChange(let i2, _, _, _, _)): i1 == i2
+        case (.reminder, .message), (.message, .reminder): a.when == b.when
+        default: false
+        }
+    }
+
+    /// A turn ended (answered or failed): a correction that proposed nothing corrects nothing later.
+    func turnEnded() { correcting = false }
+
     /// The conversation's bubble shows the card (its buttons route here).
     func showInConversation() {
         guard let card = current else { return }
         inConversation = true
-        sim.say(text(card), duration: .infinity, buttons: buttons(card))
+        let words = text(card)
+        let labels = buttons(card)
+        sim.say(words, duration: .infinity, buttons: labels)
+        shown = (card.id, labels)
+        shownExpired = card.expired(now: Date())
         if let snapshot {
             shots += 1
             let name = String(format: "card-%02d-talk", shots)
@@ -79,16 +115,23 @@ final class CardDesk {
         }
     }
 
+    /// The conversation goes on without the card in its bubble (a follow-up began, or it closed).
+    func leaveConversation() {
+        guard inConversation else { return }
+        inConversation = false
+        if !showing { shown = nil }
+    }
+
     private func refreshInConversation() {
-        guard inConversation, let card = current else { return }
-        sim.say(text(card), duration: .infinity, buttons: buttons(card))
+        guard inConversation, current != nil else { return }
+        showInConversation()
     }
 
     /// [контекст] for a correction turn: what the card on screen says.
     func context() -> String? {
         guard let card = current else { return nil }
-        return "на экране карточка подтверждения: \(card.summary()) — пользователь её поправляет: вызови тот же инструмент "
-            + "заново с исправленными значениями (новая карточка заменит эту)"
+        return "на экране карточка подтверждения: \(card.summary()). Если пользователь её поправляет — вызови тот же "
+            + "инструмент заново с исправленными значениями (новая карточка заменит эту); если просит другое — делай другое"
     }
 
     // MARK: Text and buttons
@@ -108,67 +151,69 @@ final class CardDesk {
         return out
     }
 
-    /// A button on the chat's card (the chat edits inline itself).
-    func pressedFromChat(_ index: Int) -> Bool {
-        guard let card = current else { return false }
-        let labels = buttons(card)
-        guard labels.indices.contains(index) else { return true }
-        switch labels[index] {
-        case Self.yes: confirm(source: .chat)
-        case Self.no: decline(source: .chat)
-        default: break
-        }
+    /// A button under the bubble (edge or conversation): mapped through what was really shown. `false` = no card is
+    /// in that bubble (another bubble's button).
+    func pressed(_ index: Int, source: Source) -> Bool {
+        guard let shown, visible, sim.bubbleWords != nil else { return false }
+        if source == .edge, !inConversation, sim.bubbleWords != shownWords { return false }   // another bubble now
+        guard let label = shown.buttons[safe: index] else { return true }
+        press(label, card: shown.id, source: source)
         return true
     }
 
-    /// A button under the card (edge or conversation bubble). `false` = the card is not on screen.
-    func pressed(_ index: Int, source: Source) -> Bool {
-        guard let card = current, showing || inConversation else { return false }
-        let labels = buttons(card)
-        guard labels.indices.contains(index) else { return true }
-        switch labels[index] {
+    /// The label of the button at `index` as it was shown (the conversation says the matching line).
+    func shownLabel(_ index: Int) -> String? { shown?.buttons[safe: index] }
+
+    /// A button on the chat's card (the chat edits inline itself).
+    func pressedFromChat(_ label: String, card id: UUID) {
+        guard label != Self.edit else { return }
+        press(label, card: id, source: .chat)
+    }
+
+    private func press(_ label: String, card id: UUID, source: Source) {
+        guard let card = current, card.id == id else { log("card: a press for a card that is gone"); return }
+        switch label {
         case Self.yes: confirm(source: source)
         case Self.edit: openEditor()
-        default: decline(source: source)
+        case Self.no: decline(source: source)
+        default: break
         }
-        return true
     }
 
     // MARK: Answers
 
-    /// A spoken or typed answer while the card is up: the line he says for yes / no; nil = a correction (the caller
-    /// sends it to Codex with `context()`).
-    func answer(_ words: String, source: Source) -> String? {
-        guard let card = current else { return nil }
+    enum Spoken: Equatable { case confirming, declined(String), expired(String), correction }
+
+    /// A spoken or typed answer while the card is up. `.correction`: the caller sends the words to Codex with
+    /// `context()`.
+    func answer(_ words: String, source: Source) -> Spoken {
+        guard let card = current else { return .correction }
         switch CardAnswer.parse(words) {
         case .yes:
-            guard !card.expired(now: Date()) else { return String(localized: "Это время уже прошло — скажи другое") }
+            guard !card.expired(now: Date()) else { return .expired(String(localized: "Это время уже прошло — скажи другое")) }
             confirm(source: source)
-            return String(localized: "Делаю…")
+            return .confirming
         case .no:
             decline(source: source)
-            return String(localized: "Ладно, ничего не делаю")
+            return .declined(String(localized: "Ладно, ничего не делаю"))
         case .correction:
             correcting = true
             log("card: a correction (\(source.rawValue))")
-            return nil
+            return .correction
         }
     }
 
-    /// The result of the last «Да» (the conversation / chat shows it).
-    var onResult: (String, Bool) -> Void = { _, _ in }
-
     private func confirm(source: Source) {
         guard let card = current, !card.expired(now: Date()) else { return }
-        settle(card, how: "yes (\(source.rawValue))")
+        settle(card, how: "yes (\(source.rawValue))")             // before the await: one card is written once
         Task {
             let result = await commit(card)
             log("card committed: ok=\(result.ok)")
-            onResult(result.line, result.ok)
+            onResult(card.id, result.line, result.ok)
             guard source != .chat else { return }
-            // A conversation ends first («Делаю…» stays a moment): the result comes after it, not under its close.
-            if source == .voice { try? await Task.sleep(for: .seconds(1.6)) }
-            sim.say(result.line, duration: 4)
+            // At the edge the card's own bubble becomes the result; by voice it waits until the stage is free.
+            if source == .edge || source == .panel, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }
+            else { pendingResult = (result.line, Date().addingTimeInterval(15)) }
         }
     }
 
@@ -182,8 +227,16 @@ final class CardDesk {
     private func settle(_ card: ActionCard, how: String) {
         panel.close()
         queue.settle(card.id)
+        correcting = false
         log("card answered: \(how)")
         if showing { hide() }
+        if inConversation {
+            // Answered in the chat while his bubble shows it: the bubble keeps its words, loses the buttons.
+            inConversation = false
+            sim.setBubbleButtons([])
+            onLeftConversation()
+        }
+        shown = nil
         displaced = false
         onChange()
     }
@@ -197,33 +250,44 @@ final class CardDesk {
         panel.show(card, beside: place.frame, onLeftEdge: place.onLeftEdge) { [weak self] edited in
             guard let self else { return }
             guard let edited else { self.log("card: edit cancelled"); return }
-            self.queue.replace(card.id, with: edited)
-            self.log("card edited: \(edited.summary())")
-            self.onChange()
-            if self.showing { self.present(again: false) } else { self.refreshInConversation() }
+            self.replace(card.id, with: edited, how: "panel")
         }
     }
 
-    /// The chat's own fields (decision «в чате — та же карточка с кнопками и полями»).
-    func replaceCurrent(with edited: ActionCard) {
-        guard let card = current else { return }
-        queue.replace(card.id, with: edited)
-        log("card edited in the chat: \(edited.summary())")
+    /// An edited card takes the place of the one it was made from (gone meanwhile → nothing happens).
+    func replace(_ id: UUID, with edited: ActionCard, how: String) {
+        guard queue.cards.contains(where: { $0.id == id }) else { log("card: edited a card that is gone"); return }
+        queue.replace(id, with: edited)
+        log("card edited (\(how)): \(edited.summary())")
         onChange()
-        if showing { present(again: false) }
+        if current?.id == edited.id {
+            if showing { present(again: false) } else { refreshInConversation() }
+        }
     }
 
     // MARK: The edge
 
     private func tick() {
+        if let r = pendingResult {
+            if Date() > r.until { pendingResult = nil }
+            else if stageFree() { pendingResult = nil; sim.say(r.line, duration: 4) }
+        }
         guard let card = current else { return }
+        let expired = card.expired(now: Date())
+        if expired != shownExpired {                       // «Да» goes away once the time has passed — once
+            shownExpired = expired
+            onChange()
+            if showing { present(again: false) } else if inConversation { refreshInConversation() }
+            return
+        }
         if showing {
             if sim.bubbleWords != shownWords {                   // another bubble came over it
                 showing = false
                 displaced = true
+                shown = inConversation ? shown : nil
                 log("card: another bubble over it")
-            } else if card.expired(now: Date()), sim.bubbleWords != nil {
-                present(again: false)                             // «Да» goes away once the time has passed
+            } else if sim.standOut != .out {
+                sim.standOut = .out                              // hidden or sent home meanwhile: out until answered
             }
             return
         }
@@ -234,9 +298,12 @@ final class CardDesk {
     private func present(again: Bool) {
         guard let card = current else { return }
         let words = text(card, again: again)
-        sim.say(words, duration: .infinity, buttons: buttons(card))
+        let labels = buttons(card)
+        sim.say(words, duration: .infinity, buttons: labels)
         sim.standOut = .out
         shownWords = words
+        shown = (card.id, labels)
+        shownExpired = card.expired(now: Date())
         showing = true
         displaced = false
         log("card shown\(again ? " again" : "")")
@@ -251,11 +318,11 @@ final class CardDesk {
             demoPressed = true
             Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, let card = self.current, let i = self.buttons(card).firstIndex(of: label) else { return }
+                    guard let self, let i = self.shown?.buttons.firstIndex(of: label) else { return }
                     _ = self.pressed(i, source: .edge)
-                    if label == Self.edit, let snapshot = self.snapshot {
+                    if label == Self.edit, self.snapshot != nil {
                         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-                            MainActor.assumeIsolated { self?.panel.snapshot(snapshot) }
+                            MainActor.assumeIsolated { self?.panel.snapshot() }
                         }
                     }
                 }
@@ -280,6 +347,7 @@ final class CardDesk {
 final class CardEditPanel {
     private var window: NSPanel?
     private var done: ((ActionCard?) -> Void)?
+    private var closeObserver: NSObjectProtocol?
 
     func show(_ card: ActionCard, beside chilk: NSRect, onLeftEdge: Bool, done: @escaping (ActionCard?) -> Void) {
         close()
@@ -300,31 +368,35 @@ final class CardEditPanel {
         w.hidesOnDeactivate = false
         w.contentViewController = NSHostingController(rootView: view)
         w.setContentSize(size)
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if self?.window === w { self?.finish(nil, closing: false) } }
+        closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w,
+                                                               queue: .main) { [weak self, weak w] _ in
+            MainActor.assumeIsolated { if let w, self?.window === w { self?.finish(nil) } }   // the red close button
         }
         window = w
         NSApp.activate()
         w.makeKeyAndOrderFront(nil)
     }
 
-    private func finish(_ edited: ActionCard?, closing: Bool = true) {
+    private func finish(_ edited: ActionCard?) {
         let callback = done
         done = nil
-        if closing { close() } else { window = nil }
+        close()
         callback?(edited)
     }
 
-    /// Acceptance: the panel's own window to a PNG (`snapshot` names the file).
-    func snapshot(_ write: (String) -> Void) {
+    /// Acceptance: the panel's own window to a PNG.
+    func snapshot() {
         guard let w = window, let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"] else { return }
         _ = WindowSnapshot.write(w, to: URL(fileURLWithPath: dir).appending(path: "edit-panel.png"))
     }
 
     func close() {
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
         guard let w = window else { return }
         window = nil
         done = nil
+        w.contentViewController = nil
         w.orderOut(nil)
     }
 }
@@ -338,23 +410,31 @@ final class CardEditModel {
     var text: String
     let hasText: Bool
     let hasDate: Bool
+    /// The date the card started with: a rename of a reminder keeps its time unless the user moves it.
+    private let startDate: Date?
 
     init(_ card: ActionCard) {
         original = card
         switch card.kind {
-        case .reminder(let t, let d): title = t; date = d; text = ""; hasText = false; hasDate = true
-        case .message(let t, let m, let d): title = t; date = d; text = m; hasText = true; hasDate = true
-        case .reminderChange(_, let old, let oldDue, let t, let d):
-            title = t.isEmpty ? old : t; date = d ?? oldDue ?? Date().addingTimeInterval(3600); text = ""; hasText = false; hasDate = true
+        case .reminder(let t, let d): title = t; date = d; text = ""; hasText = false; hasDate = true; startDate = d
+        case .message(let t, let m, let d): title = t; date = d; text = m; hasText = true; hasDate = true; startDate = d
+        case .reminderChange(_, let old, _, let t, let d):
+            // A reminder without a time gets no date field (renaming must not give it one).
+            title = t.isEmpty ? old : t; date = d ?? Date().addingTimeInterval(3600); text = ""; hasText = false
+            hasDate = d != nil; startDate = d
         case .reminderComplete(_, let t, let d), .reminderDelete(_, let t, let d):
-            title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false
+            title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false; startDate = d
         }
     }
 
+    var dateTouched: Bool { startDate.map { abs($0.timeIntervalSince(date)) >= 30 } ?? false }
+
     var valid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            && (!hasDate || date > Date())
+            && (!hasDate || date > Date() || (isChange && !dateTouched))
     }
+
+    private var isChange: Bool { if case .reminderChange = original.kind { true } else { false } }
 
     /// The edited card: a new id (a new card), no guess marks — the user set the time himself.
     func edited() -> ActionCard {
@@ -363,8 +443,8 @@ final class CardEditModel {
         switch original.kind {
         case .reminder: kind = .reminder(title: t, due: date)
         case .message: kind = .message(title: t, text: String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(240)), at: date)
-        case .reminderChange(let id, let old, let oldDue, _, _):
-            kind = .reminderChange(id: id, oldTitle: old, oldDue: oldDue, title: t, due: date)
+        case .reminderChange(let id, let old, let oldDue, _, let due):
+            kind = .reminderChange(id: id, oldTitle: old, oldDue: oldDue, title: t, due: hasDate && dateTouched ? date : due)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)

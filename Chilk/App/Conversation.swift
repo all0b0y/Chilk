@@ -26,6 +26,11 @@ final class Conversation {
     weak var cards: CardDesk?
     /// The card is in this conversation's bubble (its buttons go to the desk).
     private var cardInBubble = false
+    /// The card was on screen when he was called: «да / нет» may answer it (a hidden card is not answered blind).
+    private var cardSeen = false
+
+    /// The card was answered elsewhere (the chat) while it was in his bubble.
+    func cardLeft() { cardInBubble = false; cardSeen = false }
 
     /// His window on screen and whether he lives on the left edge: the long-answer panel opens beside him.
     var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
@@ -133,7 +138,7 @@ final class Conversation {
     func pressedButton(_ index: Int) -> Bool {
         if question != nil { settleQuestion(index); return true }
         if cardInBubble, let cards, cards.hasCard {
-            let label = cards.current.map { cards.buttons($0) }?[safe: index]
+            let label = cards.shownLabel(index)
             guard cards.pressed(index, source: .voice) else { return false }
             if label != CardDesk.edit {
                 cardInBubble = false
@@ -255,6 +260,7 @@ final class Conversation {
         do { wake = try ears.prepareListening(replayWake: replayWake) }
         catch { return leave(saying: Lines.didntHear, after: 3) }
         heardInCheck = wake?.request
+        if window == nil { cardSeen = cards?.visible ?? false }   // the card at the edge when he was called
         if wake?.amidSpeech == true {
             // A follow-up window would hear the same TV and send it to Codex: answer once; «Чилк» again for more.
             suppressFollowUps = true
@@ -370,6 +376,7 @@ final class Conversation {
                         phase = .listening
                         longAnswer = nil
                         cardInBubble = false                        // his words now; the card waits at the desk
+                        cards?.leaveConversation()
                         sim.setBubbleButtons([])
                     }
                     sim.earsDroop = 0
@@ -449,11 +456,20 @@ final class Conversation {
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)
             }
             // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
-            if let cards, cards.hasCard, let line = cards.answer(question, source: .voice) {
-                log("card answered by voice")
-                cardInBubble = false
-                onTurn?(question, line, brain.liveThread ?? "")
-                return leave(saying: line, after: 1.5)
+            if let cards, cards.hasCard, cardInBubble || cardSeen {
+                let line: String?
+                switch cards.answer(question, source: .voice) {
+                case .confirming: line = String(localized: "Делаю…")
+                case .declined(let l), .expired(let l): line = l
+                case .correction: line = nil
+                }
+                if let line {
+                    log("card answered by voice")
+                    cardInBubble = false
+                    cardSeen = false
+                    onTurn?(question, line, brain.liveThread ?? "")
+                    return leave(saying: line, after: 1.5)
+                }
             }
             let cardNote = cards?.correcting == true ? cards?.context() : nil
             let stamp = cards?.proposals ?? 0
@@ -472,10 +488,11 @@ final class Conversation {
                 onTurn?(question, text, raw.thread)
                 phase = .answering
                 sim.stopAct()
+                cards?.turnEnded()
                 if let cards, cards.proposals != stamp, cards.hasCard {
                     // The card replaces his words in the bubble (they are in the chat); its buttons work, «да» too.
-                    cards.correcting = false
                     cardInBubble = true
+                    cardSeen = true
                     longAnswer = nil
                     cards.showInConversation()
                 } else {
@@ -527,7 +544,9 @@ final class Conversation {
     private func leave(saying line: String?, after seconds: Double) {
         settleQuestion(nil)
         cardInBubble = false
-        cards?.inConversation = false                       // a card still up goes back to the edge
+        cardSeen = false
+        cards?.turnEnded()
+        cards?.leaveConversation()                          // a card still up goes back to the edge
         phase = .idle
         closing = true
         poll?.invalidate()

@@ -81,6 +81,11 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         return out
     }
 
+    /// «Завтра (Чт, 8 окт.), 10:00» — without the guess marks (the result line after «Да»).
+    public func whenText(_ d: Date, now: Date, calendar: Calendar = .current) -> String {
+        CardFormat(calendar: calendar, now: now).when(d, guessedPart: false, guessedDay: false)
+    }
+
     /// For the model (English, like other tool results): what the card shows.
     public func summary(calendar: Calendar = .current) -> String {
         let f = ISO8601DateFormatter()
@@ -114,7 +119,7 @@ struct CardFormat {
         day.dateFormat = calendar.isDate(d, equalTo: now, toGranularity: .year) ? "EEEEEE, d MMM" : "EEEEEE, d MMM yyyy"
         var date = day.string(from: d)
         date = date.prefix(1).uppercased() + date.dropFirst()
-        if calendar.isDateInToday(d) || calendar.isDate(d, inSameDayAs: now) { date = "Сегодня (\(date))" }
+        if calendar.isDate(d, inSameDayAs: now) { date = "Сегодня (\(date))" }
         else if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(d, inSameDayAs: t) { date = "Завтра (\(date))" }
         var text = (guessedDay ? date + "?" : date) + ", " + time.string(from: d)
         if guessedPart { text += " · " + Self.part(calendar.component(.hour, from: d)) + "?" }
@@ -142,25 +147,34 @@ public enum CardAnswer: Equatable, Sendable {
                                                 "подтверди", "ок", "окей", "хорошо", "верно", "точно", "ладно",
                                                 "го", "yes", "ok", "okay", "сохраняй", "записывай", "делай", "удаляй",
                                                 "меняй", "отмечай", "переноси", "согласен", "согласна", "именно"]
-    private static let noWords: Set<String> = ["нет", "не", "надо", "нужно", "отмена", "отмени", "отбой", "неа",
-                                               "ставь", "передумал", "передумала", "no", "забудь", "стоп"]
+    private static let noWords: Set<String> = ["нет", "отмена", "отмени", "отбой", "неа", "передумал", "передумала",
+                                               "no", "забудь", "стоп"]
+    /// Only right after «не»: «не надо», «не нужно», «не ставь» («нет, надо» is not a «нет»).
+    private static let afterNot: Set<String> = ["надо", "нужно", "ставь", "делай", "записывай"]
     /// Words that do not change the meaning: the address, politeness, fillers.
     private static let neutral: Set<String> = ["чилк", "чилка", "эй", "пожалуйста", "спасибо", "ну", "а", "так",
-                                               "вот", "всё", "все", "давай", "уж"]
+                                               "вот", "всё", "все", "уж"]
 
     public static func parse(_ text: String) -> CardAnswer {
+        // A question is not an answer («точно?», «да?»): the model explains, the card stays.
+        if text.contains("?") { return .correction(text) }
         let words = text.lowercased().replacingOccurrences(of: "ё", with: "е")
             .split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        let meaningful = words.filter { !neutral.contains($0) || $0 == "давай" }
+        let meaningful = words.filter { !neutral.contains($0) }
         guard !meaningful.isEmpty else { return .correction(text) }
-        if meaningful.first == "нет" || meaningful.first == "отмена" || meaningful.first == "отбой"
-            || meaningful.first == "неа" || meaningful.first == "отмени" || meaningful.first == "передумал"
-            || meaningful.first == "передумала" || meaningful.first == "забудь" || meaningful.first == "no"
-            || meaningful.starts(with: ["не", "надо"]) || meaningful.starts(with: ["не", "нужно"])
-            || meaningful.starts(with: ["не", "ставь"]) {
-            return meaningful.allSatisfy(noWords.contains) ? .no : .correction(text)
-        }
+        if isNo(meaningful) { return .no }
         return meaningful.allSatisfy(yesWords.contains) ? .yes : .correction(text)
+    }
+
+    /// Every word says «no»: a «нет» word, or «не» followed by «надо / нужно / ставь…».
+    private static func isNo(_ words: [String]) -> Bool {
+        var i = 0
+        while i < words.count {
+            if noWords.contains(words[i]) { i += 1; continue }
+            if words[i] == "не", i + 1 < words.count, afterNot.contains(words[i + 1]) { i += 2; continue }
+            return false
+        }
+        return true
     }
 }
 

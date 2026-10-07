@@ -53,12 +53,11 @@ final class ChatController: NSObject, NSWindowDelegate {
     }
 
     /// A typed «да» waits for the write: the pair goes into the chat with its result, not with «Делаю…».
-    private var confirmingWords: String?
+    private var confirmingWords: [UUID: String] = [:]
 
     /// The result of a card answered anywhere (edge, voice, chat): into the chat after a typed «да», else a note.
-    func cardResult(_ line: String) {
-        guard let words = confirmingWords else { model.cardNote = line; return }
-        confirmingWords = nil
+    func cardResult(_ id: UUID, _ line: String) {
+        guard let words = confirmingWords.removeValue(forKey: id) else { model.cardNote = line; return }
         let id = store.recordLocal(question: words, answer: line, via: .text,
                                    continuing: model.selected.flatMap { store.log.session($0)?.id })
         lastLiveChat = id
@@ -156,13 +155,17 @@ final class ChatController: NSObject, NSWindowDelegate {
             log("chat: refused while lying (\(text.count) chars), no Codex turn")
             return
         }
-        let confirming = cards?.current.map { !$0.expired(now: Date()) && CardAnswer.parse(text) == .yes } ?? false
-        if confirming { confirmingWords = text }
-        if let cards, cards.hasCard, let line = cards.answer(text, source: .chat) {
+        if let cards, let card = cards.current, let line = { () -> String? in
+            switch cards.answer(text, source: .chat) {
+            case .confirming: confirmingWords[card.id] = text; return ""
+            case .declined(let l), .expired(let l): return l
+            case .correction: return nil
+            }
+        }() {
             // Decision 4: a typed «да» is an answer too — no Codex turn.
             model.draft = ""
             model.error = nil
-            if confirming { log("chat: card confirmed by text"); return }   // the result records the pair
+            if line.isEmpty { log("chat: card confirmed by text"); return }   // the result records the pair
             let id = store.recordLocal(question: text, answer: line, via: .text,
                                        continuing: model.selected.flatMap { store.log.session($0)?.id })
             lastLiveChat = id
@@ -196,6 +199,7 @@ final class ChatController: NSObject, NSWindowDelegate {
                 posing = false
                 if pose, case .think = sim.act { sim.stopAct() }  // an emotion (6c) plays to its end
                 ClockCheck.turnEnded(.chat)
+                cards?.turnEnded()
                 onTurnEnd()
             }
             do {
@@ -410,17 +414,17 @@ final class ChatController: NSObject, NSWindowDelegate {
         }
         model.typed = { [weak self] in self?.typed() }
         model.cardButton = { [weak self] title in
-            guard let self, let cards = self.cards, let card = cards.current else { return }
+            guard let self, let cards = self.cards, let shown = self.model.card else { return }
             if title == CardDesk.edit {
-                self.model.cardEdit = CardEditModel(card)
+                if let card = cards.current, card.id == shown.id { self.model.cardEdit = CardEditModel(card) }
                 return
             }
-            if let index = cards.buttons(card).firstIndex(of: title) { _ = cards.pressedFromChat(index) }
+            cards.pressedFromChat(title, card: shown.id)        // a double click cannot answer the next card
         }
         model.cardSave = { [weak self] in
             guard let self, let edit = self.model.cardEdit else { return }
             self.model.cardEdit = nil
-            self.cards?.replaceCurrent(with: edit.edited())
+            self.cards?.replace(edit.original.id, with: edit.edited(), how: "chat")
         }
     }
 }

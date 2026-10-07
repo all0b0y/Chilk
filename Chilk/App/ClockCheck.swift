@@ -8,28 +8,21 @@ import Foundation
 @MainActor
 enum ClockCheck {
     enum Channel: CaseIterable { case voice, chat }
-    private enum Kind { case hour, day }
     private struct Said {
         let text: String
         let at: Date
-        /// Refused on this channel's previous words: these words answer it (Т4 — «8-го», «завтра, после сна»).
-        let answering: Set<Kind>
     }
 
     private static var last: [Channel: Said] = [:]
-    private static var refused: [Channel: Set<Kind>] = [:]
     /// Channels whose Codex turn is running: a tool call belongs to one of them.
     private static var inFlight: Set<Channel> = []
     static var log: (String) -> Void = { _ in }
 
     /// The user's words of the turn being sent: remembered, and [контекст] with the hint if needed.
     static func question(_ text: String, context: String, channel: Channel, now: Date = Date()) -> String {
-        let answering = refused[channel] ?? []
-        refused[channel] = nil
-        last[channel] = Said(text: text, at: now, answering: answering)
+        last[channel] = Said(text: text, at: now)
         inFlight.insert(channel)
-        guard let hint = ClockWords.hint(for: text, now: now, zone: .autoupdatingCurrent,
-                                         dayOpen: !answering.contains(.day)) else { return context }
+        guard let hint = ClockWords.hint(for: text, now: now, zone: .autoupdatingCurrent, dayOpen: true) else { return context }
         log("time left open in the question: hint for Codex")
         return VoiceContext.adding(hint, to: context)
     }

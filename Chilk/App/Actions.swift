@@ -199,14 +199,25 @@ final class Actions {
         catch { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         let now = Date()
         func future(_ d: Date) -> Bool { d > now.addingTimeInterval(30) }
+        // Decision 8: an hour said without утра / дня / вечера / ночи is a day hour — 00:00–05:59 only when the words
+        // say so. The model guessed night for «в три» (dictated «напомнив три»): the app takes 15:00, the card marks it.
+        func daytime(_ d: Date) -> Date {
+            var cal = Calendar(identifier: .gregorian)
+            cal.timeZone = .autoupdatingCurrent
+            guard ClockCheck.guess(for: d).part, cal.component(.hour, from: d) < 6 else { return d }
+            balance?.log("card: an open hour taken as day (+12 h)")
+            return d.addingTimeInterval(12 * 3600)
+        }
         let kind: ActionCard.Kind
         var date: Date?
         switch action {
-        case .reminder(let title, let at):
+        case .reminder(let title, let said):
+            let at = daytime(said)
             guard future(at) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
             kind = .reminder(title: title, due: at)
             date = at
-        case .schedule(let at, let title, let message):
+        case .schedule(let said, let title, let message):
+            let at = daytime(said)
             guard future(at) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
             kind = .message(title: title, text: message, at: at)
             date = at
@@ -217,6 +228,11 @@ final class Actions {
             } catch ReminderAccessError.notFound {
                 return .failure("not_found: no reminder with this id in the «Чилк» list; list them with chilk_reminders")
             } catch { return .failure("reminders_unreachable: could not reach Apple Reminders; nothing was changed") }
+            let change = switch change {
+            case .move(let d): ReminderChange.move(daytime(d))
+            case .moveRename(let d, let t): ReminderChange.moveRename(daytime(d), t)
+            default: change
+            }
             switch change {
             case .move(let d), .moveRename(let d, _):
                 guard future(d) else { return .failure("time_passed: that time has already passed; ask the user for a future time") }
@@ -243,7 +259,12 @@ final class Actions {
     /// After the card's «Да»: writes exactly the card's values. Returns the line Chilk says.
     func commit(_ card: ActionCard) async -> (ok: Bool, line: String) {
         let started = Date()
-        let format = { (d: Date) in card.lines(now: started).dropFirst().first ?? ISO8601DateFormatter().string(from: d) }
+        let format = { (d: Date) in card.whenText(d, now: started) }
+        // Switched off in the tray after the card was proposed: nothing is written.
+        let ability: ChilkAbility = if case .message = card.kind { .timers } else { .reminders }
+        guard switches().isOn(ability) else {
+            return (false, String(localized: "Не сделал: это выключено в «Инструментах»"))
+        }
         let result: CodexToolResult
         let line: String
         let tool: String
@@ -260,9 +281,10 @@ final class Actions {
                                                                            "title": .string(title), "message": .string(text)])
                 ?? .failure("timers_unavailable")
             line = String(localized: "Готово: скажу «\(Dialogue.plain(text))» — \(format(at))")
-        case .reminderChange(let id, let old, _, let title, let due):
+        case .reminderChange(let id, let old, let oldDue, let title, let due):
             tool = "card_reminder_change"
-            result = await reminders.change(id: id, title: title == old ? nil : title, due: due)
+            // Only what the card changes: a rename keeps the time and the alarm as they are.
+            result = await reminders.change(id: id, title: title == old ? nil : title, due: due != oldDue ? due : nil)
             line = String(localized: "Готово: «\(title)» изменено")
         case .reminderComplete(let id, let title, _):
             tool = "card_reminder_done"
