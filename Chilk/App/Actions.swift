@@ -1,5 +1,6 @@
 import AppKit
 import ChilkCore
+import ChilkApple
 import ChilkBrain
 
 /// Test state is separate from both personal balance aggregates and the official Chilk Codex login.

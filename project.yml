@@ -27,6 +27,8 @@ targets:
         product: ChilkBrain
       - package: ChilkKit
         product: ChilkEars
+      - package: ChilkKit
+        product: ChilkApple
     info:
       path: Chilk/Resources/Info.plist
       properties:

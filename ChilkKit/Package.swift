@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "ChilkRender", targets: ["ChilkRender"]),
         .library(name: "ChilkBrain", targets: ["ChilkBrain"]),
         .library(name: "ChilkEars", targets: ["ChilkEars"]),
+        .library(name: "ChilkApple", targets: ["ChilkApple"]),
         .executable(name: "chilk-render", targets: ["chilk-render"]),
         .executable(name: "chilk-voice", targets: ["chilk-voice"]),
     ],
@@ -37,5 +38,11 @@ let package = Package(
         .testTarget(name: "ChilkRenderTests", dependencies: ["ChilkCore", "ChilkRender"]),
         // The Codex client against a scripted fake app-server.
         .testTarget(name: "ChilkBrainTests", dependencies: ["ChilkBrain"], exclude: ["FakeAppServer.py"]),
+        // Slice 8a: adapters to Apple's apps (Reminders now; Calendar, Notes, the «Чилк» shortcut later).
+        .target(name: "ChilkApple", dependencies: ["ChilkBrain"]),
+        // A fake EventKit store calling back on its own queue, like EventKit. Swift 5 mode: the fake adds no runtime
+        // isolation checks of its own, so a crash in the test is the adapter's.
+        .target(name: "EventKitFakes", path: "Tests/EventKitFakes", swiftSettings: [.swiftLanguageMode(.v5)]),
+        .testTarget(name: "ChilkAppleTests", dependencies: ["ChilkApple", "EventKitFakes", "ChilkBrain"]),
     ]
 )

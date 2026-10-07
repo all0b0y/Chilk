@@ -4,13 +4,17 @@ import Foundation
 
 /// Apple Reminders through EventKit (decision 2026-10-05): Chilk's own «Чилк» list, created on first use in the
 /// default reminders account (iCloud → iPhone/Watch). Access is asked on the first reminder request, never at launch.
-/// Create and read only.
+/// Create and read only. Slice 8a: moved into the package so the real call's thread is tested; the store is injected.
 @MainActor
-final class EventKitReminders: ReminderStore {
-    private let store = EKEventStore()
+public final class EventKitReminders: ReminderStore {
+    private let store: EKEventStore
     private static let listKey = "remindersListID"
 
-    func add(title: String, due: Date) async throws -> ReminderInfo {
+    public init(store: EKEventStore = EKEventStore()) {
+        self.store = store
+    }
+
+    public func add(title: String, due: Date) async throws -> ReminderInfo {
         try await ensureAccess()
         guard let list = try chilkList(create: true) else { throw ReminderAccessError.unavailable }
         let reminder = EKReminder(eventStore: store)
@@ -24,12 +28,19 @@ final class EventKitReminders: ReminderStore {
         return ReminderInfo(title: title, due: due)
     }
 
-    func open() async throws -> [ReminderInfo] {
+    public func open() async throws -> [ReminderInfo] {
         try await ensureAccess()
         guard let list = try chilkList(create: false) else { return [] }
-        let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: [list])
-        return await withCheckedContinuation { continuation in
-            store.fetchReminders(matching: predicate) { reminders in
+        return await fetch(store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: [list]))
+    }
+
+    /// EventKit calls back on its own queue (`com.apple.eventkit.reminders.search`) and the SDK does not mark the
+    /// completion `@Sendable`: inside this `@MainActor` class the closure would inherit MainActor, and Swift 6's runtime
+    /// check crashed the app on the first open reminder (slice 8a, `_dispatch_assert_queue_fail`). The completion is
+    /// `@Sendable` and turns the reminders into values right there.
+    func fetch(_ predicate: NSPredicate) async -> [ReminderInfo] {
+        await withCheckedContinuation { continuation in
+            _ = store.fetchReminders(matching: predicate) { @Sendable reminders in
                 let items = (reminders ?? []).map { r in
                     ReminderInfo(title: r.title ?? "", due: r.dueDateComponents.flatMap { Calendar.current.date(from: $0) })
                 }
@@ -43,7 +54,7 @@ final class EventKitReminders: ReminderStore {
         case .fullAccess: return
         case .notDetermined:
             let granted: Bool = await withCheckedContinuation { continuation in
-                store.requestFullAccessToReminders { granted, _ in continuation.resume(returning: granted) }
+                store.requestFullAccessToReminders { @Sendable granted, _ in continuation.resume(returning: granted) }
             }
             guard granted else { throw ReminderAccessError.denied }
         default: throw ReminderAccessError.denied
@@ -71,21 +82,4 @@ final class EventKitReminders: ReminderStore {
         defaults.set(list.calendarIdentifier, forKey: Self.listKey)
         return list
     }
-}
-
-/// Acceptance runs (CHILK_FAKE_REMINDERS): the real Codex and tool path without touching the user's Reminders.
-/// Every created reminder is appended to `reminders-fake.json` in CHILK_STATE_DIR.
-actor FakeReminders: ReminderStore {
-    private var items: [ReminderInfo] = []
-    private let file = AppState.directory.appendingPathComponent("reminders-fake.json")
-
-    func add(title: String, due: Date) async throws -> ReminderInfo {
-        let info = ReminderInfo(title: title, due: due)
-        items.append(info)
-        let rows = items.map { ["title": $0.title, "at": $0.due.map { ISO8601DateFormatter().string(from: $0) } ?? ""] }
-        try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]).write(to: file, options: .atomic)
-        return info
-    }
-
-    func open() async throws -> [ReminderInfo] { items }
 }
