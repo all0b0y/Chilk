@@ -144,4 +144,32 @@ struct FolderAccessStoreTests {
         let read = await e.execute(name: "chilk_read_file", arguments: ["folder": .string(shared.name), "path": "Идеи.md"])
         #expect(read.value["content"]?.string == "# Мысли\n")
     }
+
+    /// Request 2026-10-07: the panel takes several folders at once — both iCloud vaults in one go. A folder that is
+    /// not a vault (the «Obsidian» container itself, a folder inside a vault) is refused on its own; the rest stay.
+    @Test func severalChosenVaultsAreAddedAndOnlyTheInvalidOnesRefused() async throws {
+        let root = try SelectedFolderToolTests().fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let container = home.appendingPathComponent("Library/Mobile Documents/iCloud~md~obsidian/Documents")
+        let mymind = container.appendingPathComponent("MYMIND"), study = container.appendingPathComponent("STUDY")
+        let inside = study.appendingPathComponent("AI")
+        for dir in [mymind.appendingPathComponent(".obsidian"), study.appendingPathComponent(".obsidian"), inside] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        #expect(chflags(home.appendingPathComponent("Library").path, UInt32(UF_HIDDEN)) == 0)
+        let file = root.appendingPathComponent("grants.json"), trusted = root.deletingLastPathComponent()
+        let store = try await FolderAccessStore(file: file, allowedContainer: trusted, home: home)
+
+        let refused = await store.add(.obsidian, urls: [mymind, container, study, inside])
+        #expect(refused.map(\.url) == [container, inside])
+        #expect(refused.allSatisfy { $0.error as? FolderAccessStore.AccessError == .invalidVault })
+        #expect(await store.grants.map(\.name) == ["MYMIND", "STUDY"])
+        #expect(await store.grants.allSatisfy { $0.kind == .obsidian })
+        // Choosing them again changes nothing, and both survive a restart.
+        #expect(await store.add(.obsidian, urls: [study, mymind]).isEmpty)
+        #expect(await store.grants.count == 2)
+        let reopened = try await FolderAccessStore(file: file, allowedContainer: trusted, home: home)
+        #expect(await reopened.grants.map(\.name) == ["MYMIND", "STUDY"])
+    }
 }

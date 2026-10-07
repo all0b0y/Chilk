@@ -412,6 +412,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let raw = env["CHILK_DEMO_TOOL_OFF"] {
             for name in raw.split(separator: ",") { if let a = ChilkAbility(rawValue: String(name)) { switches.set(a, on: false) } }
         }
+        // Acceptance only: CHILK_DEMO_PICK="obsidian:/a|/b" sends these folders through the panel's «Разрешить» after
+        // 1.5 s, several at once (before CHILK_DEMO_MAIN's window at 3 s); what the alert would say goes to the log.
+        if let spec = env["CHILK_DEMO_PICK"], env["CHILK_STATE_DIR"] != nil {
+            Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak actions, weak balance] _ in
+                MainActor.assumeIsolated { actions?.files.demoPick(spec) { balance?.log($0) } }
+            }
+        }
         // Acceptance only: CHILK_DEMO_CHAT="first||second||@new||@oldest||…" types these into the chat window one by
         // one once Codex is ready; CHILK_DEMO_CHAT_SNAPSHOT=/file.png draws the window afterwards.
         if let raw = env["CHILK_DEMO_CHAT"], !raw.isEmpty {

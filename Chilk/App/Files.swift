@@ -103,10 +103,12 @@ final class Files {
         return FileManager.default.fileExists(atPath: marker, isDirectory: &isDirectory) && isDirectory.boolValue ? .obsidian : .files
     }
 
-    func add(_ kind: ChilkFileScope, url: URL) async throws {
+    /// The panel's «Разрешить»: every chosen folder is added (an already shared one stays as it is); the ones that
+    /// cannot be added come back with the reason, and the others are kept.
+    func add(_ kind: ChilkFileScope, urls: [URL]) async throws -> [FolderAccessStore.Refusal] {
         guard await waitUntilReady(), canChange, let store else { throw AccessError.busy }
         beginChange()
-        _ = try await finishChange { try await store.add(kind, url: url) }
+        return try await finishChange { await store.add(kind, urls: urls) }
     }
 
     func remove(name: String) async throws {
@@ -156,41 +158,81 @@ final class Files {
         Task { do { try await remove(name: name) } catch { report(error) } }
     }
 
-    /// The system folder panel; the chosen folder is added for reading.
+    /// The system folder panel; every chosen folder is added for reading — several at once with ⌘ (request
+    /// 2026-10-07: both Obsidian vaults in one go).
     func choose(_ kind: ChilkFileScope) {
         guard canChange else { return }
         selecting = true
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
+        panel.allowsMultipleSelection = true
         panel.resolvesAliases = true
         panel.prompt = String(localized: "Разрешить")
         panel.title = kind == .files ? String(localized: "Папка для Чилка") : String(localized: "Хранилище Obsidian")
         panel.message = kind == .files
-            ? String(localized: "Только чтение: поиск имён и чтение .md, .txt и .csv по твоей просьбе. Чилк ничего не меняет, не перемещает и не удаляет. Найденные имена и прочитанный текст отправляются Codex/OpenAI. Папку можно убрать.")
-            : String(localized: "Выбери корень хранилища с папкой .obsidian. Только чтение .md по твоей просьбе: Чилк ничего не создаёт и не меняет. Найденные имена и прочитанный текст отправляются Codex/OpenAI.")
+            ? String(localized: "Можно сразу несколько — выделяй с ⌘. Только чтение: поиск имён и чтение .md, .txt и .csv по твоей просьбе. Чилк ничего не меняет, не перемещает и не удаляет. Найденные имена и прочитанный текст отправляются Codex/OpenAI. Папку можно убрать.")
+            : String(localized: "Выбери корень хранилища с папкой .obsidian; можно сразу несколько — выделяй с ⌘. Только чтение .md по твоей просьбе: Чилк ничего не создаёт и не меняет. Найденные имена и прочитанный текст отправляются Codex/OpenAI.")
         NSApp.activate(ignoringOtherApps: true)
         panel.begin { [weak self] response in
             guard let self else { return }
             self.selecting = false
-            guard response == .OK, let url = panel.url else { return }
-            Task { do { try await self.add(kind, url: url) } catch { self.report(error) } }
+            let urls = panel.urls
+            guard response == .OK, !urls.isEmpty else { return }
+            Task { await self.chosen(kind, urls: urls) }
         }
     }
 
-    private func report(_ error: Error) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(localized: "Не получилось изменить доступ")
+    /// What «Разрешить» does with the chosen folders: all that can be added are; for the rest one alert says why, and
+    /// names them when several were chosen. `log` is the acceptance hook's: the alert's lines go there instead.
+    func chosen(_ kind: ChilkFileScope, urls: [URL], log: ((String) -> Void)? = nil) async {
+        var lines: (title: String, text: String)?
+        do {
+            let refused = try await add(kind, urls: urls)
+            if let first = refused.first {
+                lines = Self.alertLines(first.error, names: urls.count > 1 ? refused.map(\.url.lastPathComponent) : [])
+            }
+            log?("folders chosen (\(kind.rawValue)): \(urls.count), refused \(refused.map(\.url.lastPathComponent)), "
+                 + "shared now \(grants.map { "\($0.name)/\($0.kind.rawValue)" })")
+        } catch {
+            lines = Self.alertLines(error)
+            log?("folders chosen (\(kind.rawValue)): \(urls.count), nothing changed: \(error)")
+        }
+        guard let lines else { return }
+        if let log { log("alert: \(lines.title) — \(lines.text)") } else { show(lines) }
+    }
+
+    /// Acceptance only (CHILK_DEMO_PICK="obsidian:/a|/b"): the folders go through «Разрешить» as if chosen in the
+    /// panel; what the alert would say goes to `log`.
+    func demoPick(_ spec: String, log: @escaping (String) -> Void) {
+        let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let kind = ChilkFileScope(rawValue: parts[0]) else { log("demo pick: bad spec \(spec)"); return }
+        let urls = parts[1].split(separator: "|").map { URL(fileURLWithPath: String($0), isDirectory: true) }
+        Task { await chosen(kind, urls: urls, log: log) }
+    }
+
+    private func report(_ error: Error) { show(Self.alertLines(error)) }
+
+    /// The alert's two lines; `names` — the refused folders when several were chosen (the others were added).
+    static func alertLines(_ error: Error, names: [String] = []) -> (title: String, text: String) {
+        let list = names.map { "«\($0)»" }.joined(separator: ", ")
+        let title = names.isEmpty ? String(localized: "Не получилось изменить доступ")
+                                  : String(localized: "Не получилось добавить: \(list)")
         switch error {
         case FolderAccessStore.AccessError.invalidVault:
-            alert.informativeText = String(localized: "Выбери корневую папку хранилища Obsidian: внутри должна быть папка .obsidian.")
+            return (title, String(localized: "Выбери корневую папку хранилища Obsidian: внутри должна быть папка .obsidian."))
         case FolderAccessStore.AccessError.tooBroad:
-            alert.informativeText = String(localized: "Целиком домашнюю папку или диск дать нельзя — выбери папку внутри.")
+            return (title, String(localized: "Целиком домашнюю папку или диск дать нельзя — выбери папку внутри."))
         default:
-            alert.informativeText = String(localized: "Папка недоступна или выбор не удалось сохранить. Прежний доступ не изменён. Скрытые и системные папки выбирать нельзя.")
+            return (title, String(localized: "Папка недоступна или выбор не удалось сохранить. Прежний доступ не изменён. Скрытые и системные папки выбирать нельзя."))
         }
+    }
+
+    private func show(_ lines: (title: String, text: String)) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = lines.title
+        alert.informativeText = lines.text
         alert.addButton(withTitle: String(localized: "Понятно"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()

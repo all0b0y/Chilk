@@ -86,6 +86,20 @@ public actor FolderAccessStore {
         return grant
     }
 
+    /// A folder from a multiple choice that could not be added, and why.
+    public struct Refusal: Sendable {
+        public let url: URL
+        public let error: any Error
+    }
+
+    /// Several folders chosen at once (the panel allows a multiple selection): each is added as by `add(_:url:)`, in
+    /// order; the ones that cannot be added come back with the reason, the others are kept.
+    public func add(_ kind: ChilkFileScope, urls: [URL]) -> [Refusal] {
+        urls.compactMap { url in
+            do { try add(kind, url: url); return nil } catch { return Refusal(url: url, error: error) }
+        }
+    }
+
     public func remove(name: String) throws {
         guard grants.contains(where: { $0.name == name }) else { return }
         let kept = grants.filter { $0.name != name }
