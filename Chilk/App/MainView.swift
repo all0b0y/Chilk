@@ -305,6 +305,14 @@ private struct SettingsSection: View {
                         Text(Lines.notConnected(name)).tag(id)
                     }
                 }
+                // Slice 9d (decision 31).
+                HStack {
+                    Text(Lines.oneDesk)
+                    Spacer()
+                    Toggle(Lines.oneDesk, isOn: Binding(get: { model.oneDesk }, set: { model.setOneDesk($0) })).labelsHidden()
+                }
+                Text(model.oneDesk ? Lines.oneDeskOnHelp : Lines.oneDeskOffHelp)
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             brainSection.id(Self.brainID)
             Section(Lines.callMe) {

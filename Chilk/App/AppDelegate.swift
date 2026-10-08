@@ -257,6 +257,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || (edge?.sim.isTalking ?? false) || (game?.holdsChilk ?? false)
         }
         edge.log = { [weak balance] in balance?.log($0) }
+        // Slice 9d: the desktops — «Жить на одном столе», and what is shown on every desktop as before (the shade,
+        // the pause, a guided break: their overlays are on every desktop, so is he).
+        edge.oneDesk = { settings.settings.oneDesk }
+        // A game holds him on every desktop too (review 9d): the court's overlay is there, and a swipe must not reframe
+        // him mid-throw; in the notebook he is behind the edge anyway.
+        edge.everywhere = { [weak balance, weak game] in
+            (balance?.escalation.level ?? .none) != .none || (game?.holdsChilk ?? false)
+        }
+        // The popover or a game owns his `.away`: no desktop change, no dive's place given back over their head.
+        edge.heldElsewhere = { [weak tray, weak game] in (tray?.holdsChilk ?? false) || (game?.holdsChilk ?? false) }
+        if AppState.isolated != nil {                          // the desk demo (CHILK_DEMO_DESKS) only
+            edge.demoSetOneDesk = { [weak balance] on in
+                settings.update { $0.oneDesk = on }
+                balance?.log("settings one desk \(on ? "on" : "off") (desk demo)")
+            }
+            edge.demoErrand = { [weak balance] in balance?.makeDue(.water) }
+            edge.demoHotkey = { [weak conversation] in conversation?.trigger() }
+            edge.demoCheer = { [weak balance] in _ = balance?.cheer() }
+        }
         // Slice 6f-1: the light around him (the built-in display's brightness).
         let ambience = AmbienceController(sim: edge.sim)
         ambience.log = { [weak balance] in balance?.log($0) }

@@ -646,6 +646,9 @@ public final class CharacterSim {
 
     public var isTalking: Bool { time < bubbleUntil }
 
+    /// The bubble waits for the user (9d: an errand worth a trip to another desktop): it has buttons, or no end.
+    public var bubbleWaits: Bool { isTalking && (!bubbleButtons.isEmpty || bubbleUntil == .infinity) }
+
     /// The words in the bubble on screen now (slice 8c: the card notices another bubble took its place).
     public var bubbleWords: String? { isTalking ? bubbleText : nil }
 

@@ -71,6 +71,68 @@ final class EdgeController: NSObject {
     /// Acceptance only: CHILK_DEMO_HOP=<s> — a virtual monitor to the right becomes active after <s> for 8 s.
     private lazy var demoHopAt: Double? = env["CHILK_DEMO_HOP"].flatMap(Double.init).map { CACurrentMediaTime() + $0 }
 
+    // Slice 9d: the desktops (Spaces).
+    /// Settings → Экран → «Жить на одном столе».
+    var oneDesk: () -> Bool = { false }
+    /// Set by the app: an overlay shown on every desktop holds him (the shade, the pause, a guided break, a game).
+    var everywhere: () -> Bool = { false }
+    /// Set by the app: the tray popover or a game has taken him (`.away` is theirs then, not the dive's) — he does not
+    /// change desktops, and a dive's place is not given back over their head (review 9d).
+    var heldElsewhere: () -> Bool = { false }
+    private var desks = DeskKeeper()
+    /// One desk: the marker of his home desktop, and the monitor it was put on.
+    private var homeMarker: NSPanel?
+    private var homeMarkerDisplay: String?
+    /// 1: he is already behind the edge; the window moves to the active desktop on the next frame (after that pose is
+    /// drawn, so the old one never flashes there).
+    private var arriving = 0
+    private var arrivedAt: CFTimeInterval?
+    /// The dive home was ours (`standOut` set to `.away`): give him back his place afterwards.
+    private var divedForDesk = false
+    private var lastDeskStep: CFTimeInterval = 0
+    private var lastDeskRead: CFTimeInterval = 0
+    /// Read the desktops every step until then (after a switch and after his own moves); otherwise once a second.
+    private var deskWatchUntil: CFTimeInterval = 0
+    private var onActiveDesk = true
+    private var homeDeskActive = true
+    private var spaceObserver: NSObjectProtocol?
+    /// The watchdog (review 9d): steps the desks while his window is not on the active desktop or one desk is on — his
+    /// display link may stop there, and an errand must still bring him.
+    private var deskWatchdog: Timer?
+    /// Who is stepping the desks now (the log says whether a frame or a timer brought him).
+    private var deskStepper = "frame"
+    /// The desk demo's own clock (its steps must run while the demo stops the frames).
+    private var demoTimer: Timer?
+    /// Acceptance only (isolated state dir): CHILK_DEMO_DESKS="3:space,6:call,…" — virtual desktops (the agent
+    /// cannot swipe): the same handler as a real switch runs; the window is made transparent while «not on» the
+    /// virtual active desktop. Steps: `space` (the next desktop), `home`, `onedesk` / `follow` (the setting), `call`
+    /// (his «called» line only), `hotkey` (the hotkey's path: a conversation), `cheer`, `due` (a water request), `notify`
+    /// (posts the system's notification: the real observer, real desktops), `freeze` / `thaw` (stop / resume his frames,
+    /// as on a desktop nobody sees).
+    private struct DemoDesks {
+        var steps: [(at: Double, action: String)]
+        var active = 0, panel = 0, home = 0, next = 1
+        var all = false
+        /// After the first virtual switch; before it the real desktops are read.
+        var virtual = false
+    }
+    private lazy var demoDesks: DemoDesks? = {
+        guard AppState.isolated != nil, let raw = env["CHILK_DEMO_DESKS"], !raw.isEmpty else { return nil }
+        let start = CACurrentMediaTime()
+        let steps = raw.split(separator: ",").compactMap { part -> (Double, String)? in
+            let bits = part.split(separator: ":", maxSplits: 1).map(String.init)
+            guard bits.count == 2, let t = Double(bits[0]) else { return nil }
+            return (start + t, bits[1])
+        }
+        return DemoDesks(steps: steps)
+    }()
+    /// Acceptance only: the desk demo's «onedesk» / «follow» and «due» steps (wired by the app to the settings and
+    /// the balance — the same paths a click takes).
+    var demoSetOneDesk: (Bool) -> Void = { _ in }
+    var demoErrand: () -> Void = {}
+    var demoHotkey: () -> Void = {}
+    var demoCheer: () -> Void = {}
+
     private let env = ProcessInfo.processInfo.environment
     /// Measurement switch: behave as if the cursor were far away (no hover / gaze tracking).
     private lazy var ignorePointer = env["CHILK_IGNORE_POINTER"] != nil
@@ -118,6 +180,17 @@ final class EdgeController: NSObject {
         originY = Spring(origin.y, stiffness: 110, damping: 17)
         sceneOrigin = origin
         present()
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.deskSwitched(demo: nil) }
+        }
+        if demoDesks != nil {
+            let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.runDemoDesks(now: CACurrentMediaTime()) }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            demoTimer = timer
+        }
     }
 
     func show() {
@@ -153,7 +226,12 @@ final class EdgeController: NSObject {
         lastTimestamp = now
         if stats != nil, gap > 0 { stats?.gaps.append(gap) }
 
-        if now - lastHopCheck >= 0.1, drag == nil, flight == nil, leap == nil {
+        if arriving == 1 { finishArrival(now: now) }
+        if now - lastDeskStep >= 0.1 {
+            lastDeskStep = now
+            stepDesks(now: now)
+        }
+        if now - lastHopCheck >= 0.1, drag == nil, flight == nil, leap == nil, arriving == 0 {
             lastHopCheck = now
             stepHop(now: now)
         }
@@ -503,8 +581,10 @@ final class EdgeController: NSObject {
         // A peek or the «пф!» is seen: wait for it (only hidden at home he moves over unseen).
         let busy = !sim.isHiddenHome && (hopBusy() || centered || sim.act != nil || sim.isCarried
                                          || sim.standOut == .lurk || sim.pose.puffAge != nil)
+        // 9d (decision 31): pinned, an errand still brings him to the active monitor (not stages 3–4: centred there).
+        let errand = pinned != nil && onErrand && !onEveryDesk
         let step = hop.step(active: activeDisplay(now: now), connected: list.map(\.id), now: now, busy: busy,
-                            hidden: sim.isHiddenHome, pinned: pinned)
+                            hidden: sim.isHiddenHome, pinned: pinned, errand: errand)
         homeDisplay = list.first { $0.id == hop.home } ?? homeDisplay      // also picks up a new resolution
         switch step {
         case .stay:
@@ -516,6 +596,16 @@ final class EdgeController: NSObject {
             originY.value = o.y; originY.velocity = 0
             present()
             log("screen: on \(id.prefix(8))\(sim.hidden ? " (hidden, moved over)" : "")")
+            rehome()
+        case .visit(let id):
+            // He is needed there now: behind that monitor's edge at once, then he peeks out (no leap to wait for).
+            let o = targetOrigin()
+            sceneOrigin = o
+            originX.value = o.x; originX.velocity = 0
+            originY.value = o.y; originY.velocity = 0
+            if !centered { sim.reframe(x: metrics.awayX) }
+            present()
+            log("screen: errand on \(id.prefix(8)) — peeks out there")
         case .hop(let id):
             let from = sceneOrigin, to = targetOrigin()
             let arc = HopArc(from: from, to: to)
@@ -541,6 +631,229 @@ final class EdgeController: NSObject {
         if t >= l.arc.total {
             leap = nil
             log("screen: landed")
+            rehome()
+        }
+    }
+
+    // MARK: Desktops (slice 9d, decisions 30–31)
+
+    /// The one place that says he has business with the user (`DeskKeeper.onErrand`): something that waits for the
+    /// user — a bubble with buttons or with no end, a request's pantomime, out of his spot for a talk or a card, stage 3.
+    var onErrand: Bool { DeskKeeper.onErrand(standOut: sim.standOut, bubbleWaits: sim.bubbleWaits, act: sim.act) }
+
+    /// Shown on every desktop as before 9d: stages 3–4 (in the middle / above the pause), the shade, a guided break or a
+    /// game (the app: the court and the notebook hold him), the eye-gymnastics flight, the disco dance (the ball is on
+    /// every desktop) — a swipe never reframes him mid-throw or mid-dance.
+    private var onEveryDesk: Bool { everywhere() || centered || raised || flight != nil || sim.act?.isDance == true }
+
+    /// The active desktop changed (a swipe, Mission Control, a full-screen app) — or the demo's virtual one did.
+    private func deskSwitched(demo desk: Int?) {
+        deskWatchUntil = CACurrentMediaTime() + 2
+        readDesks()
+        log("desk: switched\(desk.map { " (demo desk \($0))" } ?? "") — he is \(onActiveDesk ? "here" : "not here")"
+            + (homeMarker != nil ? ", home \(homeDeskActive ? "is" : "is not") this desk" : ""))
+        // Answer right away, not from the frame loop: his display link may be paused while his window is on a desktop
+        // nobody sees.
+        let now = CACurrentMediaTime()
+        lastDeskStep = now
+        deskStepper = "switch"
+        stepDesks(now: now)
+        deskStepper = "frame"
+        // The system may still answer for the old desktop at the notification: read again a little later (frames or not).
+        for delay in DeskKeeper.rereadsAfterSwitch {
+            later(delay) { [weak self] in self?.watchdogStep(why: "re-read") }
+        }
+    }
+
+    /// One step from a timer, not from a frame: read the desktops afresh and decide.
+    private func watchdogStep(why: String) {
+        let now = CACurrentMediaTime()
+        let was = onActiveDesk
+        lastDeskStep = now
+        lastDeskRead = now
+        readDesks()
+        if was != onActiveDesk { log("desk: \(why) — he is \(onActiveDesk ? "here" : "not here") now") }
+        deskStepper = why
+        stepDesks(now: now)
+        deskStepper = "frame"
+    }
+
+    /// The watchdog runs only while it is needed (`DeskKeeper.needsWatchdog`).
+    private func updateWatchdog() {
+        let need = DeskKeeper.needsWatchdog(onActive: onActiveDesk, oneDesk: homeMarker != nil)
+        if need, deskWatchdog == nil {
+            let timer = Timer(timeInterval: DeskKeeper.watchdogInterval, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.watchdogStep(why: "watchdog") }
+            }
+            timer.tolerance = 0.05
+            RunLoop.main.add(timer, forMode: .common)
+            deskWatchdog = timer
+        } else if !need, let timer = deskWatchdog {
+            timer.invalidate()
+            deskWatchdog = nil
+        }
+    }
+
+    /// A one-shot timer that also fires while a menu is open (`.common`).
+    private func later(_ seconds: Double, _ action: @escaping @MainActor @Sendable () -> Void) {
+        let timer = Timer(timeInterval: seconds, repeats: false) { _ in MainActor.assumeIsolated { action() } }
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func readDesks() {
+        if let d = demoDesks, d.virtual {
+            onActiveDesk = d.all || d.panel == d.active
+            homeDeskActive = homeMarker == nil || d.home == d.active
+            let alpha: CGFloat = onActiveDesk ? 1 : 0
+            if leap == nil, panel.alphaValue != alpha { panel.alphaValue = alpha }
+        } else {
+            onActiveDesk = panel.isOnActiveSpace
+            homeDeskActive = homeMarker?.isOnActiveSpace ?? true
+        }
+    }
+
+    private func stepDesks(now: CFTimeInterval) {
+        let oneDesk = oneDesk()
+        if oneDesk, homeMarker == nil {
+            makeHome()
+            log("desk: one desk — home is this desktop")
+        } else if !oneDesk, let marker = homeMarker {
+            marker.orderOut(nil)
+            homeMarker = nil
+            log("desk: follows you again")
+        }
+        if now < deskWatchUntil || now - lastDeskRead >= 1 {
+            lastDeskRead = now
+            readDesks()
+        }
+        let situation = DeskKeeper.Situation(
+            mode: oneDesk ? .oneDesk : .follow, onActive: onActiveDesk, homeActive: homeDeskActive, errand: onErrand,
+            everywhere: onEveryDesk,
+            canMove: drag == nil && leap == nil && flight == nil && arriving == 0 && !heldElsewhere(), now: now)
+        defer { updateWatchdog() }
+        switch desks.step(situation) {
+        case .stay:
+            break
+        case .allDesks:
+            // An arrival in flight is dropped: on every desktop he is here already (and `.moveToActiveSpace` must never
+            // meet `.canJoinAllSpaces`). A dive of ours is over too — he stays where the user is.
+            arriving = 0
+            divedForDesk = false
+            panel.collectionBehavior = EdgePanel.allDesks
+            demoDesks?.all = true
+            log("desk: on every desktop (\(centered ? "stage 3–4" : flight != nil ? "flight" : "overlay"))")
+        case .oneDeskAgain:
+            panel.collectionBehavior = EdgePanel.oneDesk
+            if var d = demoDesks { d.all = false; d.panel = d.active; demoDesks = d }
+            log("desk: one desktop again — this one")
+            watchDesks(now)
+        case .arrive:
+            // Behind the edge first; the window follows on the next frame and he peeks out (like after the popover).
+            if !centered { sim.reframe(x: metrics.awayX) }
+            present()
+            arriving = 1
+            // The window moves once this pose is drawn: the next frame, or this timer if frames are paused.
+            later(1.0 / 30) { [weak self] in self?.finishArrival(now: CACurrentMediaTime()) }
+            log("desk: comes here\(oneDesk ? (onErrand ? " on an errand" : " (home)") : "") — from behind the edge"
+                + " [\(deskStepper)]")
+        case .leave:
+            if sim.standOut == .docked {
+                sim.standOut = .away
+                divedForDesk = true
+            }
+            log("desk: errand over — dives behind the edge")
+        case .stopLeaving:
+            giveBackHisPlace()
+            log("desk: another errand — stays here")
+        case .sendHome:
+            if let marker = homeMarker { panel.move(toDeskOf: marker) }
+            if var d = demoDesks { d.panel = d.home; demoDesks = d }
+            giveBackHisPlace()
+            watchDesks(now)
+            readDesks()
+            log("desk: went home [\(deskStepper)]")
+        }
+    }
+
+    private func finishArrival(now: CFTimeInterval) {
+        guard arriving == 1 else { return }
+        arriving = 0
+        if !centered { sim.reframe(x: metrics.awayX) }
+        present()
+        panel.moveToActiveDesk()
+        if var d = demoDesks { d.panel = d.active; demoDesks = d }
+        watchDesks(now)
+        readDesks()
+        arrivedAt = now
+        // The user's log should show it if the system did not take him over (the keeper then tries again).
+        if !onActiveDesk { log("desk: the window is still not on this desktop after the move") }
+    }
+
+    private func watchDesks(_ now: CFTimeInterval) { deskWatchUntil = max(deskWatchUntil, now + 1) }
+
+    /// After our dive: back at his spot — unless the popover or a game took him meanwhile (their `.away`, not ours).
+    private func giveBackHisPlace() {
+        if divedForDesk, sim.standOut == .away, !heldElsewhere() { sim.standOut = .docked }
+        divedForDesk = false
+    }
+
+    /// One desk: home is the active desktop on the monitor he lives on.
+    private func makeHome() {
+        homeMarker?.orderOut(nil)
+        homeMarker = EdgePanel.homeMarker(at: home.frame.origin)
+        homeMarkerDisplay = home.id
+        if var d = demoDesks { d.home = d.active; demoDesks = d }
+        watchDesks(CACurrentMediaTime())
+    }
+
+    /// He moved to another monitor for good (6e): one desk — home is the desktop he landed on.
+    private func rehome() {
+        guard homeMarker != nil, homeMarkerDisplay != home.id else { return }
+        makeHome()
+        log("desk: home moved with him to this monitor's desktop")
+    }
+
+    /// The desk demo: virtual switches and errands, plus how far out he is 0.4 s after an arrival.
+    private func runDemoDesks(now: CFTimeInterval) {
+        if let at = arrivedAt, now - at >= 0.4 {
+            arrivedAt = nil
+            log(String(format: "desk: %@ 0.4 s after arriving (x %.0f; his spot %.0f, behind the edge %.0f)",
+                       sim.positionX < metrics.awayX - 40 ? "peeking out" : "still behind the edge",
+                       sim.positionX, metrics.dockX, metrics.awayX))
+        }
+        guard var d = demoDesks, let step = d.steps.first, now >= step.at else { return }
+        d.steps.removeFirst()
+        demoDesks = d
+        switch step.action {
+        case "space":
+            d.virtual = true
+            d.active = d.next
+            d.next += 1
+            demoDesks = d
+            deskSwitched(demo: d.active)
+        case "home":
+            d.virtual = true
+            d.active = d.home
+            demoDesks = d
+            deskSwitched(demo: d.active)
+        case "notify":                                     // the real observer: the system's notification, posted here
+            NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+        case "onedesk": demoSetOneDesk(true)
+        case "follow": demoSetOneDesk(false)
+        case "call": callChilk()
+        case "hotkey": demoHotkey()
+        case "cheer": demoCheer()
+        case "due": demoErrand()
+        case "freeze":
+            link?.isPaused = true
+            driverTimer?.invalidate()
+            driverTimer = nil
+            log("desk demo: frames stopped (as on a desktop nobody sees)")
+        case "thaw":
+            link?.isPaused = false
+            if link == nil { restartTimer(fps: 60) }
+            log("desk demo: frames again")
+        default: log("desk demo: unknown step \(step.action)")
         }
     }
 

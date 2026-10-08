@@ -450,10 +450,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool?
     /// Slice 9f: the Codex model and depth.
     public var brain = BrainChoice()
+    /// Slice 9d (decision 31): «Жить на одном столе» — Chilk stays on one desktop and comes to the others on errands.
+    public var oneDesk = false
 
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case apps, hotkey, screen, launchAtLogin, brain }
+    private enum CodingKeys: String, CodingKey { case apps, hotkey, screen, launchAtLogin, brain, oneDesk }
 
     /// Field by field: an older or partly damaged file keeps what it can and defaults the rest.
     public init(from decoder: any Decoder) throws {
@@ -463,9 +465,11 @@ public struct AppSettings: Codable, Equatable, Sendable {
         screen = (try? c.decodeIfPresent(ScreenChoice.self, forKey: .screen)) ?? .follow
         launchAtLogin = try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)
         brain = (try? c.decodeIfPresent(BrainChoice.self, forKey: .brain)) ?? BrainChoice()
+        oneDesk = (try? c.decodeIfPresent(Bool.self, forKey: .oneDesk)) ?? false
     }
 
-    /// `brain` only once chosen: a file from before slice 9f re-encodes unchanged, so it is not copied aside as lossy.
+    /// `brain` only once chosen and `oneDesk` only when on: a file from before slices 9f / 9d re-encodes unchanged, so it
+    /// is not copied aside as lossy.
     public func encode(to encoder: any Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(apps, forKey: .apps)
@@ -473,5 +477,6 @@ public struct AppSettings: Codable, Equatable, Sendable {
         try c.encode(screen, forKey: .screen)
         try c.encodeIfPresent(launchAtLogin, forKey: .launchAtLogin)
         if brain != BrainChoice() { try c.encode(brain, forKey: .brain) }
+        if oneDesk { try c.encode(oneDesk, forKey: .oneDesk) }
     }
 }

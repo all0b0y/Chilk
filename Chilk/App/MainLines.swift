@@ -103,6 +103,10 @@ extension Lines {
     static let followActive = String(localized: "Следовать за активным экраном")
     static func pinnedTo(_ name: String) -> String { String(localized: "Закрепить: \(name)") }
     static func notConnected(_ name: String) -> String { String(localized: "\(name) (не подключён)") }
+    /// Slice 9d (decision 31): the desktops (Spaces).
+    static let oneDesk = String(localized: "Жить на одном столе")
+    static let oneDeskOffHelp = String(localized: "Сейчас Чилк ходит за тобой: на другом рабочем столе выглядывает из-за края.")
+    static let oneDeskOnHelp = String(localized: "Чилк живёт на столе, где был при включении. По делу — просьба, сообщение, карточка, вызов — приходит на твой стол, а потом уходит обратно.")
 
     static let callMe = String(localized: "Как тебя называть")
     static let save = String(localized: "Сохранить")

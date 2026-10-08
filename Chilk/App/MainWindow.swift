@@ -60,6 +60,8 @@ final class MainModel {
     var edge = ChilkCore.Edge.right
     var screen = ScreenChoice.follow
     var screens: [ScreenRow] = []
+    /// Slice 9d: «Жить на одном столе».
+    var oneDesk = false
     var name = ""
     var nameNote: String?
     var chatDays: Int? = 7
@@ -92,6 +94,7 @@ final class MainModel {
     var record: (Bool) -> Void = { _ in }
     var setEdge: (ChilkCore.Edge) -> Void = { _ in }
     var setScreen: (ScreenChoice) -> Void = { _ in }
+    var setOneDesk: (Bool) -> Void = { _ in }
     var saveName: (String) -> Void = { _ in }
     var setChatDays: (Int?) -> Void = { _ in }
     var setLaunch: (Bool) -> Void = { _ in }
@@ -260,6 +263,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if model.hotkeyLabel != Hotkey.label { model.hotkeyLabel = Hotkey.label }
         if model.edge != edge.edge { model.edge = edge.edge }
         if model.screen != s.screen { model.screen = s.screen }
+        if model.oneDesk != s.oneDesk { model.oneDesk = s.oneDesk }
         model.name = profile.profile.name ?? ""
         if model.chatDays != chats.log.autoDeleteDays { model.chatDays = chats.log.autoDeleteDays }
         refreshApps()
@@ -358,6 +362,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             self?.settings.update { $0.screen = choice }
             self?.model.screen = choice
             self?.log("settings screen \(choice == .follow ? "follow" : "pinned")")
+        }
+        model.setOneDesk = { [weak self] on in
+            self?.settings.update { $0.oneDesk = on }
+            self?.model.oneDesk = on
+            self?.log("settings one desk \(on ? "on" : "off")")
         }
         model.saveName = { [weak self] raw in
             guard let self else { return }
@@ -478,8 +487,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// Runs Settings steps through the same model actions a click uses, logs what each did, then (optionally) draws
     /// every section. Steps: `off:water`, `on:water`, `low:water:30`, `high:walk:200`, `budget:weekday:9`,
     /// `mode:strict`, `due:stretch`, `stage:3` (wait for it), `app:<bundle>:<work|leisure|call|untouchable|auto>`,
-    /// `hotkey` (⌃⌥K), `hotkey:std`, `chats:30|never`, `name:<text>`, `reset`, `shot:<section>:<label>`; slice 9f (an
-    /// isolated run only): `model:<id>`, `depth:<low|medium|high>`, `brain` (scroll Settings to «Мозг»), `wait:<s>`.
+    /// `hotkey` (⌃⌥K), `hotkey:std`, `chats:30|never`, `onedesk:on|off`, `name:<text>`, `reset`, `shot:<section>:<label>`;
+    /// slice 9f (an isolated run only): `model:<id>`, `depth:<low|medium|high>`, `brain` (scroll Settings to «Мозг»), `wait:<s>`.
     func runDemo(_ steps: [String], snapshot dir: URL?) {
         Task {
             for step in steps where !step.isEmpty {
@@ -507,6 +516,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
                     apply(hotkey: parts.count > 1 && parts[1] == "std" ? .standard
                           : HotkeySpec(keyCode: 40, modifiers: HotkeySpec.control | HotkeySpec.option, label: "⌃⌥K"))
                 case "chats": model.setChatDays(parts.count > 1 ? Int(parts[1]) : nil)
+                case "onedesk": model.setOneDesk(parts.count < 2 || parts[1] != "off")
                 case "name": model.saveName(parts.dropFirst().joined(separator: ":"))
                 case "reset": balance.resetNeeds()
                 case "model" where AppState.isolated != nil:
@@ -533,7 +543,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
                 let care = model.care
                 log("main demo \(step): refused=\(model.refusal != nil) locked=\(model.locked) mode=\(model.mode.rawValue) "
                     + "off=\(care.off.map(\.rawValue).sorted()) water=\(care.range(.water).low)-\(care.range(.water).high) "
-                    + "weekday=\(care.weekdayHours)h hotkey=\(model.hotkeyLabel) chats=\(model.chatDays.map(String.init) ?? "never") "
+                    + "weekday=\(care.weekdayHours)h hotkey=\(model.hotkeyLabel) chats=\(model.chatDays.map(String.init) ?? "never") oneDesk=\(model.oneDesk) "
                     + "stage=\(balance.engine.state.episode.map { "\($0.need.rawValue)@\($0.stage)" } ?? "-") "
                     + "brain=\(model.brain.modelID)/\(model.brain.depth.rawValue) models=\(model.brainModels?.count ?? -1)")
                 try? await Task.sleep(for: .milliseconds(800))

@@ -10,6 +10,9 @@ public struct ScreenHop: Equatable, Sendable {
         case hop(to: String)
         /// Be there at once, no flight (first frame, his monitor unplugged, hidden).
         case move(to: String)
+        /// 9d (decision 31): pinned, but an errand calls him to the active monitor — there at once, he peeks out from
+        /// behind its edge (a bubble must not wait for a leap). Free again, he leaps home to the pinned one.
+        case visit(to: String)
     }
 
     /// The monitor's id he lives on (`nil` before the first step).
@@ -22,10 +25,14 @@ public struct ScreenHop: Equatable, Sendable {
 
     public init(home: String? = nil) { self.home = home }
 
-    /// `active`: the monitor with the active window; `pinned`: Settings → screen (nil = follow); `now`: seconds.
+    /// `active`: the monitor with the active window; `pinned`: Settings → screen (nil = follow); `now`: seconds;
+    /// `errand`: he has business with the user (9d) — a pinned Chilk comes to the active monitor for it.
     public mutating func step(active: String?, connected: [String], now: Double, busy: Bool, hidden: Bool,
-                              pinned: String?) -> Step {
-        let target = pinned.flatMap { connected.contains($0) ? $0 : nil } ?? active ?? home
+                              pinned: String?, errand: Bool = false) -> Step {
+        let pinnedHere = pinned.flatMap { connected.contains($0) ? $0 : nil }
+        let activeHere = active.flatMap { connected.contains($0) ? $0 : nil }
+        let called = errand && pinnedHere != nil ? activeHere : nil
+        let target = called ?? pinnedHere ?? active ?? home
         guard let target else { return .stay }
         guard let current = home, connected.contains(current) else {
             home = target
@@ -33,6 +40,11 @@ public struct ScreenHop: Equatable, Sendable {
             return .move(to: target)
         }
         guard target != current else { candidate = nil; return .stay }
+        if target == called {
+            home = target
+            candidate = nil
+            return .visit(to: target)
+        }
         if candidate != target { candidate = target; since = now }
         guard now - since >= Self.dwell - 1e-9, !busy else { return .stay }
         home = target
