@@ -288,6 +288,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clock.checkAtLaunch()
         cards.onLeftConversation = { [weak conversation] in conversation?.cardLeft() }
         cards.onShownAgain = { [weak conversation] in conversation?.awaitCardAnswer() }
+        cards.onSettled = { [weak conversation] in conversation?.cardSettledElsewhere() }
         if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             cards.snapshot = { [weak edge, weak chat] name in
@@ -330,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ears.onDisabled = { [weak conversation] in conversation?.muteEars() }
         ears.onError = { [weak conversation] in conversation?.muteEars() }
         ears.notice = { [weak edge, weak conversation, weak hide, weak balance] line in
-            // 6d: hidden, an ears notice («Учусь слышать…» at launch) must not pull him out — the tray shows it.
+            // 6d: hidden, an ears notice (the «слух сломался» line) must not pull him out — the tray shows it.
             if hide?.isHidden == true { balance?.log("ears notice while hidden: \(line)"); return }
             if conversation?.isActive != true { edge?.sim.call(line: line) }
         }
@@ -485,18 +486,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var powerOffAt: Date?
     private var powerOffObserver: NSObjectProtocol?
 
-    /// ⌘Q and the Dock's «Завершить» close Chilk's windows; he stays at the edge and in the tray.
+    /// ⌘Q and the Dock's «Завершить» close Chilk's windows; he stays at the edge and in the tray. A quit event from
+    /// anyone else (logout / restart / shutdown, Finder replacing the app, an installer, a script) ends him as before —
+    /// cancelling those would block updates and session ends.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        let powerOff = powerOffAt.map { Date().timeIntervalSince($0) < 60 } ?? false
-        if quitForReal || powerOff || Self.sessionEnding() { return .terminateNow }
+        if quitForReal { return .terminateNow }
+        if let event = NSAppleEventManager.shared().currentAppleEvent {   // a quit Apple event (no event: ⌘Q / menu)
+            let powerOff = powerOffAt.map { Date().timeIntervalSince($0) < 60 } ?? false
+            if powerOff || Self.sessionEnding(event) || !Self.fromDock(event) { return .terminateNow }
+        }
         balance?.log("quit asked (⌘Q / Dock) → only the windows closed")
         closeWindows()
         return .terminateCancel
     }
 
+    /// The Dock's «Завершить»: the quit event's sender is the Dock.
+    private static func fromDock(_ event: NSAppleEventDescriptor) -> Bool {
+        guard let pid = event.attributeDescriptor(forKeyword: fourCC("spid"))?.int32Value, pid > 0 else { return false }
+        return NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.dock"
+    }
+
     /// The quit Apple event of a logout, restart or shutdown carries its reason; the Dock's «Завершить» does not.
-    private static func sessionEnding() -> Bool {
-        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+    private static func sessionEnding(_ event: NSAppleEventDescriptor) -> Bool {
         let why = fourCC("why?")
         guard let reason = (event.attributeDescriptor(forKeyword: why) ?? event.paramDescriptor(forKeyword: why))?
             .enumCodeValue else { return false }

@@ -36,14 +36,22 @@ final class Conversation {
     /// The card was answered elsewhere (the chat) while it was in his bubble.
     func cardLeft() { cardInBubble = false; cardSeen = false }
 
+    /// The card was answered at the edge or in the chat while he watched for a spoken answer: the minute ends.
+    func cardSettledElsewhere() {
+        guard cardWatch, phase == .waiting else { return }
+        log("card answered elsewhere: the watch ends")
+        cardWatch = false
+        stopEars()
+        leave(saying: nil, after: 0.2, clearBubble: false)          // the desk shows the card's result there
+    }
+
     /// Slice 9, decision 8: a card first proposed by voice came back to the edge («А карточку-то подтвердишь?») — he
     /// listens a minute without his name for «да / нет / поправка», as right after the card in a conversation.
     /// Nothing happens when he is busy, the ears are off or he would refuse to talk.
     func awaitCardAnswer() {
-        guard phase == .idle, !closing, ears.enabled, ears.ready, brain.problem == nil, refusal() == nil,
-              let cards, cards.hasCard else { return }
+        guard phase == .idle, !closing, !suppressFollowUps, ears.enabled, ears.ready, brain.problem == nil,
+              refusal() == nil, let cards, cards.hasCard else { return }
         log("card back at the edge: listening for the answer")
-        suppressFollowUps = false
         turns = 0
         cardSeen = true
         cardWatch = true
@@ -392,6 +400,7 @@ final class Conversation {
                 if !text.isEmpty {
                     if phase == .waiting {                                       // the follow-up has begun
                         phase = .listening
+                        cardWatch = false                           // his words now: an ordinary turn from here on
                         longAnswer = nil
                         cardInBubble = false                        // his words now; the card waits at the desk
                         cards?.leaveConversation()
@@ -559,8 +568,10 @@ final class Conversation {
     }
 
     /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
-    private func leave(saying line: String?, after seconds: Double) {
-        let keepCard = cardWatch && line == nil && cards?.hasCard == true   // a silent watch: the card stays as it is
+    /// - Parameter clearBubble: `false` when another owner already holds the bubble (a card answered at the edge
+    ///   shows its result there).
+    private func leave(saying line: String?, after seconds: Double, clearBubble: Bool = true) {
+        let keepCard = !clearBubble || (cardWatch && line == nil && cards?.hasCard == true)   // a silent watch: the card stays
         cardWatch = false
         settleQuestion(nil)
         cardInBubble = false

@@ -95,7 +95,8 @@ struct NotebookView: View {
         default: size
         }
     }
-    /// The sheet's palette now; the root view is rebuilt (`.id`) when it changes, so every board redraws with it.
+    /// The sheet's palette now. Set only by GameController together with `model.dark` (main thread); the sheet's content
+    /// is rebuilt (`.id(model.dark)`) when it changes, so every board's Canvas reads the new colours.
     nonisolated(unsafe) static var palette = NotebookPalette.light
     static var paper: Color { palette.paper }
     static var ink: Color { palette.ink }
@@ -103,7 +104,6 @@ struct NotebookView: View {
     static var note: Color { palette.note }
 
     var body: some View {
-        let _ = (Self.palette = model.dark ? .dark : .light)
         ZStack(alignment: .bottomTrailing) {
             Self.paper
             VStack(alignment: .leading, spacing: 14) {
@@ -138,6 +138,7 @@ struct NotebookView: View {
             .padding(.top, 34)
             .padding(.bottom, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .id(model.dark)                                // a new palette: the boards and marks are drawn again (not Chilk)
             HeroPortrait(view: hero).frame(width: hero.size.width, height: hero.size.height)
             ThemeButton(dark: model.dark, toggle: model.toggleTheme)
                 .padding(.top, 12)
@@ -154,7 +155,6 @@ struct NotebookView: View {
         .frame(width: Self.size(for: model.kind).width, height: Self.size(for: model.kind).height)
         .environment(\.colorScheme, model.dark ? .dark : .light)
         .tint(TrayView.peach)
-        .id(model.dark)                                    // a new palette: every board and mark is drawn again
     }
 
     private var setup: some View {

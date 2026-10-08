@@ -90,6 +90,7 @@ final class GameController: NSObject, NSWindowDelegate {
         model.tap = { [weak self] i in self?.tap(i) }
         model.again = { [weak self] in self?.again() }
         model.close = { [weak self] in self?.close() }
+        NotebookView.palette = history.dark ? .dark : .light
         model.dark = history.dark
         model.toggleTheme = { [weak self] in self?.toggleTheme() }
         model.answer = { [weak self] i in self?.answer(i) }
@@ -109,6 +110,7 @@ final class GameController: NSObject, NSWindowDelegate {
     /// Slice 9, decision 5: ☀️/🌙 — the sheet for every notebook game, remembered in games.json.
     private func toggleTheme() {
         history.dark.toggle()
+        NotebookView.palette = history.dark ? .dark : .light   // before the model: the redraw reads it
         model.dark = history.dark
         try? history.save(to: Self.historyFile)
         log("notebook sheet \(history.dark ? "dark" : "light")")
@@ -773,6 +775,10 @@ extension GameController {
     /// plays your moves from the list (a taken cell → the next free one); CHILK_DEMO_GAME_SNAPSHOT=/dir writes the
     /// notebook after every phase change; the notebook closes 4 s after the match ends.
     func demo(_ spec: String, snapshots: String?) {
+        // Slice 9a acceptance: CHILK_DEMO_THEME_TOGGLE presses ☀️/🌙 once, 3 s in (Chilk must stay on the sheet).
+        if AppState.isolated != nil, ProcessInfo.processInfo.environment["CHILK_DEMO_THEME_TOGGLE"] != nil {
+            after(3) { [weak self] in self?.toggleTheme() }
+        }
         let parts = spec.split(separator: ":")
         let length = parts.first.flatMap { Int($0) } ?? 1
         var script = parts.count > 1 ? parts[1].split(separator: ",").compactMap { Int($0) } : []

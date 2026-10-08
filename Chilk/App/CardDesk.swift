@@ -39,6 +39,8 @@ final class CardDesk {
     private var bornInVoice: Set<UUID> = []
     /// A voice-born card is shown again at the edge (the conversation opens a minute without the name).
     var onShownAgain: () -> Void = {}
+    /// A card was answered (any way): a conversation watching for a spoken answer stops listening.
+    var onSettled: () -> Void = {}
     /// Counts proposals: a conversation shows the card in its bubble only if its own turn proposed one.
     private(set) var proposals = 0
 
@@ -266,6 +268,7 @@ final class CardDesk {
         bornInVoice.remove(card.id)
         correcting = false
         log("card answered: \(how)")
+        onSettled()
         if showing { hide() }
         if inConversation {
             // Answered in the chat while his bubble shows it: the bubble keeps its words, loses the buttons.
@@ -347,7 +350,7 @@ final class CardDesk {
         showing = true
         displaced = false
         log("card shown\(again ? " again" : "")")
-        if again, bornInVoice.contains(card.id) { onShownAgain() }
+        if again, bornInVoice.remove(card.id) != nil { onShownAgain() }   // one watch per card: never a loop
         if let snapshot {
             shots += 1
             let name = String(format: "card-%02d", shots)
