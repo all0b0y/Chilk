@@ -16,6 +16,10 @@ public struct DaySummary: Equatable, Sendable {
     public var date: Date
     public var active: TimeInterval
     public var budget: TimeInterval
+    /// Slice 9c (decision 27): that day's night — its bedtime and the last action at the Mac in it (nil: «Сон» was off).
+    public var bedtime: Int? = nil
+    public var lastNightActivity: Date? = nil
+    public var sleepPushed = false
 }
 
 public struct TodaySummary: Equatable, Sendable {
@@ -31,6 +35,8 @@ public struct TodaySummary: Equatable, Sendable {
 
     /// Of the day's budget, as «Конец дня» counts it (from re-enabling, if it was switched off). Negative = over.
     public var left: TimeInterval
+    /// Slice 9c (decision 27): last night — or tonight's, once it began (nil: «Сон» was off).
+    public var sleep: SleepNight? = nil
 
     public static let empty = TodaySummary(streak: 0, active: 0, budget: 0, tallies: [], deferrals: 0, exits: [], left: 0)
 }
@@ -74,9 +80,16 @@ public enum Summaries {
         let day = state.day.key == key ? state.day : DayStats(key: key)
         let date = config.dayDate(key, calendar: calendar) ?? now
         let budget = config.budget(forDay: date, calendar: calendar)
+        // Decision 27: the night of this day once it began, else last night (the day before).
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now).map { config.dayKey($0, calendar: calendar) }
+        let night = day.bedtime != nil ? day : state.history.last { $0.key == yesterday }
+        let sleep = night.flatMap { d in
+            d.bedtime.map { SleepNight(bedtime: $0, lastActivity: d.lastNightActivity, pushed: (d.pushed[.sleep] ?? 0) > 0) }
+        }
         return TodaySummary(streak: state.streak, active: day.active, budget: budget,
                             tallies: tallies([day]), deferrals: day.snoozes + day.busy,
-                            exits: day.exits.sorted { $0.at > $1.at }, left: budget - (day.active - day.budgetFrom))
+                            exits: day.exits.sorted { $0.at > $1.at }, left: budget - (day.active - day.budgetFrom),
+                            sleep: sleep)
     }
 
     public static func week(_ state: BalanceState, config: BalanceConfig, now: Date, calendar: Calendar) -> WeekSummary {
@@ -92,7 +105,9 @@ public enum Summaries {
             let key = config.dayKey(date.addingTimeInterval(Double(config.dayStartsAtHour) * 3600), calendar: calendar)
             let d = known[key] ?? DayStats(key: key)
             stats.append(d)
-            days.append(DaySummary(key: key, date: date, active: d.active, budget: config.budget(forDay: date, calendar: calendar)))
+            days.append(DaySummary(key: key, date: date, active: d.active, budget: config.budget(forDay: date, calendar: calendar),
+                                   bedtime: d.bedtime, lastNightActivity: d.lastNightActivity,
+                                   sleepPushed: (d.pushed[.sleep] ?? 0) > 0))
         }
         return WeekSummary(days: days, tallies: tallies(stats), deferrals: stats.reduce(0) { $0 + $1.snoozes + $1.busy },
                            exits: stats.flatMap(\.exits).sorted { $0.at > $1.at })

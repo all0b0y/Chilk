@@ -94,7 +94,8 @@ struct SettingsSliceTests {
         #expect(c.waterMinutes == d.waterMinutes && c.stretchMinutes == d.stretchMinutes)
         #expect(c.eyesMinutes == d.eyesMinutes && c.walkMinutes == d.walkMinutes)
         #expect(c.weekdayBudget == d.weekdayBudget && c.weekendBudget == d.weekendBudget)
-        #expect(c.needsOff.isEmpty)
+        #expect(c.needsOff == d.needsOff && c.needsOff == [.sleep])          // slice 9c: «Сон» is off by default
+        #expect(c.bedtime == d.bedtime)
     }
 
     @Test func lessCareSoftensMoreCareTightens() {

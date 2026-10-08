@@ -314,7 +314,7 @@ final class Tray: NSObject, NSPopoverDelegate {
             case .started:
                 self.closing { [weak self] in self?.balance.announceFocus() }
                 return nil
-            case .refused(let r): return r == .focusSpent ? Lines.focusSpent : Lines.softerRefused
+            case .refused(let r): return r == .focusSpent ? Lines.focusSpent : r == .sleepTime ? Lines.focusAtNight : Lines.softerRefused
             case .notSaved: return Lines.focusNotSaved
             }
         }

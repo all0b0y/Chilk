@@ -29,6 +29,10 @@ public struct CareSettings: Codable, Equatable, Sendable {
     public var ranges: [Need: MinuteRange] = CareSettings.defaultRanges
     public var weekdayHours = 8
     public var weekendHours = 4
+    /// Slice 9c (decision 19): «Сон» — off by default; one bedtime for every day (minutes after midnight, 20:00–03:00).
+    public var sleepOn = false
+    public var bedtime = CareSettings.defaultBedtime
+    public static let defaultBedtime = 23 * 60
 
     public static let defaultRanges: [Need: MinuteRange] = [
         .water: MinuteRange(40, 70), .stretch: MinuteRange(45, 75), .eyes: MinuteRange(30, 50), .walk: MinuteRange(120, 180),
@@ -41,19 +45,21 @@ public struct CareSettings: Codable, Equatable, Sendable {
         case .stretch: CareLimits(min: 20, max: 150, step: 5)
         case .eyes: CareLimits(min: 15, max: 90, step: 5)
         case .walk: CareLimits(min: 60, max: 300, step: 15)
-        case .endOfDay: CareLimits(min: 0, max: 0, step: 0)
+        case .endOfDay, .sleep: CareLimits(min: 0, max: 0, step: 0)
         }
     }
 
     public init() {}
 
-    public func isOn(_ n: Need) -> Bool { !off.contains(n) }
+    public func isOn(_ n: Need) -> Bool { n == .sleep ? sleepOn : !off.contains(n) }
 
     public func range(_ n: Need) -> MinuteRange { ranges[n] ?? Self.defaultRanges[n] ?? MinuteRange(0, 0) }
 
     /// The engine's numbers. Everything else in `BalanceConfig` stays as it is.
     public func apply(to c: inout BalanceConfig) {
-        c.needsOff = off
+        c.needsOff = off.subtracting([.sleep])
+        if !sleepOn { c.needsOff.insert(.sleep) }
+        c.bedtime = bedtime
         func minutes(_ n: Need) -> ClosedRange<Double> {
             let r = range(n)
             return Double(r.low)...Double(max(r.low, r.high))
@@ -66,7 +72,7 @@ public struct CareSettings: Codable, Equatable, Sendable {
         c.weekendBudget = Double(weekendHours) * 3600
     }
 
-    private enum CodingKeys: String, CodingKey { case off, ranges, weekdayHours, weekendHours }
+    private enum CodingKeys: String, CodingKey { case off, ranges, weekdayHours, weekendHours, sleepOn, bedtime }
 
     private struct NeedKey: CodingKey {
         let stringValue: String
@@ -79,7 +85,11 @@ public struct CareSettings: Codable, Equatable, Sendable {
     /// Field by field (and range by range): a damaged value loses only itself, never the rest of the care.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        off = Set(((try? c.decodeIfPresent([String].self, forKey: .off)) ?? []).compactMap(Need.init(rawValue:)))
+        off = Set(((try? c.decodeIfPresent([String].self, forKey: .off)) ?? []).compactMap(Need.init(rawValue:))).subtracting([.sleep])
+        // A file from before slice 9c has no «Сон»: off, like for a new user.
+        sleepOn = (try? c.decodeIfPresent(Bool.self, forKey: .sleepOn)) ?? false
+        let bed = (try? c.decodeIfPresent(Int.self, forKey: .bedtime)) ?? Self.defaultBedtime
+        bedtime = SleepClock.isValid(bed) ? bed : Self.defaultBedtime
         if let saved = try? c.nestedContainer(keyedBy: NeedKey.self, forKey: .ranges) {
             for n in Need.body {
                 guard let r = try? saved.decode(MinuteRange.self, forKey: NeedKey(n.rawValue)) else { continue }
@@ -98,6 +108,8 @@ public struct CareSettings: Codable, Equatable, Sendable {
         try c.encode(off.map(\.rawValue).sorted(), forKey: .off)
         try c.encode(ranges, forKey: .ranges)
         try c.encode(weekdayHours, forKey: .weekdayHours)
+        try c.encode(sleepOn, forKey: .sleepOn)
+        try c.encode(bedtime, forKey: .bedtime)
         try c.encode(weekendHours, forKey: .weekendHours)
     }
 }
@@ -108,6 +120,8 @@ public enum CareChange: Equatable, Sendable {
     case low(Need, Int)
     case high(Need, Int)
     case budget(weekend: Bool, hours: Int)
+    /// Slice 9c: the bedtime, 20:00–03:00 (minutes after midnight); «Сон» on / off is `.need(.sleep, on:)`.
+    case bedtime(Int)
 }
 
 extension CareSettings {
@@ -116,7 +130,9 @@ extension CareSettings {
         var s = self
         switch change {
         case .need(let n, let on):
-            if on { s.off.remove(n) } else { s.off.insert(n) }
+            if n == .sleep { s.sleepOn = on } else if on { s.off.remove(n) } else { s.off.insert(n) }
+        case .bedtime(let minutes):
+            if SleepClock.isValid(minutes) { s.bedtime = minutes }
         case .low(let n, let value):
             guard Need.body.contains(n) else { return s }
             let l = Self.limits(n)
@@ -142,7 +158,13 @@ extension CareSettings {
     public func isSofter(_ after: CareSettings) -> Bool {
         if !after.off.subtracting(off).isEmpty { return true }
         for n in Need.body where after.range(n).low > range(n).low || after.range(n).high > range(n).high { return true }
+        if sleepSofter(after) { return true }
         return after.weekdayHours > weekdayHours || after.weekendHours > weekendHours
+    }
+
+    /// «Сон» switched off or a later bedtime (decision 26: refused from the warning until 05:00; earlier always goes).
+    public func sleepSofter(_ after: CareSettings) -> Bool {
+        sleepOn && (!after.sleepOn || SleepClock.order(after.bedtime) > SleepClock.order(bedtime))
     }
 
     public func softens(_ change: CareChange) -> Bool { isSofter(applying(change)) }

@@ -2,9 +2,10 @@ import Foundation
 
 // MARK: - Vocabulary
 
-/// What Чилк looks after (В11). Declaration order = priority when several are due at once.
+/// What Чилк looks after (В11). Declaration order = priority when several are due at once. Slice 9c: «Сон» — from
+/// bedtime to 05:00 the only one.
 public enum Need: String, CaseIterable, Codable, CodingKeyRepresentable, Sendable, Comparable {
-    case endOfDay, walk, stretch, water, eyes
+    case sleep, endOfDay, walk, stretch, water, eyes
 
     public static func < (a: Need, b: Need) -> Bool {
         allCases.firstIndex(of: a)! < allCases.firstIndex(of: b)!
@@ -62,6 +63,14 @@ public enum BalanceRefusal: Error, Equatable, Sendable {
     case deferralsSpent
     /// Today's focus time (`BalanceConfig.focusPerDay`) is spent.
     case focusSpent
+    /// Slice 9c (decision 24): no «Не беспокоить» at night.
+    case sleepTime
+    /// Slice 9c (decision 26): from the warning until 05:00 no later bedtime and no «Сон» off — «договор с собой».
+    case sleepContract
+    /// Slice 9c (decision 26): tonight at most 2 hours past the usual bedtime.
+    case tooLate
+    /// Slice 9c: «Сон» is off.
+    case sleepOff
 }
 
 /// One look at the user's situation, taken about once a second (all without extra permissions, spike 001).
@@ -134,6 +143,10 @@ public enum BalanceEvent: Equatable, Sendable {
     case slumped
     /// He is back up: a rest counted or «Встряхнуться».
     case roseUp
+    /// Slice 9c (decision 20): an hour before bedtime, once a night — «Через час спать».
+    case bedtimeSoon(at: Date)
+    /// Slice 9c (decision 23): «Через 5 минут закрою экран до утра — сохраняйся» before the night's pause.
+    case pauseSoon(Need)
 }
 
 /// Starting values (В11, В12, В17); everything is tunable later in settings.
@@ -177,13 +190,19 @@ public struct BalanceConfig: Sendable, Equatable {
     public var endOfDayQuiet: TimeInterval = 20 * 60
     /// Manual testing: 60 = one real second of sitting counts as a minute (rest is still measured in real time).
     public var timeScale = 1.0
-    /// Needs switched off in Settings (slice 5c): no pressure, no requests.
-    public var needsOff: Set<Need> = []
+    /// Needs switched off in Settings (slice 5c): no pressure, no requests. «Сон» is off until the care turns it on (9c).
+    public var needsOff: Set<Need> = [.sleep]
     /// Focus mode (slice 4b, decision 3): at most this long at a time and per day.
     public var focusMax: TimeInterval = 3 * 3600
     public var focusPerDay: TimeInterval = 4 * 3600
     /// Persuasion (slice 4b, decision 4): the longest deferral of the 1st, 2nd, 3rd+ persuasion of a need per day.
     public var persuasionMinutes = [60, 30, 15]
+    /// Slice 9c: bedtime (minutes after midnight; «Сон» on/off is `needsOff`), the warning before it, «Иду спать» — five
+    /// minutes of work (not 90 s), and the five minutes of «сохраняйся» before the night's pause (decisions 20, 21, 23).
+    public var bedtime = 23 * 60
+    public var sleepWarnBefore: TimeInterval = 3600
+    public var sleepPromiseGrace: TimeInterval = 5 * 60
+    public var sleepPauseWarning: TimeInterval = 5 * 60
 
     public init() {}
 
@@ -193,7 +212,7 @@ public struct BalanceConfig: Sendable, Equatable {
         case .stretch: stretchMinutes
         case .eyes: eyesMinutes
         case .walk: walkMinutes
-        case .endOfDay: 1e9...1e9
+        case .endOfDay, .sleep: 1e9...1e9
         }
     }
 }
@@ -251,6 +270,25 @@ public struct Episode: Codable, Sendable, Equatable {
     public var nextAfter: TimeInterval
     public var sinceBounce: TimeInterval = 0
     public var promiseWork: TimeInterval = 0
+    /// Slice 9c (decision 23): seconds of «сохраняйся» left before the night's pause (nil: not counting).
+    public var pauseIn: TimeInterval?
+    /// Slice 9c (decision 22): «Иду спать», then away — back at night is a broken promise at once.
+    public var awayAfterPromise = false
+}
+
+// Older files lack the newer fields: each one falls back on its own instead of the episode (and the state) being lost.
+extension Episode {
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(need: try c.decode(Need.self, forKey: .need), stage: try c.decodeIfPresent(Int.self, forKey: .stage) ?? 1,
+                  phase: try c.decodeIfPresent(Phase.self, forKey: .phase) ?? .showing,
+                  nextAfter: try c.decodeIfPresent(TimeInterval.self, forKey: .nextAfter) ?? 300)
+        workOnStage = try c.decodeIfPresent(TimeInterval.self, forKey: .workOnStage) ?? 0
+        sinceBounce = try c.decodeIfPresent(TimeInterval.self, forKey: .sinceBounce) ?? 0
+        promiseWork = try c.decodeIfPresent(TimeInterval.self, forKey: .promiseWork) ?? 0
+        pauseIn = try c.decodeIfPresent(TimeInterval.self, forKey: .pauseIn)
+        awayAfterPromise = try c.decodeIfPresent(Bool.self, forKey: .awayAfterPromise) ?? false
+    }
 }
 
 public struct DayStats: Codable, Sendable, Equatable {
@@ -269,6 +307,11 @@ public struct DayStats: Codable, Sendable, Equatable {
     public var focus: TimeInterval = 0
     /// Persuasions per need today (slice 4b): each next one may defer less.
     public var persuaded: [Need: Int] = [:]
+    /// Slice 9c (decision 27): the night of this day — its bedtime, the last action at the Mac in it (statistics only), and
+    /// whether the warning came.
+    public var bedtime: Int?
+    public var lastNightActivity: Date?
+    public var sleepWarned = false
 
     public init(key: String) { self.key = key }
 }
@@ -311,6 +354,8 @@ public struct BalanceState: Codable, Sendable, Equatable {
     public var focusUntil: Date?
     /// «Лежит» (slice 6b): `false` after «Встряхнуться» — he does not lie down again until a rest re-arms him.
     public var slumpArmed = true
+    /// Slice 9c (decision 26): «сегодня лягу в час» — this night only.
+    public var tonight: TonightBedtime?
 }
 
 // Files written by older builds lack newer fields: every field falls back to its default instead of the whole
@@ -338,6 +383,7 @@ extension BalanceState {
         care = (try? c.decodeIfPresent(CareSettings.self, forKey: .care)) ?? CareSettings()   // a bad care keeps the rest
         focusUntil = (try? c.decodeIfPresent(Date.self, forKey: .focusUntil)) ?? nil
         slumpArmed = try field(.slumpArmed, true)
+        tonight = (try? c.decodeIfPresent(TonightBedtime.self, forKey: .tonight)) ?? nil
     }
 }
 
@@ -355,6 +401,9 @@ extension DayStats {
         budgetFrom = try c.decodeIfPresent(TimeInterval.self, forKey: .budgetFrom) ?? 0
         focus = try c.decodeIfPresent(TimeInterval.self, forKey: .focus) ?? 0
         persuaded = (try? c.decodeIfPresent([Need: Int].self, forKey: .persuaded)) ?? [:]
+        bedtime = (try? c.decodeIfPresent(Int.self, forKey: .bedtime)) ?? nil
+        lastNightActivity = (try? c.decodeIfPresent(Date.self, forKey: .lastNightActivity)) ?? nil
+        sleepWarned = (try? c.decodeIfPresent(Bool.self, forKey: .sleepWarned)) ?? false
     }
 }
 
@@ -440,6 +489,33 @@ public final class BalanceEngine {
     /// Focus time left for today, in seconds.
     public var focusLeftToday: TimeInterval { max(0, config.focusPerDay - state.day.focus) }
 
+    // MARK: The night (slice 9c)
+
+    /// «Сон» on: tonight's clock (a one-off shift counts for this night only).
+    private func sleepClock(_ now: Date) -> SleepClock? {
+        guard !config.needsOff.contains(.sleep) else { return nil }
+        let key = dayKey(now)
+        let tonight = state.tonight.flatMap { $0.day == key ? $0.minutes : nil }
+        return SleepClock(bedtime: tonight ?? config.bedtime, dayStartsAtHour: config.dayStartsAtHour)
+    }
+
+    /// From bedtime to 05:00 (decision 22).
+    public func isNight(_ now: Date) -> Bool { sleepClock(now)?.isNight(now, calendar: calendar) ?? false }
+
+    public func sleepStatus(_ now: Date) -> SleepStatus? {
+        guard let clock = sleepClock(now) else { return nil }
+        let n = clock.night(for: now, calendar: calendar)
+        let warning = n.start.addingTimeInterval(-config.sleepWarnBefore)
+        return SleepStatus(bedtime: n.start, warning: warning, end: n.end, night: now >= n.start && now < n.end,
+                           locked: now >= warning && now < n.end, shifted: state.tonight?.day == dayKey(now))
+    }
+
+    /// «Договор с собой» of the night (decision 26): from the warning until 05:00.
+    public func sleepLocked(_ now: Date) -> Bool { sleepStatus(now)?.locked ?? false }
+
+    /// The night's pause (decision 23): only the morning or the emergency exit end it — no rest does.
+    public var nightPause: Bool { state.episode.map { $0.need == .sleep && $0.stage >= 4 } ?? false }
+
     /// The longest a persuasion may defer the request on screen now (slice 4b, decisions 2 and 4): the request's own
     /// «Я занят» inside the shared deferral limit, and less with every persuasion of the same need today.
     public func maxPersuasion() throws(BalanceRefusal) -> Int {
@@ -492,6 +568,18 @@ public final class BalanceEngine {
         state.starts.removeAll { $0 <= hourAgo }
         rollDay(s.now, into: &out)
         if let until = state.focusUntil, s.now >= until { finishFocus(into: &out) }
+        let sleep = sleepClock(s.now)
+        let night = sleep?.isNight(s.now, calendar: calendar) ?? false
+        if let sleep, !state.day.sleepWarned {
+            // Decision 20: one warning an hour before bedtime (also across midnight); arriving after bedtime — none.
+            let n = sleep.night(for: s.now, calendar: calendar)
+            if s.now >= n.start {
+                state.day.sleepWarned = true
+            } else if s.now >= n.start.addingTimeInterval(-config.sleepWarnBefore) {
+                state.day.sleepWarned = true
+                out.append(.bedtimeSoon(at: n.start))
+            }
+        }
         if guided != nil {                         // the screen is dark and Chilk leads: neither work nor rest
             state.lastFront = s.frontApp
             return out
@@ -511,7 +599,9 @@ public final class BalanceEngine {
             if state.day.firstActivity == nil { state.day.firstActivity = s.now }
             state.day.active += sat
             state.streak += sat
+            if night { state.day.lastNightActivity = s.now }     // decision 27: statistics only
         }
+        if night { state.day.bedtime = sleep?.bedtime }
 
         // Rest (В10): away from the keyboard counts, unless a call or a video keeps the user busy.
         if realDt > 10 { creditRest(away: dt, into: &out) }
@@ -529,44 +619,58 @@ public final class BalanceEngine {
         // «Лежит» (6b): Soft and Silence pause the ladder and the mood while he lies; Strict keeps counting under him,
         // so lying never gets round the shade and the pause (decision 10).
         refreshSlump(blocked: blocked, into: &out)
-        if slumped && state.mode != .strict { return out }
+        if slumped && state.mode != .strict && !night { return out }
+
+        // Decision 25: from bedtime to 05:00 only «Сон» — another request goes quietly (and «Сон» outside the night).
+        if let e = state.episode, night != (e.need == .sleep) {
+            state.episode = nil
+            out.append(.withdraw)
+        }
+        // Decision 21: at night he presses on every app, leisure and full screen included; a call still holds him.
+        let held = night ? inCall || !atMac : blocked
 
         if var e = state.episode {
+            let isSleep = e.need == .sleep
             // The pause stays up while the user is away (that is the rest); only a call takes it down.
             let off = e.stage >= 4
                 ? inCall
-                : blocked || (e.need == .endOfDay && (s.category == .leisure || !endOfDayDue))
+                : isSleep ? held : blocked || (e.need == .endOfDay && (s.category == .leisure || !endOfDayDue))
             if off {
                 if e.phase == .showing {
                     e.phase = .withdrawn
+                    if e.pauseIn != nil { e.pauseIn = config.sleepPauseWarning }   // decision 23: back — 5 minutes anew
                     out.append(.withdraw)
+                } else if e.phase == .promised, isSleep, !atMac {
+                    e.awayAfterPromise = true                // decision 22: «Иду спать», away, back at night
                 }
             } else {
                 switch e.phase {
                 case .withdrawn:
                     e.phase = .showing
                     out.append(stageEvent(e, again: true))
+                    if e.pauseIn != nil { out.append(.pauseSoon(e.need)) }      // «сохраняйся» again, before every rise
                 case .promised:
                     e.promiseWork += sat
-                    if e.promiseWork >= config.promiseGrace {
+                    if e.promiseWork >= (isSleep ? config.sleepPromiseGrace : config.promiseGrace) || e.awayAfterPromise {
                         e.phase = .showing
                         e.promiseWork = 0
+                        e.awayAfterPromise = false
                         // A broken promise costs a step (2026-10-05): «Иду» is not a free 90-second snooze.
-                        e.stage = max(min(e.stage + 1, cap(e.need)), min(1, cap(e.need)))
-                        e.workOnStage = 0
-                        e.nextAfter = nextStageDelay()
-                        out.append(stageEvent(e, again: true))
-                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; markPushed(e.need) }
+                        climb(&e, to: max(min(e.stage + 1, cap(e.need)), min(1, cap(e.need))), again: true, into: &out)
                     }
                 case .showing:
                     e.workOnStage += sat
                     e.sinceBounce += sat
-                    if e.workOnStage >= e.nextAfter, e.stage < cap(e.need) {
-                        e.stage += 1
-                        e.workOnStage = 0
-                        e.nextAfter = nextStageDelay()
-                        out.append(stageEvent(e, again: false))
-                        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; markPushed(e.need) }
+                    if let left = e.pauseIn {
+                        // Decision 23: five minutes of «сохраняйся» on screen, then the pause — no faster, no slower.
+                        if left - dt <= 0 {
+                            e.pauseIn = nil
+                            climb(&e, to: min(e.stage + 1, cap(e.need)), again: false, into: &out, warned: true)
+                        } else {
+                            e.pauseIn = left - dt
+                        }
+                    } else if e.workOnStage >= e.nextAfter, e.stage < cap(e.need) {
+                        climb(&e, to: e.stage + 1, again: false, into: &out)
                     } else if e.stage >= 2, e.sinceBounce >= config.bounceEvery {
                         out.append(.nudge)
                         e.sinceBounce = 0
@@ -577,17 +681,18 @@ public final class BalanceEngine {
             return out
         }
 
-        let due = dueNeeds(category: s.category, endOfDayDue: endOfDayDue)
+        let due = dueNeeds(category: s.category, endOfDayDue: endOfDayDue, night: night)
         let clock = state.clock
         for n in due where state.needs[n]?.pendingSince == nil { state.needs[n]?.pendingSince = clock }
-        guard !blocked, state.clock >= state.releasedUntil else { return out }
+        guard !held, state.clock >= state.releasedUntil else { return out }
         let typingPause = s.idle >= 2 && s.idle <= 30
         let convenient = appSwitched || typingPause
         let budgetLeft = state.starts.count < config.budgetPerHour
         if let n = due.min() {
             let waited = state.clock - (state.needs[n]?.pendingSince ?? state.clock)
-            if budgetLeft && (convenient || waited >= config.convenientWait) { start(n, into: &out) }
-        } else if budgetLeft, convenient, !slumped, state.clock >= state.nextMood {
+            // Decision 21: «Пора спать» comes at bedtime — no waiting for a convenient moment or the hour's budget.
+            if n == .sleep || (budgetLeft && (convenient || waited >= config.convenientWait)) { start(n, into: &out) }
+        } else if budgetLeft, convenient, !slumped, !night, state.clock >= state.nextMood {
             state.starts.append(state.clock)
             state.nextMood = state.clock + rng.uniform(config.moodEvery.lowerBound, config.moodEvery.upperBound)
             out.append(.mood)
@@ -664,6 +769,8 @@ public final class BalanceEngine {
         /// Cut to `focusMax` at a time or to what is left of today's `focusPerDay`.
         public var shortened: Bool
         public var events: [BalanceEvent]
+        /// Slice 9c: cut at bedtime (he says so).
+        public var untilBedtime = false
     }
 
     /// Until the focus ends every request stays on stages 0–1 (a stage above comes down at once); what piles up comes
@@ -671,12 +778,20 @@ public final class BalanceEngine {
     /// replaces the running one; the running one's unused time is given back first.
     public func startFocus(seconds: TimeInterval, now: Date) throws(BalanceRefusal) -> FocusStart {
         guard !settingsLocked else { throw .softeningDuringEscalation }
+        guard !isNight(now) else { throw .sleepTime }                        // decision 24: a «договор с собой» night
         guard seconds >= 60 else { throw .badDuration }
         let unused = state.focusUntil.map { max(0, $0.timeIntervalSince(now)) } ?? 0
         let used = max(0, state.day.focus - unused)
         let left = max(0, config.focusPerDay - used)
         guard left >= 60 else { throw .focusSpent }
-        let granted = min(seconds, config.focusMax, left)
+        var granted = min(seconds, config.focusMax, left)
+        // Decision 24: it does not run past bedtime («на 3 часа» at 21:30 — until 23:00).
+        var untilBedtime = false
+        if let bed = sleepStatus(now)?.bedtime, bed > now, bed.timeIntervalSince(now) < granted {
+            granted = bed.timeIntervalSince(now)
+            untilBedtime = true
+        }
+        guard granted >= 60 else { throw .sleepTime }
         state.day.focus = used + granted
         state.focusUntil = now.addingTimeInterval(granted)
         var events: [BalanceEvent] = []
@@ -686,7 +801,8 @@ public final class BalanceEngine {
             state.episode = e
             if e.phase == .showing { events.append(stageEvent(e, again: false)) }
         }
-        return FocusStart(until: now.addingTimeInterval(granted), shortened: granted < seconds, events: events)
+        return FocusStart(until: now.addingTimeInterval(granted), shortened: granted < seconds, events: events,
+                          untilBedtime: untilBedtime)
     }
 
     /// «Закончить» early: the unused time goes back to today's allowance; the debt is the same as at the end.
@@ -828,8 +944,24 @@ public final class BalanceEngine {
     @discardableResult
     public func setCare(_ new: CareSettings) throws(BalanceRefusal) -> [BalanceEvent] {
         if settingsLocked && state.care.isSofter(new) { throw .softeningDuringEscalation }
+        // Decision 26: from the warning until 05:00 no later bedtime and no «Сон» off; earlier always goes.
+        if let now = state.lastNow, sleepLocked(now), state.care.sleepSofter(new) { throw .sleepContract }
         state.care = new
         return applyCare()
+    }
+
+    /// «Сегодня лягу в час» (decision 26): this night only — later at most 2 hours past the usual bedtime and only before
+    /// the warning; earlier always. Returns tonight's bedtime.
+    @discardableResult
+    public func shiftBedtime(tonight minutes: Int, now: Date) throws(BalanceRefusal) -> Date {
+        guard let current = sleepClock(now) else { throw .sleepOff }
+        guard SleepClock.isValid(minutes) else { throw .badDuration }
+        if SleepClock.order(minutes) > SleepClock.order(current.bedtime) {
+            guard !sleepLocked(now) else { throw .sleepContract }
+            guard SleepClock.order(minutes) - SleepClock.order(config.bedtime) <= 120 else { throw .tooLate }
+        }
+        state.tonight = minutes == config.bedtime ? nil : TonightBedtime(day: dayKey(now), minutes: minutes)
+        return sleepStatus(now)?.bedtime ?? now
     }
 
     /// The engine's numbers follow `state.care` (the app calls this once at launch for the care saved with the state).
@@ -848,7 +980,7 @@ public final class BalanceEngine {
         config = c
         var out: [BalanceEvent] = []
         for n in Need.allCases where c.needsOff.contains(n) != wasOff.contains(n) {
-            state.needs[n] = NeedTrack(threshold: n == .endOfDay ? 0 : threshold(n))
+            state.needs[n] = NeedTrack(threshold: n == .endOfDay || n == .sleep ? 0 : threshold(n))
             if n == .endOfDay && !c.needsOff.contains(n) { state.day.budgetFrom = state.day.active }
         }
         if let e = state.episode, c.needsOff.contains(e.need) {
@@ -934,7 +1066,13 @@ public final class BalanceEngine {
     // MARK: Manual testing (Dock «Проверка»)
 
     public func makeDue(_ n: Need) {
-        if n == .endOfDay {
+        if n == .sleep {
+            // Testing: bedtime is now — the night until 05:00, no warning.
+            let now = state.lastNow ?? Date()
+            let minute = calendar.component(.hour, from: now) * 60 + calendar.component(.minute, from: now)
+            state.tonight = TonightBedtime(day: dayKey(now), minutes: minute)
+            state.day.sleepWarned = true
+        } else if n == .endOfDay {
             state.forceEndOfDay = true
         } else if let t = state.needs[n] {
             state.needs[n]?.sitting = max(t.sitting, t.threshold)
@@ -966,6 +1104,7 @@ public final class BalanceEngine {
     private func cap(_ n: Need) -> Int { min(n.stageCap, state.mode.cap, focusing ? 1 : 4) }
 
     private func threshold(_ n: Need) -> TimeInterval {
+        if n == .sleep { return 0 }                    // no draw: «Сон» has its clock, not a sitting threshold
         let r = config.minutes(n)
         return rng.uniform(r.lowerBound, r.upperBound) * 60
     }
@@ -978,7 +1117,9 @@ public final class BalanceEngine {
         e.stage == 0 ? .hint(e.need) : .ask(e.need, stage: e.stage, buttons: buttons(for: e.need, stage: e.stage), again: again)
     }
 
-    private func dueNeeds(category: AppCategory, endOfDayDue: Bool) -> [Need] {
+    private func dueNeeds(category: AppCategory, endOfDayDue: Bool, night: Bool) -> [Need] {
+        // Decision 25: from bedtime to 05:00 only «Сон» (a deferral or an emergency exit holds it for a while).
+        if night { return state.clock >= (state.needs[.sleep]?.quietUntil ?? 0) ? [.sleep] : [] }
         var due = Need.body.filter { n in
             guard !config.needsOff.contains(n), let t = state.needs[n] else { return false }
             return t.sitting >= t.threshold && state.clock >= t.quietUntil
@@ -998,6 +1139,25 @@ public final class BalanceEngine {
         state.starts.append(state.clock)
         out.append(stageEvent(e, again: false))
         if stage >= 2 { out.append(.nudge); markPushed(n) }
+    }
+
+    /// One step up the ladder. «Сон» does not go onto the pause at once (decision 23): «Через 5 минут закрою экран до
+    /// утра — сохраняйся» first; the stage stays meanwhile and the five minutes run while the bubble is on screen.
+    private func climb(_ e: inout Episode, to target: Int, again: Bool, into out: inout [BalanceEvent], warned: Bool = false) {
+        if e.need == .sleep, target >= 4, !warned {
+            if again { out.append(stageEvent(e, again: true)) }      // a broken promise shows the bubble again
+            if e.pauseIn == nil {
+                e.pauseIn = config.sleepPauseWarning
+                e.workOnStage = 0
+                out.append(.pauseSoon(.sleep))
+            }
+            return
+        }
+        e.stage = target
+        e.workOnStage = 0
+        e.nextAfter = nextStageDelay()
+        out.append(stageEvent(e, again: again))
+        if e.stage >= 2 { out.append(.nudge); e.sinceBounce = 0; markPushed(e.need) }
     }
 
     private func markPushed(_ n: Need) {
@@ -1068,7 +1228,9 @@ public final class BalanceEngine {
     private func endOfDayIsDue(_ now: Date) -> Bool {
         if state.forceEndOfDay { return true }
         if state.day.active - state.day.budgetFrom >= budget(for: now) { return true }
-        // «или 00:00»: still at work after midnight (the day itself lasts until dayStartsAtHour).
+        // «или 00:00»: still at work after midnight (the day itself lasts until dayStartsAtHour) — not with «Сон» on
+        // (decision 28: the night is its business, and stricter).
+        guard config.needsOff.contains(.sleep) else { return false }
         return calendar.component(.hour, from: now) < config.dayStartsAtHour && state.day.firstActivity != nil
     }
 
@@ -1084,6 +1246,10 @@ public final class BalanceEngine {
             carried = max(0, until.timeIntervalSince(boundary))
             state.day.focus = max(0, state.day.focus - carried)
         }
+        // Decision 22: the night is over — «Сон» counts at 05:00, in the day it belongs to, whatever happened in it.
+        if state.episode?.need == .sleep { credit(.sleep, byRest: true, into: &out) }
+        state.needs[.sleep] = NeedTrack(threshold: 0)
+        state.tonight = nil
         if !state.day.key.isEmpty {
             state.history.append(state.day)
             if state.history.count > 35 { state.history.removeFirst(state.history.count - 35) }

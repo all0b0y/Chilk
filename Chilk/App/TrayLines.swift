@@ -42,6 +42,11 @@ extension Lines {
     }
     static let focusNotSaved = String(localized: "Не получилось сохранить — режим не включён")
     static let focusSpent = String(localized: "«Не беспокоить» на сегодня кончилось — 4 часа уже были")
+    /// Slice 9c (decision 24).
+    static let focusAtNight = String(localized: "Ночью «Не беспокоить» не включаю — пора спать 🌙")
+    static func focusUntilBedtime(_ time: String) -> String {
+        String(localized: "Не беспокою до \(time) — потом отбой 🌙")
+    }
     static let focusHelp = String(localized: "Пока включено «Не беспокоить», Чилк только напоминает, не настаивает. Потом всё набравшееся вернётся настойчивее")
 
     // Slice 9f, decision 37: the chosen model left Codex's list — said by voice / in the chat, and a popover row.

@@ -14,10 +14,15 @@ extension Lines {
         case .eyes: String(localized: "Глаза")
         case .walk: String(localized: "Прогулка")
         case .endOfDay: String(localized: "Конец дня")
+        case .sleep: String(localized: "Сон")
         }
     }
 
+    /// Slice 9c: the user's name for «Пора спать, {имя}» (empty — without it).
+    @MainActor static var userName = ""
+
     @MainActor static func ask(_ n: Need, stage: Int, again: Bool) -> String {
+        if n == .sleep { return sleepAsk(stage: stage, again: again) }
         if again { return againLines[n]!.randomElement()! }
         let library = stage >= 2 ? insist[n]! : polite[n]!
         return (library + (batch?.lines(for: n, stage: stage) ?? [])).randomElement()!
@@ -30,6 +35,7 @@ extension Lines {
         case (.going, .walk): String(localized: "Иду гулять")
         case (.going, .eyes): String(localized: "Давай гимнастику")
         case (.going, .endOfDay): String(localized: "Заканчиваю")
+        case (.going, .sleep): String(localized: "Иду спать")
         case (.going, _): String(localized: "Иду")
         case (.snooze, .endOfDay): String(localized: "Ещё 10 мин")
         case (.snooze, _): String(localized: "Через 10 мин")
@@ -119,8 +125,62 @@ extension Lines {
         case .walk: [String(localized: "Как прогулка? 🌿"), String(localized: "С возвращением! Свежий воздух тебе к лицу")].randomElement()!
         case .eyes: String(localized: "Глазки отдохнули ✨")
         case .endOfDay: String(localized: "Доброй ночи 🌙")
+        case .sleep: String(localized: "Доброе утро ☀️")
         }
     }
+
+    // MARK: The night (slice 9c, decision 29: a hand stock until the Codex batch; sleepy and soft, no lectures)
+
+    /// Decision 21: at bedtime «Пора спать, {имя}»; then softer-cheekier; back at night — «Эй, ты же спать ушёл».
+    @MainActor static func sleepAsk(stage: Int, again: Bool) -> String {
+        if again { return sleepAgain.randomElement()! }
+        if stage <= 1 {
+            return userName.isEmpty ? String(localized: "Пора спать 🌙") : String(localized: "Пора спать, \(userName) 🌙")
+        }
+        return (stage >= 3 ? sleepDisturb : sleepInsist).randomElement()!
+    }
+
+    static let sleepInsist: [String] = [
+        String(localized: "Уже поздно. Я держу глаза открытыми только ради тебя 😴"),
+        String(localized: "Всё сохранится до утра. Честно"),
+        String(localized: "Ещё одно дело, и ещё одно… Давай спать"),
+        String(localized: "Луна уже высоко. И я тоже хочу спать"),
+        String(localized: "Завтрашний ты скажет спасибо 🌙"),
+    ]
+
+    static let sleepDisturb: [String] = [
+        String(localized: "Гашу свет потихоньку. Пора ложиться"),
+        String(localized: "Я уже в колпаке и почти сплю. Ты тоже давай"),
+        String(localized: "Темнеет. Самое время закрыть ноутбук 🌙"),
+    ]
+
+    static let sleepAgain: [String] = [
+        String(localized: "Эй, ты же спать ушёл 🙃"),
+        String(localized: "Ночь ещё не кончилась. Спать!"),
+        String(localized: "Я всё вижу. Даже ночью 🌙"),
+    ]
+
+    /// Decision 20: an hour before bedtime.
+    static let sleepWarning: [String] = [
+        String(localized: "Через час спать — закругляйся с делами"),
+        String(localized: "Через час отбой. Доделывай потихоньку"),
+        String(localized: "Час до сна. Самое время закругляться 🌙"),
+    ]
+
+    /// Decision 23: before every rise onto the night's pause.
+    static let sleepPauseSoon = String(localized: "Через 5 минут закрою экран до утра — сохраняйся")
+
+    /// Decision 25: a new game at night.
+    static let noGamesAtNight: [String] = [
+        String(localized: "Ночью не играю — иди спать"),
+        String(localized: "Ночью игры спят. И тебе пора 🌙"),
+        String(localized: "Поиграем завтра. Сейчас — спать"),
+    ]
+
+    static let goodNight: [String] = [
+        String(localized: "Спокойной ночи 🌙"),
+        String(localized: "Сладких снов. Я посторожу экран"),
+    ]
 
     // MARK: Strict mode: stage 3 «мешает», stage 4 the pause, the emergency exit (slice 4, 2026-10-05)
 
@@ -133,6 +193,7 @@ extension Lines {
                      String(localized: "Темнеет. Самое время выйти на улицу")]
         case .endOfDay: [String(localized: "Темнеет не только за окном. Закругляйся"),
                          String(localized: "Я выключаю свет. Рабочий день закончился")]
+        case .sleep: sleepDisturb
         case .water, .eyes: [String(localized: "Ну правда, пора")]
         }
         return lines.randomElement()!
@@ -144,6 +205,7 @@ extension Lines {
         case .stretch: String(localized: "Пауза. Встань, потянись, отойди от Mac")
         case .walk: String(localized: "Пауза. Иди гулять, я посторожу экран")
         case .endOfDay: String(localized: "Пауза. На сегодня всё, правда")
+        case .sleep: String(localized: "Пора спать. Всё сохранится до утра — ложись")
         case .water, .eyes: String(localized: "Пауза")
         }
     }
@@ -215,6 +277,7 @@ extension Lines {
         case .eyes: String(localized: "глаза")
         case .walk: String(localized: "прогулку")
         case .endOfDay: String(localized: "конец дня")
+        case .sleep: String(localized: "сон")
         }
     }
 

@@ -327,9 +327,12 @@ final class BalanceController {
 
     /// Slice 9b (decision 17): «Конец дня» asks — the plan's evening review may follow (it decides itself, once a day).
     var onEndOfDay: () -> Void = {}
+    /// Slice 9c (decision 20): an hour before bedtime — shown by the timer's rule (it waits while he is busy).
+    var onBedtimeSoon: (Date) -> Void = { _ in }
 
     private func apply(_ events: [BalanceEvent]) {
         for case .ask(let n, let stage, _, _) in events where n == .endOfDay && stage >= 1 { onEndOfDay() }
+        for case .bedtimeSoon(let at) in events { onBedtimeSoon(at) }
         // The end of a focus with a request on screen: «Фокус закончился…» first, the request a moment later.
         guard events.contains(.focusEnded), !isBusy() else {
             for event in events { apply(event) }
@@ -516,6 +519,16 @@ final class BalanceController {
         case .hint, .ask, .nudge:
             break
 
+        case .bedtimeSoon:
+            break                                                    // 9c: `onBedtimeSoon` takes it before the busy check
+
+        case .pauseSoon(let n):
+            // Slice 9c (decision 23): «Через 5 минут закрою экран до утра — сохраняйся»; the stage-3 bubble keeps its buttons.
+            guard engine.state.episode?.need == n, let stage = engine.state.episode?.stage else { return }
+            let buttons = engine.buttons(for: n, stage: stage)
+            sim.say(Lines.sleepPauseSoon, buttons: buttons.map { Lines.button($0, for: n) })
+            buttonActions = buttons.map { action(for: $0, need: n) }
+
         case .slumped:
             log("slumped")
             guard activity == nil, !stageThreeOrMore else { return }
@@ -564,6 +577,11 @@ final class BalanceController {
                 sim.perform(.pack)
                 sim.say(Lines.endOfDayBye.randomElement()!, duration: 6)
                 settle(after: 6)
+            case .sleep:
+                // «Иду спать» (decision 21): five minutes to finish; the nightcap is on already.
+                sim.wear(.nightcap)
+                sim.say(Lines.goodNight.randomElement()!, duration: 5)
+                settle(after: 5)
             case .water:
                 break
             }
@@ -628,6 +646,7 @@ final class BalanceController {
         case .eyes: act = .lookAway
         case .walk: sim.wear(.hat); act = .wave
         case .endOfDay: act = .pack
+        case .sleep: sim.wear(.nightcap); sim.startAntic(.yawn); return 1.6       // silence: only the yawn (decision 21)
         }
         sim.perform(act)
         lastPantomime = Date()
@@ -770,7 +789,7 @@ final class BalanceController {
     }
 
     enum FocusOutcome: Equatable {
-        case started(until: Date, shortened: Bool)
+        case started(until: Date, shortened: Bool, untilBedtime: Bool = false)
         case refused(BalanceRefusal)
         case notSaved
     }
@@ -784,7 +803,8 @@ final class BalanceController {
             log("focus until \(Self.clock(start.until)) (asked \(Int(seconds / 60)) min\(start.shortened ? ", shortened" : ""))")
             apply(start.events)
             syncEscalation()
-            return .started(until: start.until, shortened: start.shortened)
+            if start.untilBedtime { log("focus cut at bedtime") }
+            return .started(until: start.until, shortened: start.shortened, untilBedtime: start.untilBedtime)
         } catch {
             guard let refusal = error as? BalanceRefusal else {
                 log("focus not saved")
@@ -798,17 +818,25 @@ final class BalanceController {
     /// «Фокус до 18:00…» at the edge, unless something else has the stage.
     func announceFocus() {
         guard let until = engine.state.focusUntil, !isBusy(), activity == nil, engine.state.episode?.phase != .showing else { return }
-        sim.say(Lines.focusOn(until: Self.clock(until)), duration: 3.5)
+        // Slice 9c (decision 24): it does not run past bedtime — he says so.
+        let atBedtime = engine.sleepStatus(Date()).map { abs($0.bedtime.timeIntervalSince(until)) < 1 } ?? false
+        sim.say(atBedtime ? Lines.focusUntilBedtime(Self.clock(until)) : Lines.focusOn(until: Self.clock(until)), duration: 3.5)
     }
 
     /// `chilk_focus`: the conversation says it.
     func focusFromConversation(minutes: Int) -> JSON {
         switch startFocus(seconds: Double(minutes) * 60) {
-        case .started(let until, let shortened):
+        case .started(let until, let shortened, let untilBedtime):
             return ["focus": true, "until": .string(Self.iso(until)), "untilLocal": .string(Self.clock(until)),
-                    "minutes": .number((until.timeIntervalSinceNow / 60).rounded()), "shortened": .bool(shortened)]
+                    "minutes": .number((until.timeIntervalSinceNow / 60).rounded()), "shortened": .bool(shortened),
+                    "untilBedtime": .bool(untilBedtime)]
         case .refused(let r):
-            return ["focus": false, "refused": .string(r == .focusSpent ? "focus_spent_today" : "escalation_in_progress")]
+            let code = switch r {
+            case .focusSpent: "focus_spent_today"
+            case .sleepTime: "night_after_bedtime"
+            default: "escalation_in_progress"
+            }
+            return ["focus": false, "refused": .string(code)]
         case .notSaved:
             return ["focus": false, "refused": "not_saved"]
         }

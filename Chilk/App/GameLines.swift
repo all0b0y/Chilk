@@ -59,6 +59,7 @@ enum GameLines {
         case .eyes: String(localized: "Сначала дай глазам отдых — потом реванш")
         case .walk: String(localized: "Сначала прогуляйся — потом реванш")
         case .endOfDay: String(localized: "Сначала закончим день — потом реванш")
+        case .sleep: String(localized: "Ночью не играю — иди спать")
         }
     }
 
