@@ -34,6 +34,10 @@ final class MainModel {
     var portrait: NSImage?
     var today = TodaySummary.empty
     var week = WeekSummary.empty
+    /// Slice 9b (decision 9): today's plan on «Сегодня» — a tick writes at once, «Лист дня» opens the sheet.
+    var plan: [DaySheetModel.Row] = []
+    var planTick: (DaySheetModel.Row) -> Void = { _ in }
+    var openPlan: () -> Void = {}
 
     // Настройки
     var mode = BalanceMode.soft
@@ -173,6 +177,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     var isOpen: Bool { window?.isVisible == true }
 
+    /// Slice 9b: today's plan (set by the app from the plan board).
+    var planRows: () -> [DaySheetModel.Row] = { [] }
+
     // MARK: Refresh
 
     /// Every 2 s while open: the numbers that move by themselves.
@@ -190,6 +197,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if today != model.today { model.today = today }
         let week = engine.week(now: now)
         if week != model.week { model.week = week }
+        let plan = planRows()
+        if plan != model.plan { model.plan = plan }
         if model.mode != balance.mode { model.mode = balance.mode }
         if model.locked != balance.settingsLocked { model.locked = balance.settingsLocked }
         for k in Permissions.Kind.allCases {

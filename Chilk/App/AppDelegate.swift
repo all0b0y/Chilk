@@ -338,6 +338,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             board?.refresh()
             sheet?.open(day: day)                                  // decision 16: it opens by itself after «Да»
         }
+        // «Сегодня» in the main window: today's plan with ticks.
+        main.planRows = { [weak board] in DaySheetModel.rows(board?.items ?? []) }
+        main.model.planTick = { [weak sheet, weak board] row in
+            let done = !row.done
+            let last = done && (board?.items ?? []).allSatisfy { $0.done || $0.id == row.id }
+            sheet?.setDone(row, done: done, last: last)
+        }
+        main.model.openPlan = { [weak sheet] in sheet?.open(day: Calendar.current.startOfDay(for: Date())) }
         board.refresh()
         self.planBoard = board
         self.daySheet = sheet

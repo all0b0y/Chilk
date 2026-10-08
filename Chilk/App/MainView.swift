@@ -161,6 +161,21 @@ private struct TodaySection: View {
                 }
                 .frame(maxWidth: 360)
             }
+            if !model.plan.isEmpty {
+                // Slice 9b (decision 9): the plan lives in Reminders; ticks here write at once.
+                Card(title: String(localized: "План на сегодня · \(model.plan.filter(\.done).count) из \(model.plan.count)")) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(model.plan) { row in
+                            HStack(spacing: 10) {
+                                PlanTick(done: row.done) { model.planTick(row) }
+                                if let t = row.time { Text(t.text).monospacedDigit().foregroundStyle(.secondary) }
+                                Text(row.title).strikethrough(row.done).foregroundStyle(row.done ? .secondary : .primary)
+                            }
+                        }
+                        Button(String(localized: "Лист дня")) { model.openPlan() }.buttonStyle(.link)
+                    }
+                }
+            }
             HStack(spacing: 12) {
                 Figure(title: Lines.todayStreak, value: Lines.duration(model.today.streak))
                 Figure(title: Lines.todayActive, value: Lines.duration(model.today.active))

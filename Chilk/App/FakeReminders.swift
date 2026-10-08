@@ -3,7 +3,8 @@ import Foundation
 
 /// Acceptance runs (CHILK_FAKE_REMINDERS=1 | seed): the real Codex and tool path without touching the user's Reminders.
 /// The list lives in `reminders-fake.json` in CHILK_STATE_DIR (read back at launch, so a run can be continued).
-/// Slice 9b: `seed` starts with three things planned for tomorrow (one done), for «На … уже 3 дела — добавим?».
+/// Slice 9b: `seed` starts with three things planned for tomorrow (one done), for «На … уже 3 дела — добавим?»;
+/// `seed-today` — the same three for today (the popover's «План: 1 из 3», «Сегодня»).
 actor FakeReminders: ReminderStore {
     private struct Row: Codable {
         var id: String
@@ -16,16 +17,16 @@ actor FakeReminders: ReminderStore {
     private var items: [ReminderInfo] = []
     private let file = AppState.directory.appendingPathComponent("reminders-fake.json")
 
-    init(seed: Bool = false) {
+    init(seedDay: Int? = nil) {
         let f = ISO8601DateFormatter()
         if let data = try? Data(contentsOf: file), let rows = try? JSONDecoder().decode([Row].self, from: data) {
             items = rows.map { r in
                 ReminderInfo(title: r.title, due: r.at.isEmpty ? nil : f.date(from: r.at), id: r.id, timed: r.timed ?? true,
                              done: r.state == "done")
             }
-        } else if seed {
+        } else if let seedDay {
             let cal = Calendar.current
-            let tomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!
+            let tomorrow = cal.date(byAdding: .day, value: seedDay, to: cal.startOfDay(for: Date()))!
             items = [ReminderInfo(title: "зал", due: tomorrow.addingTimeInterval(8 * 3600), id: "fake-seed-1"),
                      ReminderInfo(title: "стирка", due: tomorrow, id: "fake-seed-2", timed: false),
                      ReminderInfo(title: "почта", due: tomorrow, id: "fake-seed-3", timed: false, done: true)]

@@ -65,9 +65,29 @@ final class DaySheetModel {
     }
 }
 
+/// Decision 16: a round Notes-style tick — a tap fills it with peach and a check (a light spring); again — empty.
+struct PlanTick: View {
+    let done: Bool
+    let action: () -> Void
+    static let peach = Color(red: 1, green: 0xB4 / 255, blue: 0x9A / 255)
+
+    var body: some View {
+        Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { action() } } label: {
+            ZStack {
+                Circle().fill(done ? Self.peach : Color.clear)
+                Circle().strokeBorder(done ? Self.peach : Color.secondary.opacity(0.55), lineWidth: 1.5)
+                if done { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white) }
+            }
+            .frame(width: 20, height: 20)
+            .scaleEffect(done ? 1 : 0.94)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct DaySheetView: View {
     @Bindable var model: DaySheetModel
-    static let peach = Color(red: 1, green: 0xB4 / 255, blue: 0x9A / 255)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -100,16 +120,7 @@ struct DaySheetView: View {
 
     private func line(_ row: DaySheetModel.Row) -> some View {
         HStack(spacing: 10) {
-            Button { withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { model.toggle(row) } } label: {
-                ZStack {
-                    Circle().fill(row.done ? Self.peach : Color.clear)
-                    Circle().strokeBorder(row.done ? Self.peach : Color.secondary.opacity(0.55), lineWidth: 1.5)
-                    if row.done { Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white) }
-                }
-                .frame(width: 20, height: 20)
-                .scaleEffect(row.done ? 1 : 0.94)
-            }
-            .buttonStyle(.plain)
+            PlanTick(done: row.done) { model.toggle(row) }
             if let t = row.time { Text(t.text).monospacedDigit().foregroundStyle(.secondary) }
             Text(row.title).strikethrough(row.done).foregroundStyle(row.done ? .secondary : .primary)
                 .onTapGesture(count: 2) { model.beginEdit(row) }
@@ -272,6 +283,19 @@ final class DaySheet: NSObject, NSWindowDelegate {
             let r = await reminders.delete(id: row.id)
             log("plan sheet delete ok=\(r.success)")
             reload()
+            onWrite()
+        }
+    }
+
+    /// A tick from elsewhere (the main window's «Сегодня»): the same write and the same reaction. `last`: every thing of
+    /// the day is done after it.
+    func setDone(_ row: DaySheetModel.Row, done: Bool, last: Bool) {
+        if done { onTick(last) }
+        if isOpen, let i = model.rows.firstIndex(where: { $0.id == row.id }) { model.rows[i].done = done }
+        Task {
+            let r = await reminders.setDone(id: row.id, done: done)
+            log("plan tick from «Сегодня» \(done ? "on" : "off") ok=\(r.success)")
+            if isOpen { reload() }
             onWrite()
         }
     }
