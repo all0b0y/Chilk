@@ -267,6 +267,51 @@ struct SleepTests {
         #expect(night.asks(.endOfDay).isEmpty)
     }
 
+    @Test func aRestartAtNightKeepsTheDeferrals() {
+        let night = Night(start: at("2026-10-05T23:00:00Z"))
+        night.work(minutes: 0.2)
+        night.react(.snooze)
+        let saved = night.engine.state
+        let again = BalanceEngine(config: BalanceConfig(), restoring: saved, rng: SeededRandom(seed: 7), calendar: utc)
+        again.applyCare()
+        #expect(again.state.needs[.sleep]?.deferrals == 1)
+        #expect(again.state.needs[.sleep]?.quietUntil == saved.needs[.sleep]?.quietUntil)
+    }
+
+    @Test func goingToSleepDuringTheCountdownStartsItAgain() {
+        let night = Night(start: at("2026-10-05T23:00:00Z"), mode: .strict)
+        night.work(until: { if case .pauseSoon(.sleep) = $0 { true } else { false } })
+        night.react(.going)
+        #expect(night.engine.state.episode?.pauseIn == nil)
+        night.work(minutes: 5.1)                                                 // the broken promise: «сохраняйся» again
+        let warnings = night.timeline.filter { if case .pauseSoon = $0.e { true } else { false } }
+        #expect(warnings.count == 2)
+        #expect(night.engine.state.episode?.stage == 3)
+    }
+
+    @Test func aNewUsualBedtimeEndsTonightsShift() throws {
+        let night = Night(start: at("2026-10-05T20:00:00Z"))
+        try night.engine.shiftBedtime(tonight: 23 * 60 + 30, now: night.now)
+        var care = night.engine.state.care
+        care.bedtime = 22 * 60 + 30
+        try night.engine.setCare(care)
+        #expect(night.engine.sleepStatus(night.now)?.bedtime == at("2026-10-05T22:30:00Z"))
+    }
+
+    @Test func aNightTheMacSleptThroughIsOnRecord() {
+        let night = Night(start: at("2026-10-05T21:00:00Z"))
+        _ = night.engine.tick(Signals(now: at("2026-10-06T06:00:00Z")))        // lid closed until the morning
+        #expect(night.engine.state.history.last?.bedtime == 23 * 60)
+        #expect(night.engine.state.history.last?.credited[.sleep] == 1)
+        #expect(night.engine.today(now: at("2026-10-06T06:00:00Z")).sleep?.lastActivity == nil)
+    }
+
+    @Test func switchedOnItStartsAt23() {
+        var care = CareSettings()
+        care.bedtime = 21 * 60
+        #expect(care.applying(.need(.sleep, on: true)).bedtime == 23 * 60)
+    }
+
     @Test func noNewGamesAtNightAndARunningOneWaitsAQuarterOfAnHour() {
         #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 0, exercise: false, night: true) == .night)
         #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 0, exercise: false) == nil)

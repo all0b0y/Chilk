@@ -213,6 +213,10 @@ final class BalanceController {
             if !buttonActions.isEmpty { hideBubble(); sim.standOut = .docked }
             tidyProps()
         }
+        // Review 9c: «сохраняйся» counts on behind a conversation — back on stage, it is said again.
+        if let e = engine.state.episode, e.need == .sleep, e.pauseIn != nil, e.phase == .showing, !isBusy() {
+            applyOther(.pauseSoon(.sleep))
+        }
     }
 
     /// Minutes since the last real stretch break — the only activity fact sent to Codex (В24).
@@ -307,6 +311,8 @@ final class BalanceController {
         sim.eyeStrain = engine.eyeStrain
         // Slice 9c (decision 27): after bedtime the nightcap at the edge and now and then a yawn — a look, not a request.
         let night = engine.isNight(s.now)
+        // Review 9c: the brightness scene or waking up takes the cap off — at night it goes back on.
+        if night, nightLook, !sim.props.contains(.nightcap) { sim.wear(.nightcap) }
         if night != nightLook {
             nightLook = night
             if night { sim.wear(.nightcap) } else { sim.takeOff(.nightcap) }
@@ -375,7 +381,8 @@ final class BalanceController {
             }
         } catch let refusal as BalanceRefusal {
             let code = switch refusal {
-            case .sleepContract, .softeningDuringEscalation: "sleep_contract"
+            case .sleepContract: "sleep_contract"
+            case .softeningDuringEscalation: "escalation_in_progress"
             case .tooLate: "too_late"
             case .sleepOff: "sleep_off"
             default: "bad_time"
@@ -590,7 +597,7 @@ final class BalanceController {
     /// Which events end a running intro: a new request, tact, this need's outcome — not another need's credit.
     private static func endsIntro(_ e: BalanceEvent, need: Need?) -> Bool {
         switch e {
-        case .nudge, .mood: return false
+        case .nudge, .mood, .bedtimeSoon, .pauseSoon: return false
         case .credited(let n, _, _), .snoozed(let n), .deferred(let n, _), .tooSoon(let n), .released(let n, _):
             return need == nil || n == need
         default: return true

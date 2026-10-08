@@ -130,7 +130,10 @@ extension CareSettings {
         var s = self
         switch change {
         case .need(let n, let on):
-            if n == .sleep { s.sleepOn = on } else if on { s.off.remove(n) } else { s.off.insert(n) }
+            if n == .sleep {
+                if on && !sleepOn { s.bedtime = Self.defaultBedtime }      // decision 19: switched on — 23:00
+                s.sleepOn = on
+            } else if on { s.off.remove(n) } else { s.off.insert(n) }
         case .bedtime(let minutes):
             if SleepClock.isValid(minutes) { s.bedtime = minutes }
         case .low(let n, let value):

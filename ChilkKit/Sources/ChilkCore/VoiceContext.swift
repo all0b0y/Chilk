@@ -48,7 +48,7 @@ public struct BalanceBrief: Equatable, Sendable {
     }
 
     static let asks: [Need: String] = [.water: "попить воды", .stretch: "размяться", .eyes: "дать отдых глазам",
-                                       .walk: "прогуляться", .endOfDay: "закончить день"]
+                                       .walk: "прогуляться", .sleep: "спать (ночь, до 05:00)", .endOfDay: "закончить день"]
 
     func text(zone: TimeZone) -> String {
         var parts: [String] = []

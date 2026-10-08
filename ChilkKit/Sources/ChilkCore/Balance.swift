@@ -431,6 +431,9 @@ public final class BalanceEngine {
         self.calendar = calendar
         self.state = BalanceState(needs: [:], nextMood: 0)
         if var s = saved {
+            // The saved care first (review 9c): «Сон» on must not look «just switched on» to the first applyCare, which
+            // would start its track afresh — a restart at night would hand back the deferrals and the exit's stage.
+            s.care.apply(to: &self.config)
             s.lastNow = nil          // time while Chilk was not running is unknown — not rest, not sitting
             state = s
             for n in Need.allCases where state.needs[n] == nil { state.needs[n] = NeedTrack(threshold: threshold(n)) }
@@ -570,6 +573,7 @@ public final class BalanceEngine {
         if let until = state.focusUntil, s.now >= until { finishFocus(into: &out) }
         let sleep = sleepClock(s.now)
         let night = sleep?.isNight(s.now, calendar: calendar) ?? false
+        if night, state.focusUntil != nil { finishFocus(into: &out) }   // review 9c: a focus never runs into the night
         if let sleep, !state.day.sleepWarned {
             // Decision 20: one warning an hour before bedtime (also across midnight); arriving after bedtime — none.
             let n = sleep.night(for: s.now, calendar: calendar)
@@ -577,6 +581,7 @@ public final class BalanceEngine {
                 state.day.sleepWarned = true
             } else if s.now >= n.start.addingTimeInterval(-config.sleepWarnBefore) {
                 state.day.sleepWarned = true
+                state.day.bedtime = sleep.bedtime                       // on record even if the Mac sleeps from now on
                 out.append(.bedtimeSoon(at: n.start))
             }
         }
@@ -846,6 +851,7 @@ public final class BalanceEngine {
         case .done, .going:
             e.phase = .promised
             e.promiseWork = 0
+            if n == .sleep { e.pauseIn = nil }        // review 9c: after a broken promise «сохраняйся» and 5 minutes anew
             state.episode = e
             out.append(.promised(n))
         case .snooze:
@@ -946,6 +952,8 @@ public final class BalanceEngine {
         if settingsLocked && state.care.isSofter(new) { throw .softeningDuringEscalation }
         // Decision 26: from the warning until 05:00 no later bedtime and no «Сон» off; earlier always goes.
         if let now = state.lastNow, sleepLocked(now), state.care.sleepSofter(new) { throw .sleepContract }
+        // Review 9c: a new usual bedtime (or «Сон» off) ends tonight's one-off shift — «раньше — всегда» holds for tonight too.
+        if new.bedtime != state.care.bedtime || !new.sleepOn { state.tonight = nil }
         state.care = new
         return applyCare()
     }
@@ -1254,7 +1262,11 @@ public final class BalanceEngine {
             state.day.focus = max(0, state.day.focus - carried)
         }
         // Decision 22: the night is over — «Сон» counts at 05:00, in the day it belongs to, whatever happened in it.
-        if state.episode?.need == .sleep { credit(.sleep, byRest: true, into: &out) }
+        // Review 9c: a night with «Сон» on is on record (and counted) even when the Mac slept through it.
+        if state.day.bedtime == nil, !config.needsOff.contains(.sleep), !state.day.key.isEmpty {
+            state.day.bedtime = state.tonight?.day == state.day.key ? state.tonight?.minutes : config.bedtime
+        }
+        if state.episode?.need == .sleep || state.day.bedtime != nil { credit(.sleep, byRest: true, into: &out) }
         state.needs[.sleep] = NeedTrack(threshold: 0)
         if state.tonight?.day != key { state.tonight = nil }      // a shift made for the new day stays
         if !state.day.key.isEmpty {
