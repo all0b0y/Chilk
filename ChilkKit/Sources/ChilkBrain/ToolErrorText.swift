@@ -40,6 +40,9 @@ extension ChilkToolCatalog {
     private static func crossFieldProblem(_ tool: String, _ fields: [String: JSON]) -> String? {
         switch tool {
         case "chilk_event":
+            if fields["all_day"]?.bool == false, let text = fields["at"]?.string, dateOnly(text) != nil {
+                return "invalid_arguments: at — a bare date only with all_day=true; an event with a time needs the time too"
+            }
             guard let minutes = wholeNumber(fields["minutes"]), let allDay = fields["all_day"]?.bool,
                   !validEventLength(minutes, allDay: allDay) else { return nil }
             return "invalid_arguments: minutes — the length, 1–1439 for an event with a time (0 only with all_day=true)"
@@ -63,6 +66,7 @@ extension ChilkToolCatalog {
             let changeTool = tool == "chilk_reminder_change" || tool == "chilk_event_change"
             if key == "at" {
                 if changeTool, text.isEmpty { return nil }
+                if tool == "chilk_event" || tool == "chilk_event_change", dateOnly(text) != nil { return nil }  // a day: fine
                 return timestamp(text) == nil ? "needs an ISO-8601 time, e.g. 2026-10-09T10:00:00+03:00 (without an offset it is local time)" : nil
             }
             if tool == "chilk_events", key == "from" || key == "to" {

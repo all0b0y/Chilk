@@ -77,6 +77,24 @@ struct ChilkCalendarTests {
         }
     }
 
+    @Test func aWholeDayMayComeAsJustADate() throws {
+        let day = try ChilkToolCatalog.parse(name: "chilk_event", arguments: ["title": "Дача", "at": "2026-10-10", "minutes": 0,
+                                                                              "all_day": true])
+        guard case .event(_, let at, _, true) = day else { Issue.record("Expected an all-day event"); return }
+        #expect(at == ChilkToolCatalog.timestamp("2026-10-10T00:00:00"))
+        let timed: JSON = ["title": "Дача", "at": "2026-10-10", "minutes": 60, "all_day": false]
+        #expect(throws: ChilkToolCatalog.ToolError.self) { try ChilkToolCatalog.parse(name: "chilk_event", arguments: timed) }
+        #expect(ChilkToolCatalog.explain(name: "chilk_event", arguments: timed).hasPrefix("invalid_arguments: at"))
+    }
+
+    /// A move may name just the day (the host keeps the time of day, or moves a whole-day event by days).
+    @Test func aMoveMayNameJustTheDay() throws {
+        let move = try ChilkToolCatalog.parse(name: "chilk_event_change", arguments: ["id": "e1", "action": "move", "at": "2026-10-11",
+                                                                                       "title": "", "minutes": 0])
+        guard case .eventChange("e1", .move(let at, nil)) = move else { Issue.record("Expected a move"); return }
+        #expect(at == ChilkToolCatalog.timestamp("2026-10-11T00:00:00"))
+    }
+
     @Test func theListTakesARangeOfAtMostAYear() throws {
         let from = "2026-10-08T00:00:00+03:00", to = "2026-10-15T00:00:00+03:00"
         #expect(try ChilkToolCatalog.parse(name: "chilk_events", arguments: ["from": .string(from), "to": .string(to)])

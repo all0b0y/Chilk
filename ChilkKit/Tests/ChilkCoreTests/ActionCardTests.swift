@@ -168,6 +168,37 @@ struct ActionCardTests {
         let trip = ActionCard.allDaySlot(movedTo: at(20, 12), start: at(10, 0), end: at(12, 23, 59).addingTimeInterval(59), calendar: cal)
         #expect(trip.start == at(20, 0) && trip.end == at(23, 0))
     }
+
+    @Test func aMovedEventKeepsItsLengthUnlessANewOneIsSaid() {
+        let moved = ActionCard.movedSlot(start: at(9, 15), end: at(9, 16, 30), allDay: false, to: at(10, 11), minutes: nil,
+                                         now: now, calendar: cal)
+        #expect(moved?.start == at(10, 11) && moved?.end == at(10, 12, 30))
+        let longer = ActionCard.movedSlot(start: at(9, 15), end: at(9, 16), allDay: false, to: at(9, 15), minutes: 120,
+                                          now: now, calendar: cal)
+        #expect(longer?.end == at(9, 17))
+        // A start in the past is refused; the same start (an event that is on now) may be lengthened.
+        #expect(ActionCard.movedSlot(start: at(9, 15), end: at(9, 16), allDay: false, to: at(7, 20), minutes: nil, now: now,
+                                     calendar: cal) == nil)
+        let onNow = ActionCard.movedSlot(start: at(7, 20), end: at(7, 21), allDay: false, to: at(7, 20), minutes: 90, now: now,
+                                         calendar: cal)
+        #expect(onNow?.end == at(7, 21, 30))
+        // A whole day moves by whole days, also over the night the clocks go back (Berlin, 25 Oct 2026).
+        var berlin = Calendar(identifier: .gregorian)
+        berlin.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        func b(_ d: Int) -> Date { berlin.date(from: DateComponents(year: 2026, month: 10, day: d))! }
+        let trip = ActionCard.movedSlot(start: b(20), end: b(22), allDay: true, to: b(24).addingTimeInterval(13 * 3600),
+                                        minutes: nil, now: b(19), calendar: berlin)
+        #expect(trip?.start == b(24) && trip?.end == b(26))
+        #expect(ActionCard.movedSlot(start: b(20), end: b(21), allDay: true, to: b(18), minutes: nil, now: b(19),
+                                     calendar: berlin) == nil)
+    }
+
+    /// «Перенеси встречу на пятницу»: just the day — the event keeps its time of day and its length.
+    @Test func aMoveToJustADayKeepsTheTimeOfDay() {
+        let moved = ActionCard.movedSlot(start: at(9, 15), end: at(9, 16, 30), allDay: false, to: at(16, 0), minutes: nil,
+                                         now: now, dayOnly: true, calendar: cal)
+        #expect(moved?.start == at(16, 15) && moved?.end == at(16, 16, 30))
+    }
 }
 
 struct LooseHourTests {

@@ -138,6 +138,25 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         return (s, calendar.date(byAdding: .day, value: days, to: s) ?? s.addingTimeInterval(Double(days) * 86400))
     }
 
+    /// Slice 8e: an event moved to `to` (the day, or the moment the user meant): the length stays unless `minutes` is
+    /// said; a whole day moves by whole days; `dayOnly` (a bare date, «перенеси на пятницу») keeps an event's time of
+    /// day. nil — the new start lies in the past; the same start is fine (lengthening an event that is on now).
+    public static func movedSlot(start: Date, end: Date, allDay: Bool, to: Date, minutes: Int?, now: Date, dayOnly: Bool = false,
+                                 calendar: Calendar = .current) -> (start: Date, end: Date)? {
+        var to = to
+        if dayOnly && !allDay {
+            let t = calendar.dateComponents([.hour, .minute, .second], from: start)
+            to = calendar.date(bySettingHour: t.hour ?? 0, minute: t.minute ?? 0, second: t.second ?? 0, of: to) ?? to
+        }
+        if allDay {
+            let slot = allDaySlot(movedTo: to, start: start, end: end, calendar: calendar)
+            let same = slot.start == calendar.startOfDay(for: start)
+            return same || slot.start >= calendar.startOfDay(for: now) ? slot : nil
+        }
+        guard to == start || to > now.addingTimeInterval(30) else { return nil }
+        return (to, to.addingTimeInterval(minutes.map { Double($0) * 60 } ?? end.timeIntervalSince(start)))
+    }
+
     /// For the model (English, like other tool results): what the card shows.
     public func summary(calendar: Calendar = .current) -> String {
         let f = ISO8601DateFormatter()

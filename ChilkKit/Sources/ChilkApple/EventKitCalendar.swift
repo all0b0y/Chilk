@@ -29,7 +29,7 @@ public final class EventKitCalendar: CalendarStore {
         event.calendar = calendar
         event.isAllDay = allDay
         event.startDate = start
-        event.endDate = allDay ? start : end                   // EventKit ends an all-day event with its day itself
+        event.endDate = Self.eventKitEnd(start: start, end: end, allDay: allDay)
         try store.save(event, span: .thisEvent, commit: true)
         return Self.info(event)
     }
@@ -54,8 +54,7 @@ public final class EventKitCalendar: CalendarStore {
         guard !event.hasRecurrenceRules else { throw CalendarAccessError.recurring }
         if let title { event.title = title }
         if let start { event.startDate = start }
-        // An all-day end is exclusive here (or EventKit's own 23:59:59): EventKit wants a moment inside the last day.
-        if let end { event.endDate = event.isAllDay ? max(event.startDate ?? end, end.addingTimeInterval(-1)) : end }
+        if let end { event.endDate = Self.eventKitEnd(start: event.startDate ?? end, end: end, allDay: event.isAllDay) }
         try store.save(event, span: .thisEvent, commit: true)
         return Self.info(event)
     }
@@ -74,9 +73,21 @@ public final class EventKitCalendar: CalendarStore {
         return event
     }
 
+    /// An all-day end is exclusive here (the next midnight); EventKit wants a moment inside the last day.
+    private static func eventKitEnd(start: Date, end: Date, allDay: Bool) -> Date {
+        allDay ? max(start, end.addingTimeInterval(-1)) : end
+    }
+
+    /// EventKit ends an all-day event at 23:59:59 of its last day; here, as on the cards, `end` is exclusive — the next
+    /// midnight — so the model sees the same values whichever store answers.
     private static func info(_ e: EKEvent) -> EventInfo {
         let start: Date = e.startDate ?? Date()
-        return EventInfo(id: e.eventIdentifier ?? "", title: e.title ?? "", start: start, end: e.endDate ?? start,
+        var end: Date = e.endDate ?? start
+        if e.isAllDay {
+            let cal = Calendar.current
+            end = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: max(start, end.addingTimeInterval(-1)))) ?? end
+        }
+        return EventInfo(id: e.eventIdentifier ?? "", title: e.title ?? "", start: start, end: end,
                          allDay: e.isAllDay, recurring: e.hasRecurrenceRules)
     }
 
@@ -98,28 +109,38 @@ public final class EventKitCalendar: CalendarStore {
         }
     }
 
-    /// The remembered calendar, else one titled «Чилк», else (when creating) a new one. Other calendars are never
-    /// touched.
+    /// The accounts Chilk keeps its calendar in, in this order: the default calendar's (iCloud reaches the iPhone),
+    /// iCloud, «On My Mac».
+    private func homeSources() -> [EKSource] {
+        let candidates = [store.defaultCalendarForNewEvents?.source].compactMap { $0 }
+            + store.sources.filter { $0.sourceType == .calDAV && $0.title == "iCloud" }
+            + store.sources.filter { $0.sourceType == .local }
+        var out: [EKSource] = []
+        for source in candidates where !out.contains(where: { $0.sourceIdentifier == source.sourceIdentifier }) {
+            out.append(source)
+        }
+        return out
+    }
+
+    /// The remembered calendar, else one titled «Чилк» in one of Chilk's own accounts — a «Чилк» calendar of another
+    /// account or a subscription is never taken (decision 11: only his own) — else, when creating, a new one.
     private func chilkCalendar(create: Bool) throws -> EKCalendar? {
         if let id = defaults.string(forKey: Self.calendarKey), let calendar = store.calendar(withIdentifier: id),
            calendar.allowedEntityTypes.contains(.event), calendar.allowsContentModifications { return calendar }
+        let homes = homeSources()
+        let homeIDs = Set(homes.map(\.sourceIdentifier))
         if let calendar = store.calendars(for: .event).first(where: {
-            $0.title == ChilkCalendarExecutor.calendarTitle && $0.allowsContentModifications
+            $0.title == ChilkCalendarExecutor.calendarTitle && $0.allowsContentModifications && !$0.isSubscribed
+                && $0.source.map { homeIDs.contains($0.sourceIdentifier) } == true
         }) {
             defaults.set(calendar.calendarIdentifier, forKey: Self.calendarKey)
             return calendar
         }
         guard create else { return nil }
-        // The default calendar's account first (iCloud reaches the iPhone), then iCloud, then «On My Mac»; an account
-        // that takes no new calendars (Exchange, a subscription) refuses the save and the next one is tried.
-        var sources: [EKSource] = []
-        let candidates = [store.defaultCalendarForNewEvents?.source].compactMap { $0 }
-            + store.sources.filter { $0.sourceType == .calDAV && $0.title == "iCloud" }
-            + store.sources.filter { $0.sourceType == .local }
-        for source in candidates where !sources.contains(where: { $0.sourceIdentifier == source.sourceIdentifier }) {
-            sources.append(source)
-        }
-        for source in sources {
+        // An account that takes no new calendars refuses the save: the next one is tried. `reset()` drops the refused
+        // calendar (and may refetch what was fetched before it), so each account is looked up again by its id.
+        for id in homes.map(\.sourceIdentifier) {
+            guard let source = store.source(withIdentifier: id) else { continue }
             let calendar = EKCalendar(for: .event, eventStore: store)
             calendar.title = ChilkCalendarExecutor.calendarTitle
             calendar.source = source
@@ -128,7 +149,7 @@ public final class EventKitCalendar: CalendarStore {
                 defaults.set(calendar.calendarIdentifier, forKey: Self.calendarKey)
                 return calendar
             } catch {
-                continue
+                store.reset()                                      // the refused calendar must not trip the next commit
             }
         }
         throw CalendarAccessError.unavailable

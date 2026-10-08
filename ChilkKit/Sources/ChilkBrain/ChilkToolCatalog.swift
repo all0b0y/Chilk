@@ -110,12 +110,12 @@ public enum ChilkToolCatalog {
                  ["id": ["type": "string", "minLength": 1, "maxLength": 256],
                   "action": ["type": "string", "enum": ["move", "rename", "move_rename", "done", "delete"]],
                   "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120]]),
-            tool("chilk_event", "Propose an event in Chilk's own «Чилк» calendar in Apple Calendar (syncs to iPhone): a meeting, a class, an appointment — something that takes a time slot — or anything the user asks to put «в календарь». A thing to do at a time («напомни позвонить») is chilk_reminder; a countdown from now is chilk_timer. at: the start, ISO-8601; without a timezone it is the user's local time. minutes: the length, 1–1439 (60 when the user did not say). all_day=true: the whole day of at's date (a day off, a trip day); then minutes is 0. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows a confirmation card built from these values and creates the event only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
+            tool("chilk_event", "Propose an event in Chilk's own «Чилк» calendar in Apple Calendar (syncs to iPhone): a meeting, a class, an appointment — something that takes a time slot — or anything the user asks to put «в календарь». Only a NEW event: a change to one already in the calendar — its time, its length («сделай йогу на два часа», «продли до 12») or its title — is chilk_events + chilk_event_change, never a second chilk_event; when the user names an event as a known one («завтрашнюю йогу», «встречу с Сашей»), look with chilk_events first and change it if it is there. No start time said and not all day: ask when, never invent one. A thing to do at a time («напомни позвонить») is chilk_reminder; a countdown from now is chilk_timer. at: the start, ISO-8601; without a timezone it is the user's local time. minutes: the length, 1–1439 (60 when the user did not say). all_day=true: the whole day of at's date (a day off, a trip day; at may be just the date, e.g. 2026-10-10); then minutes is 0. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows a confirmation card built from these values and creates the event only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["title": ["type": "string", "minLength": 1, "maxLength": 120], "at": ["type": "string", "maxLength": 64],
                   "minutes": ["type": "integer", "minimum": 0, "maximum": 1439], "all_day": ["type": "boolean"]]),
             tool("chilk_events", "List the events of Chilk's own «Чилк» calendar that overlap from … to (ISO-8601, at most 366 days apart; up to 50, by start): id, title, start, end, allDay, recurring. Chilk sees ONLY this calendar: never the user's other calendars or their schedule — say so when asked about the whole schedule.",
                  ["from": ["type": "string", "maxLength": 64], "to": ["type": "string", "maxLength": 64]]),
-            tool("chilk_event_change", "Propose a change to ONE event of Chilk's own «Чилк» calendar, by its exact id from chilk_events, only on the user's request: action move (the new start in at; minutes = the new length, 0 keeps it), rename (the new title), move_rename (both), delete. Unused fields: empty string or 0. Nothing changes yet: the app shows a confirmation card and applies it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm. Refused: not_found (no such event in the «Чилк» calendar — list them again), recurring_event (a repeating event: Chilk changes only single events; the user changes it in Calendar).",
+            tool("chilk_event_change", "Propose a change to ONE event of Chilk's own «Чилк» calendar, by its exact id from chilk_events, only on the user's request: action move (the new start in at — just the date, e.g. 2026-10-11, keeps the time of day, and an all-day event moves by whole days; a longer or shorter event keeps its start in at with the new minutes; minutes = the new length, 0 keeps it), rename (the new title), move_rename (both), delete. Unused fields: empty string or 0. Nothing changes yet: the app shows a confirmation card and applies it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm. Refused: not_found (no such event in the «Чилк» calendar — list them again), recurring_event (a repeating event: Chilk changes only single events; the user changes it in Calendar).",
                  ["id": ["type": "string", "minLength": 1, "maxLength": 256],
                   "action": ["type": "string", "enum": ["move", "rename", "move_rename", "delete"]],
                   "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120],
@@ -220,6 +220,16 @@ public enum ChilkToolCatalog {
     /// Slice 8e: a timed event lasts 1 min … 23 h 59 min; a whole day ignores the length (0 by the schema's wording).
     static func validEventLength(_ minutes: Int, allDay: Bool) -> Bool {
         allDay ? (0...1439).contains(minutes) : (1...1439).contains(minutes)
+    }
+
+    /// Slice 8e: a bare date («2026-10-10») — local midnight: the day of a whole-day event, or the day an event moves to.
+    public static func dateOnly(_ text: String, zone: TimeZone = .autoupdatingCurrent) -> Date? {
+        guard text.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", options: .regularExpression) != nil else { return nil }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = zone
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: text)
     }
 
     /// Slice 8e: `chilk_events` reads at most a year at once (EventKit itself stops at four).
@@ -332,9 +342,10 @@ public enum ChilkToolCatalog {
             }
         case "chilk_event":
             guard Set(fields.keys) == ["title", "at", "minutes", "all_day"], let title = fields["title"]?.string,
-                  validTitle(title, limit: 120), let text = fields["at"]?.string, let at = timestamp(text),
-                  let minutes = wholeNumber(fields["minutes"]), let allDay = fields["all_day"]?.bool,
-                  validEventLength(minutes, allDay: allDay) else { throw ToolError.invalidArguments }
+                  validTitle(title, limit: 120), let text = fields["at"]?.string, let allDay = fields["all_day"]?.bool,
+                  let at = timestamp(text) ?? (allDay ? dateOnly(text) : nil),
+                  let minutes = wholeNumber(fields["minutes"]), validEventLength(minutes, allDay: allDay)
+            else { throw ToolError.invalidArguments }
             return .event(title: title.trimmingCharacters(in: .whitespacesAndNewlines), at: at, minutes: minutes, allDay: allDay)
         case "chilk_events":
             guard Set(fields.keys) == ["from", "to"], let a = fields["from"]?.string, let from = timestamp(a),
@@ -348,7 +359,7 @@ public enum ChilkToolCatalog {
             else { throw ToolError.invalidArguments }
             let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
             let length = minutes == 0 ? nil : minutes
-            func start() throws -> Date { guard let d = timestamp(at) else { throw ToolError.invalidArguments }; return d }
+            func start() throws -> Date { guard let d = timestamp(at) ?? dateOnly(at) else { throw ToolError.invalidArguments }; return d }
             func name() throws -> String {
                 guard validTitle(cleanTitle, limit: 120) else { throw ToolError.invalidArguments }
                 return cleanTitle

@@ -286,25 +286,25 @@ final class Actions {
             guard !found.recurring else { return .failure(ChilkCalendarExecutor.failure(CalendarAccessError.recurring)) }
             // A move keeps the length unless a new one is said; a whole day moves by whole days. Only a new start must lie
             // ahead: lengthening an event that is on now is fine.
+            // Just the day («перенеси на пятницу»): the event keeps its time of day; there is no hour to correct.
+            let dayOnly = ChilkToolCatalog.dateOnly(call.arguments["at"]?.string ?? "") != nil
             func moved(_ d: Date, _ minutes: Int?) -> (start: Date, end: Date)? {
-                if found.allDay {
-                    let slot = ActionCard.allDaySlot(movedTo: d, start: found.start, end: found.end)
-                    return slot.start == found.start || slot.start >= Calendar.current.startOfDay(for: now) ? slot : nil
-                }
-                let start = daytime(d)
-                guard start == found.start || future(start) else { return nil }
-                return (start, start.addingTimeInterval(minutes.map { Double($0) * 60 } ?? found.end.timeIntervalSince(found.start)))
+                ActionCard.movedSlot(start: found.start, end: found.end, allDay: found.allDay,
+                                     to: found.allDay || dayOnly ? d : daytime(d), minutes: minutes, now: now, dayOnly: dayOnly)
             }
+            let unchanged = CodexToolResult.failure("nothing_to_change: the event already is like that; no card was made")
             wholeDay = found.allDay
             switch change {
             case .move(let d, let m), .moveRename(let d, let m, _):
                 guard let slot = moved(d, m) else { return passed }
                 var title = found.title
                 if case .moveRename(_, _, let t) = change { title = t }
+                guard slot.start != found.start || slot.end != found.end || title != found.title else { return unchanged }
                 kind = .eventChange(id: id, oldTitle: found.title, oldStart: found.start, oldEnd: found.end, allDay: found.allDay,
                                     title: title, start: slot.start, end: slot.end)
                 if slot.start != found.start { date = slot.start }
             case .rename(let t):
+                guard t != found.title else { return unchanged }
                 kind = .eventChange(id: id, oldTitle: found.title, oldStart: found.start, oldEnd: found.end, allDay: found.allDay,
                                     title: t, start: found.start, end: found.end)
             case .delete:

@@ -435,6 +435,10 @@ final class CardEditModel {
     var minutesText = ""
     var minutes: Int? { Int(minutesText.trimmingCharacters(in: .whitespaces)) }
     private var startMinutes = 0
+    /// The field as it opened: untouched, the exact length stays («через 90 секунд» stays 90 s; a hand-made event longer
+    /// than the field's 1439 minutes keeps its length).
+    private var startMinutesText = ""
+    private var minutesTouched: Bool { minutesText.trimmingCharacters(in: .whitespaces) != startMinutesText }
     let hasMinutes: Bool
     /// The date the card started with: a rename keeps the time unless the user moves it.
     private let startDate: Date?
@@ -467,6 +471,7 @@ final class CardEditModel {
             let m = min(1439, max(1, Int((length / 60).rounded())))
             startMinutes = m
             minutesText = String(m)
+            startMinutesText = String(m)
         }
     }
 
@@ -478,8 +483,12 @@ final class CardEditModel {
         return String(localized: "Длительность, мин")
     }
 
-    /// The earliest day or moment the picker offers: today for an all-day event, now otherwise.
-    var earliest: Date { dateOnly ? Calendar.current.startOfDay(for: Date()) : Date() }
+    /// The earliest day or moment the picker offers: today for an all-day event, now otherwise — but never later than a
+    /// change card's own start: a picker bound above a past start would pull it up to now and silently move the event.
+    var earliest: Date {
+        let base = dateOnly ? Calendar.current.startOfDay(for: Date()) : Date()
+        return isChange ? min(startDate ?? base, base) : base
+    }
 
     var valid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -490,7 +499,7 @@ final class CardEditModel {
     /// A change may keep a past time it does not move; anything new lies ahead (an all-day event: from today).
     private var dateValid: Bool {
         if isChange && !dateTouched { return true }
-        return dateOnly ? date >= earliest : date > Date()
+        return dateOnly ? date >= Calendar.current.startOfDay(for: Date()) : date > Date()
     }
 
     private var isChange: Bool {
@@ -510,9 +519,7 @@ final class CardEditModel {
         case .reminderChange(let id, let old, let oldDue, _, let due):
             kind = .reminderChange(id: id, oldTitle: old, oldDue: oldDue, title: t, due: hasDate && dateTouched ? date : due)
         case .timer(_, let seconds):
-            // Untouched minutes keep the exact seconds («через 90 секунд» stays 90 s).
-            let m = minutes ?? startMinutes
-            kind = .timer(title: t, seconds: m == startMinutes ? seconds : m * 60)
+            kind = .timer(title: t, seconds: minutesTouched ? (minutes ?? startMinutes) * 60 : seconds)
         case .event(_, let start, let end, let allDay):
             let span = slot(start: start, end: end, allDay: allDay)
             kind = .event(title: t, start: span.start, end: span.end, allDay: allDay)
@@ -530,8 +537,7 @@ final class CardEditModel {
     private func slot(start: Date, end: Date, allDay: Bool) -> (start: Date, end: Date) {
         guard !allDay else { return dateTouched ? ActionCard.allDaySlot(movedTo: date, start: start, end: end) : (start, end) }
         let s = dateTouched ? date : start
-        let m = minutes ?? startMinutes
-        return (s, s.addingTimeInterval(m != startMinutes ? TimeInterval(m * 60) : end.timeIntervalSince(start)))
+        return (s, s.addingTimeInterval(minutesTouched ? TimeInterval((minutes ?? startMinutes) * 60) : end.timeIntervalSince(start)))
     }
 }
 
