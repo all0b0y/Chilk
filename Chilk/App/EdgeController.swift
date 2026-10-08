@@ -155,9 +155,12 @@ final class EdgeController: NSObject {
 
     /// Slice 10 (Б6, decision 14): him plus the widest bubble beside him, on screen — a window that opens «beside him» («Лист
     /// дня», «Подробнее», «Изменить») goes past it, so a bubble never lands on the window. The widest bubble is the scene's
-    /// width less 20 (`BubbleLayout`), 26 pt clear of his body; 30 pt more for the windows' own overlap.
+    /// width less 20 (`BubbleLayout`), `bubbleGap` clear of his body; 30 pt more for the windows' own overlap.
     var besideFrame: NSRect {
-        let far = Double(sim.pose.x) - metrics.radiusX - 26 - (metrics.width - 20) - 30
+        // Review 10c: from the furthest he stands out with a bubble (`.out`), not where he is now — a sheet opened while he
+        // is home must not get a bubble on it when he steps out; plus the lean out from behind the edge.
+        let x = min(Double(sim.pose.x), metrics.outX)
+        let far = x - metrics.radiusX - ChilkRenderer.bubbleGap - (metrics.width - 20) - 30
         var r = CGRect(x: far, y: 0, width: metrics.width - far, height: metrics.height)
         if isMirrored { r.origin.x = metrics.width - r.maxX }
         return screenRect(fromScene: r)

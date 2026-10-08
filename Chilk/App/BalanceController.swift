@@ -87,6 +87,11 @@ final class BalanceController {
     private var quietRequest: String?
     /// Slice 10 (Б5): the request he looks out with, its bubble held until answered — a resume shows it again, no new roll.
     private var lurkRequest: String?
+    /// Б5: the held request was answered — his reaction (and a follow-up like «Через сколько вернуться?») shows from behind
+    /// the edge; then `lurkRelease` sends him back. Review 10c: one timer, replaced or cancelled, so an old one cannot cut a
+    /// newer reaction short.
+    private var lurkAnswered = false
+    private var lurkRelease: Timer?
     /// Stage ≥ 2 insists: the tray icon wiggles (slice 5a; was the Dock bounce). Also while the stage is busy.
     var onNudge: () -> Void = {}
 
@@ -310,7 +315,10 @@ final class BalanceController {
         apply(events)
         // Б5: the request he holds out from behind the edge is gone (credited by being away, released) — after this tick's
         // events, so a climb re-rolls and holds the next stage without a dive in between.
-        if hideout?.holding == true, lurkRequest != engine.currentPrompt().flatMap(Self.requestKey) { releaseLurk("request gone") }
+        if hideout?.holding == true, !lurkAnswered, lurkRequest != engine.currentPrompt().flatMap(Self.requestKey) {
+            hideBubble()                                              // nothing to answer at an empty edge
+            releaseLurk("request gone")
+        }
         syncEscalation()
         sim.fatigue = engine.leafFatigue
         sim.eyeStrain = engine.eyeStrain
@@ -565,7 +573,7 @@ final class BalanceController {
             showLurking(event, hide: hide)
             return true
         }
-        lurkRequest = nil
+        if hide.holding { releaseLurk("a stage-0 request") }
         quietRequest = key
         hideBubble()
         if n == .walk { sim.wear(.hat) }
@@ -580,6 +588,9 @@ final class BalanceController {
     private func showLurking(_ event: BalanceEvent, hide: HideController) {
         guard case .ask(let n, let stage, let buttons, let again) = event else { return }
         cancelIntro()
+        lurkRelease?.invalidate()
+        lurkRelease = nil
+        lurkAnswered = false
         sim.wakeUp()                                                  // a dozing hidden Chilk looks out awake
         hide.hold(why: "\(n.rawValue), stage \(stage), bubble")
         showAsk(n, stage: stage, buttons: buttons, again: again)
@@ -588,8 +599,32 @@ final class BalanceController {
 
     /// Б5: the held request was answered or went — he dives back behind the edge.
     private func releaseLurk(_ why: String) {
+        lurkRelease?.invalidate()
+        lurkRelease = nil
+        lurkAnswered = false
         lurkRequest = nil
         hideout?.release(why)
+    }
+
+    /// Б5: after the answer — the reaction stays visible ~2.5 s from behind the edge, then the dive. A follow-up question
+    /// (buttons again) keeps him out until it is answered too.
+    private func afterLurkAnswer() {
+        lurkAnswered = true
+        if activity != nil { releaseLurk("an activity took him out"); return }   // a warm-up / eye gym: he is out now
+        if !buttonActions.isEmpty {
+            lurkRelease?.invalidate()
+            lurkRelease = nil
+            sim.standOut = .lurk                                      // «Иду» → «Разминка со мной / Сам» from behind the edge
+            log("lurk: a follow-up question, still held")
+            return
+        }
+        lurkRelease?.invalidate()
+        lurkRelease = Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.lurkAnswered, self.buttonActions.isEmpty else { return }
+                self.releaseLurk("answered")
+            }
+        }
     }
 
     /// «Не, я тут посижу. Нам надо поговорить» (~3 s), then `then` — unless something else came meanwhile.
@@ -655,6 +690,7 @@ final class BalanceController {
             log("slumped")
             guard activity == nil, !stageThreeOrMore else { return }
             if let hide = hideout, hide.isHidden {                   // 6d: «лежит» rolls like stage 4
+                if hide.holding { hideBubble(); releaseLurk("slumped") }  // review 10c: no stage 1–2 bubble while he lies
                 guard hide.rollStays(stage: 4) else { quietRequest = "slumped"; return }
                 quietRequest = nil
                 hide.show("came out lying", notify: false)
@@ -1032,18 +1068,11 @@ final class BalanceController {
         guard index < buttonActions.count else { return }
         log("button \(index)")
         let action = buttonActions[index]
+        let held = hideout?.holding == true ? lurkRequest : nil
         hideBubble()
-        if hideout?.holding == true {
-            // Б5: answered — his reaction («Ура, вода!») still shows from behind the edge, then he dives back.
-            lurkRequest = nil
-            Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.lurkRequest == nil else { return }       // a new request holds him meanwhile
-                    self.releaseLurk("answered")
-                }
-            }
-        }
         action()
+        // Б5: answered from behind the edge (unless the answer itself brought a new held request or took him out).
+        if hideout?.holding == true, let held, held == lurkRequest { afterLurkAnswer() }
     }
 
     func poked() {

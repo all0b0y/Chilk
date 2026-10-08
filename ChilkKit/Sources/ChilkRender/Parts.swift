@@ -25,9 +25,10 @@ public enum Part: Hashable, Sendable {
     case mouthO
     case z
     case bubbleBox(width: Double, height: Double)
-    /// Slice 10 (Б6): the outline with the tail on its side — at `tailY` from the top, on the left when `tailLeft` (the
-    /// bubble beside him). The tail is drawn in the same part so the box's edge does not cut it off.
-    case bubbleStroke(width: Double, height: Double, tailY: Double, tailLeft: Bool)
+    case bubbleStroke(width: Double, height: Double)
+    /// Slice 10 (Б6): the tail on the bubble's side, pointing right (+x) from the box's edge; drawn over the outline,
+    /// with a white patch that opens the edge where it joins. Mirrored by its transform.
+    case bubbleTail
     case word(String)
     case backpack(lw: Double)
     case strap(lw: Double)
@@ -142,8 +143,8 @@ public enum Slot {
     public static let exclaim = 59      // «!» of surprise (9)
     public static let puff = 60         // +0…+4 — «пф!» (6d)
     public static let bubbleBox = 65
-    public static let bubbleTail = 66      // slice 10: unused — the tail is part of `bubbleStroke`
-    public static let bubbleStroke = 67
+    public static let bubbleStroke = 66
+    public static let bubbleTail = 67      // slice 10: over the outline — the tail is on the bubble's side now
     public static let button = 68       // +index
     public static let word = 80         // +index
 }
@@ -197,8 +198,10 @@ extension Part {
             return box(0, -ascent, w, ascent + descent, margin: 1.5)
         case .bubbleBox(let w, let h):
             return box(0, 0, w, h, margin: 1)
-        case .bubbleStroke(let w, let h, _, _):
-            return box(-13, 0, w + 26, h, margin: 2.5)
+        case .bubbleStroke(let w, let h):
+            return box(0, 0, w, h, margin: 2.5)
+        case .bubbleTail:
+            return box(-3, -8, 15, 15, margin: 2)
         case .word(let s):
             let (w, ascent, descent) = TextKit.metrics(s, font: TextKit.bubbleFont)
             return box(0, -ascent, w, ascent + descent, margin: 1.5)
@@ -412,19 +415,22 @@ extension Part {
             ctx.setFillColor(RGBA.white.cgColor)
             ctx.fillPath()
 
-        case .bubbleStroke(let w, let h, let ty, let left):
+        case .bubbleStroke(let w, let h):
             ctx.addPath(CGPath(roundedRect: CGRect(x: 0, y: 0, width: w, height: h), cornerWidth: 14, cornerHeight: 14, transform: nil))
             ctx.setStrokeColor(outline)
             ctx.setLineWidth(2.4)
             ctx.setLineJoin(.miter)
             ctx.strokePath()
-            // The tail: white over the box's edge where it joins, then its two outer edges.
-            let edge = left ? 0.0 : w, out = left ? -11.0 : 11.0, inset = left ? 1.6 : -1.6
-            let a = CGPoint(x: edge + inset, y: ty - 7), tip = CGPoint(x: edge + out, y: ty - 1), b = CGPoint(x: edge + inset, y: ty + 6)
-            ctx.move(to: a); ctx.addLine(to: tip); ctx.addLine(to: b); ctx.closePath()
+
+        case .bubbleTail:
+            // White over the box's edge where it joins, then its two outer edges.
+            let tip = CGPoint(x: 11, y: -1)
+            ctx.move(to: CGPoint(x: -1.6, y: -7)); ctx.addLine(to: tip); ctx.addLine(to: CGPoint(x: -1.6, y: 6)); ctx.closePath()
             ctx.setFillColor(RGBA.white.cgColor)
             ctx.fillPath()
-            ctx.move(to: CGPoint(x: edge, y: ty - 7)); ctx.addLine(to: tip); ctx.addLine(to: CGPoint(x: edge, y: ty + 6))
+            ctx.move(to: CGPoint(x: 0, y: -7)); ctx.addLine(to: tip); ctx.addLine(to: CGPoint(x: 0, y: 6))
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(2.4)
             ctx.setLineJoin(.round)
             ctx.strokePath()
 

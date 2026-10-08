@@ -68,4 +68,39 @@ struct BubbleButtonTests {
             }
         }
     }
+
+    /// Review 10c: and not over his arms, a mug, a hat or a backpack — cheering, waving, drinking, dancing, lying, in the
+    /// centre; the tallest bubble included.
+    @Test func theBubbleClearsHisArmsAndProps() {
+        let tall = (1...10).map { "Строка номер \($0) карточки" }.joined(separator: "\n")
+        let his: Set<Int> = [Slot.ear, Slot.ear + 1, Slot.arm, Slot.arm + 1, Slot.foot, Slot.foot + 1, Slot.backpack,
+                             Slot.body, Slot.hat, Slot.stem, Slot.leaf, Slot.leaf + 1, Slot.hand, Slot.hand + 1, Slot.mug, Slot.ball]
+        let setups: [(String, (CharacterSim) -> Void)] = [
+            ("cheer", { $0.standOut = .peek; $0.perform(.cheer) }),
+            ("wave", { $0.standOut = .out; $0.wear(.hat); $0.wear(.backpack); $0.perform(.wave) }),
+            ("drink", { $0.standOut = .peek; $0.perform(.drink) }),
+            ("dance", { $0.standOut = .center; $0.perform(.dance(seconds: 10)) }),
+            ("lying", { $0.standOut = .peek; $0.slumped = true }),
+        ]
+        for (name, setup) in setups {
+            for text in ["Ура!", tall] {
+                for mirrored in [false, true] {
+                    let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 5))
+                    setup(sim)
+                    sim.say(text, buttons: ["Да", "Нет"])
+                    for frame in 0..<240 {
+                        sim.step(dt: 1.0 / 60, pointer: nil)
+                        guard frame >= 90, frame % 10 == 0 else { continue }
+                        let plan = ChilkRenderer.placements(pose: sim.pose, metrics: m, mirrored: mirrored)
+                        guard let box = plan.first(where: { if case .bubbleBox = $0.part { true } else { false } }) else { continue }
+                        let b = box.part.bounds(metrics: m).applying(box.transform)
+                        for part in plan where his.contains(part.slot) {
+                            let r = part.part.bounds(metrics: m).applying(part.transform)
+                            #expect(!b.intersects(r), "\(name) \(text.prefix(5)) mirrored=\(mirrored) frame=\(frame) slot=\(part.slot)")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

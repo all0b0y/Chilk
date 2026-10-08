@@ -225,6 +225,8 @@ func previews(into dir: URL) throws {
         ("97-answer-240", sim({ $0.standOut = .peek; $0.say(longAnswer) }, seconds: 3), false),
         ("98-lurk-request", sim({ fromBehind($0, .lurk); $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]) }, seconds: 2), false),
         ("98b-lurk-request-left", sim({ fromBehind($0, .lurk); $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]) }, seconds: 2), true),
+        ("98d-lying-bubble", sim({ $0.standOut = .peek; $0.slumped = true; $0.say("Эй… ты как? Давай встанем?", buttons: ["Встал", "Позже"]) }, seconds: 3), false),
+        ("98e-dance-tall", sim({ $0.standOut = .center; $0.perform(.dance(seconds: 10)); $0.say(tallCard, buttons: ["Да", "Нет"]) }, seconds: 2.4), false),
         ("98c-cheer-bubble", sim({ $0.standOut = .peek; $0.perform(.cheer); $0.say("Готово: план на пятницу — 3 дела в «Напоминаниях»") }, seconds: 1.2), false),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),

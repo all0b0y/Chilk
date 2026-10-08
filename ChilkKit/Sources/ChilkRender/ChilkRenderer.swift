@@ -355,16 +355,17 @@ public enum ChilkRenderer {
         let side = bubbleSide(pose: p, metrics: m, width: bw, height: bh)
         var bx = side.x
         let by = side.y
-        var tailX = bx + bw - 1
+        var tailX = bx + bw
         let tailY = side.tailY
-        if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX }
+        var dir = 1.0
+        if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX; dir = -1 }
 
         let pop = CGAffineTransform(translationX: tailX, y: tailY).scaledBy(x: scale, y: scale).translatedBy(x: -tailX, y: -tailY)
         let a = clamp(scale)
         out.append(Placement(slot: Slot.bubbleBox, part: .bubbleBox(width: bw, height: bh), transform: pop.translatedBy(x: bx, y: by), alpha: a))
-        // The outline carries the tail on the side facing him.
-        out.append(Placement(slot: Slot.bubbleStroke, part: .bubbleStroke(width: bw, height: bh, tailY: tailY - by, tailLeft: mirrored),
-                             transform: pop.translatedBy(x: bx, y: by), alpha: a))
+        out.append(Placement(slot: Slot.bubbleStroke, part: .bubbleStroke(width: bw, height: bh), transform: pop.translatedBy(x: bx, y: by), alpha: a))
+        // The tail is its own small part (review 10c: in the outline its height made a new big bitmap every hop).
+        out.append(Placement(slot: Slot.bubbleTail, part: .bubbleTail, transform: pop.translatedBy(x: tailX, y: tailY).scaledBy(x: dir, y: 1), alpha: a))
         for (index, word) in layout.words.enumerated() {
             let wa = clamp((p.bubbleAge - 0.45 - Double(index) * 0.08) / 0.2)
             guard wa * a > 0.002 else { continue }
@@ -384,6 +385,9 @@ public enum ChilkRenderer {
     /// beside him on the screen side, never over him. Its top is at his head and it grows down; at the floor it rises.
     /// Canonical (unmirrored) space: he lives at the right edge, so the bubble is to his left. `tailY` — where the tail
     /// meets the bubble (towards his upper body).
+    /// From his body's side to the bubble: room for his arms out (cheer, a dance), a mug and his lying shape (review 10c).
+    public static let bubbleGap = 42.0
+
     static func bubbleSide(pose p: CharacterPose, metrics m: Metrics, width bw: Double, height bh: Double)
         -> (x: Double, y: Double, tailY: Double) {
         let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY, roll: p.roll)
@@ -391,10 +395,12 @@ public enum ChilkRenderer {
         let cx = p.x + (turned ? lie.dx : 0)
         let halfWidth = turned ? m.radiusY : m.radiusX
         let top = m.ground + p.hop - (turned ? 2 * lie.halfHeight : m.radiusY * 2)
-        // Clear of his body, his arms out (cheer) and a held mug — and of his lean (a tilt about the feet moves his head to
-        // the screen side, e.g. leaning out from behind the edge).
-        let lean = min(0, sin(p.tilt) * m.radiusY * 2)
-        let x = cx + lean - halfWidth - 26 - bw
+        // Clear of his body, his arms out (cheer) and a held mug — and of the lean out from behind the edge (tilt −0.42
+        // about the feet): reserved by where he stands, past his home, not by the tilt itself — a dance or a hop tilts
+        // him every frame and the bubble would shake (review 10c).
+        let behind = min(max((p.x - m.dockX) / (m.lurkX - m.dockX), 0), 1)
+        let lean = -behind * sin(0.5) * m.radiusY * 2
+        let x = cx + lean - halfWidth - bubbleGap - bw
         let y = min(top - 8, m.ground - bh)
         let tailY = min(max(top + m.radiusY * 0.55, y + 16), y + bh - 16)
         return (x, y, tailY)
