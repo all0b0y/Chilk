@@ -23,9 +23,33 @@ extension Lines {
 
     @MainActor static func ask(_ n: Need, stage: Int, again: Bool) -> String {
         if n == .sleep { return sleepAsk(stage: stage, again: again) }
+        // Slice 9e (decision 32): with the day's batch the request speaks only from it; the library is the fallback.
+        if let line = fromBatch(n, PhraseBatch.step(stage: stage, again: again)) { return line }
         if again { return againLines[n]!.randomElement()! }
-        let library = stage >= 2 ? insist[n]! : polite[n]!
-        return (library + (batch?.lines(for: n, stage: stage) ?? [])).randomElement()!
+        return (stage >= 2 ? insist[n]! : polite[n]!).randomElement()!
+    }
+
+    /// Each slot of the batch without repeats until its whole set has been said (decision 32).
+    @MainActor static var bag = LineBag()
+
+    /// The batch's line for this need and step (nil: no batch, or nothing in that slot).
+    @MainActor static func fromBatch(_ n: Need, _ step: PhraseBatch.Step) -> String? {
+        guard let pool = batch?.lines[n]?[step], !pool.isEmpty else { return nil }
+        return bag.next("\(n.rawValue).\(step.rawValue)", from: pool)
+    }
+
+    /// A batch slot that is not per need (warning, no games, wishes, reactions).
+    @MainActor static func fromBatch(_ slot: String, _ pool: [String]?) -> String? {
+        guard let pool, !pool.isEmpty else { return nil }
+        return bag.next(slot, from: pool)
+    }
+
+    @MainActor static func sleepWarningLine() -> String {
+        fromBatch("sleepWarning", batch?.sleepWarning) ?? sleepWarning.randomElement()!
+    }
+
+    @MainActor static func noGamesLine() -> String {
+        fromBatch("noGames", batch?.noGames) ?? noGamesAtNight.randomElement()!
     }
 
     static func button(_ r: Reaction, for n: Need) -> String {
@@ -133,12 +157,13 @@ extension Lines {
 
     /// Decision 21: at bedtime «Пора спать, {имя}»; then softer-cheekier; back at night — «Эй, ты же спать ушёл».
     @MainActor static func sleepAsk(stage: Int, again: Bool) -> String {
-        if again { return sleepAgain.randomElement()! }
+        if again { return fromBatch(.sleep, .again) ?? sleepAgain.randomElement()! }
         if stage <= 1 {
             let name = userName()
             return name.isEmpty ? String(localized: "Пора спать 🌙") : String(localized: "Пора спать, \(name) 🌙")
         }
-        return (stage >= 3 ? sleepDisturb : sleepInsist).randomElement()!
+        if stage >= 3 { return fromBatch(.sleep, .stage3) ?? sleepDisturb.randomElement()! }
+        return fromBatch(.sleep, .insist) ?? sleepInsist.randomElement()!
     }
 
     static let sleepInsist: [String] = [
@@ -202,8 +227,9 @@ extension Lines {
 
     // MARK: Strict mode: stage 3 «мешает», stage 4 the pause, the emergency exit (slice 4, 2026-10-05)
 
-    /// Stage 3: he has walked to the middle of the screen and the light is going down.
-    static func disturb(_ n: Need) -> String {
+    /// Stage 3: he has walked to the middle of the screen and the light is going down (9e: the batch's stage 3 first).
+    @MainActor static func disturb(_ n: Need) -> String {
+        if let line = fromBatch(n, .stage3) { return line }
         let lines: [String] = switch n {
         case .stretch: [String(localized: "Я вышел на середину. Свет гаснет, пока ты не встанешь"),
                         String(localized: "Встаёшь сам или мне погасить свет совсем?")]

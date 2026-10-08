@@ -33,13 +33,13 @@ enum GameLines {
     }
 
     /// Why not now (decision 26) — said by Chilk, also the tool's hint.
-    static func refusal(_ r: GameRefusal) -> String {
+    @MainActor static func refusal(_ r: GameRefusal) -> String {
         switch r {
         case .exhausted: String(localized: "Сначала помоги мне… потом поиграем")
         case .topStage: String(localized: "Сейчас не до игр — сначала перерыв")
         case .exercise: String(localized: "Доделаем упражнение — потом поиграем")
         case .notReady: String(localized: "В это я ещё не умею")
-        case .night: Lines.noGamesAtNight.randomElement()!
+        case .night: Lines.noGamesLine()
         }
     }
 

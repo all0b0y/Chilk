@@ -270,7 +270,7 @@ final class PlanNotices {
             var review: Date?
             if ask, let items = try? await reminders.day(day), !items.isEmpty { review = day }
             queue.removeAll { if case .bedtime = $0, $0 != showing { true } else { false } }
-            let text = review == nil ? Lines.sleepWarning.randomElement()! : PlanLines.sleepReview
+            let text = review == nil ? Lines.sleepWarningLine() : PlanLines.sleepReview
             queue.append(.bedtime(at: bedtime, text: text, review: review))
             log("sleep: the warning waits\(review == nil ? "" : " with the evening review")")
         }
@@ -389,16 +389,26 @@ extension PlanLines {
         String(localized: "Подведём день? Сделано \(done) из \(total)")
     }
 
-    /// Until the Codex batch of 9e: a hand-written stock (decision 15 «без сети — ручной запас»).
-    static func wish() -> String {
-        [String(localized: "Пусть день будет лёгким ☀️"), String(localized: "Хорошего дня!"), String(localized: "Ты справишься 💪"),
+    /// The day's Codex batch (9e, decision 32), else a hand-written stock (decision 15 «без сети — ручной запас»).
+    @MainActor static func wish() -> String {
+        if let line = Lines.fromBatch("wishes", Lines.batch?.wishes) { return line }
+        return [String(localized: "Пусть день будет лёгким ☀️"), String(localized: "Хорошего дня!"), String(localized: "Ты справишься 💪"),
          String(localized: "Не забывай про воду 💧"), String(localized: "Пусть всё получится!"),
          String(localized: "Шаг за шагом — и всё успеем."), String(localized: "Улыбнись — день только начался 🙂"),
          String(localized: "Я рядом, если что.")].randomElement()!
     }
 
-    /// Decision 17: «4 из 5 — красота!» (a hand-written stock until 9e).
-    static func reaction(_ r: PlanNotice.Result, done: Int, total: Int) -> String {
+    /// Decision 17: «4 из 5 — красота!» — the batch's reaction for the outcome (9e) after the count, else the hand-written stock.
+    @MainActor static func reaction(_ r: PlanNotice.Result, done: Int, total: Int) -> String {
+        let outcome: PhraseBatch.Outcome = switch r {
+        case .all: .all
+        case .most: .most
+        case .some: .some
+        case .none: .none
+        }
+        if let line = Lines.fromBatch("reaction.\(outcome.rawValue)", Lines.batch?.reactions[outcome]) {
+            return r == .none ? line : String(localized: "\(done) из \(total) — \(line)")
+        }
         let pool: [String] = switch r {
         case .all: [String(localized: "\(done) из \(total) — красота!"), String(localized: "Всё сделано! Горжусь 🌟"),
                     String(localized: "\(done) из \(total). Идеальный день!")]

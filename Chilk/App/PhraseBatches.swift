@@ -55,8 +55,7 @@ final class PhraseBatches {
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try JSONEncoder().encode(batch).write(to: file, options: .atomic)
                 if enabled() { Lines.batch = batch }
-                let count = batch.lines.values.flatMap(\.values).map(\.count).reduce(0, +)
-                log("phrases: \(count) lines, \(batch.ideas.values.map(\.count).reduce(0, +)) ideas for \(today)")
+                log("phrases: \(batch.count) lines, \(batch.ideas.values.map(\.count).reduce(0, +)) ideas for \(today)")
             } catch {
                 log("phrases: batch failed (\(error))")
             }
@@ -79,8 +78,17 @@ final class PhraseBatches {
         """
         Напиши свежие реплики Чилка на сегодня, сейчас \(weekday), \(period). Ответ — JSON по схеме.
         lines: для каждой потребности — water (вода), stretch (размяться), eyes (дать глазам отдохнуть), \
-        walk (прогулка), endOfDay (закончить рабочий день) — по 3 фразы polite (первая просьба, мягко, с лёгкой \
-        подколкой) и по 3 фразы insist (он просит уже не первый раз: наглее, но по-доброму).
+        walk (прогулка), endOfDay (закончить рабочий день), sleep (пора спать: ночь, после отбоя) — по 3 фразы polite \
+        (первая просьба, мягко, с лёгкой подколкой), по 3 фразы insist (он просит уже не первый раз: наглее, но \
+        по-доброму), по 2 фразы again (он вернулся после отсрочки: «снова я», «мы же договорились»; для sleep — \
+        пользователь вернулся ночью: «Эй, ты же спать ушёл») и по 2 фразы stage3 (последняя просьба перед паузой: \
+        он вышел на середину экрана и гасит свет). Для sleep — сонно и мягко, без нотаций и ни слова о здоровье и вреде \
+        недосыпа («Завтрашний ты скажет спасибо»); polite для sleep не показывается — можно коротко.
+        sleepWarning: 3 фразы за час до отбоя — пора закругляться с делами, мягко. noGames: 2 фразы отказа поиграть \
+        ночью («Ночью не играю — иди спать»). wishes: 4 коротких утренних пожелания на день, тёплые, без пафоса. \
+        reactions: реакция после подведения итогов дня, по 2 на all (всё сделано), most (почти всё), some (кое-что), \
+        none (ничего); для all/most/some фраза пойдёт после «4 из 5 — », поэтому без чисел и с маленькой буквы \
+        («красота!»); для none — поддержка без укора.
         ideas: что сделать вне экрана за 5–15 минут, по 3 на morning, day, evening, night; конкретно и выполнимо, \
         без погоды и без покупок.
         shush: 3 фразы, которыми Чилк сворачивает баскетбол, когда у пользователя начался созвон: шёпотом, с юмором, \
