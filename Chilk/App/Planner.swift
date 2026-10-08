@@ -90,6 +90,7 @@ final class Planner {
             sheetNote = PlanEdits()
         }
         if let current = collectingContext() { parts.append(current) }
+        if !parts.isEmpty { log("plan: turn context — " + parts.joined(separator: " | ")) }
         return parts.isEmpty ? nil : parts.joined(separator: ". ")
     }
 
@@ -104,7 +105,7 @@ final class Planner {
         }
         let list = draft.items.isEmpty ? "пока пусто"
             : draft.items.map { ($0.time.map { $0.text + " " } ?? "") + $0.title }.joined(separator: "; ")
-        return "идёт план на \(PlanDay.title(draft.day, now: now(), calendar: cal)) (\(PlanDay.iso(draft.day, calendar: cal))); "
+        return "идёт план на \(PlanDay.title(draft.day, now: now(), calendar: cal, accusative: true)) (\(PlanDay.iso(draft.day, calendar: cal))); "
             + "черновик: \(list)" + (draft.already.isEmpty ? "" : "; уже в плане: " + draft.already.joined(separator: ", "))
             + ". Новое дело или поправка — chilk_plan collect со ВСЕМ списком; «всё» — finish; отвечай в два-три слова"
     }

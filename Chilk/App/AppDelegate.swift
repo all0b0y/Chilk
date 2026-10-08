@@ -637,6 +637,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Acceptance only: CHILK_DEMO_CHAT="first||second||@new||@oldest||…" types these into the chat window one by
         // one once Codex is ready; CHILK_DEMO_CHAT_SNAPSHOT=/file.png draws the window afterwards.
         if let raw = env["CHILK_DEMO_CHAT"], !raw.isEmpty {
+            // Slice 10: «@do:edit» — the card's «Изменить»; «@do:close» — close the sheet; «@do:x:N», «@do:record»,
+            // «@do:snap:<name>» (to CHILK_DEMO_SHEET_DIR) — the day sheet.
+            chat.demoStep = { [weak cards, weak daySheet, weak balance] op in
+                balance?.log("demo step \(op)")
+                switch op {
+                case "edit": cards?.openEditor()
+                case "close": daySheet?.close()
+                default: daySheet?.demo(op, dir: env["CHILK_DEMO_SHEET_DIR"])
+                }
+            }
             chat.runDemo(raw.components(separatedBy: "||"),
                          snapshot: env["CHILK_DEMO_CHAT_SNAPSHOT"].map { URL(fileURLWithPath: $0) })
         }

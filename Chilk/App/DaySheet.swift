@@ -196,7 +196,7 @@ struct DaySheetView: View {
                 } else {
                     HStack(spacing: 10) {
                         Image(systemName: "circle.dashed").foregroundStyle(.tertiary).frame(width: 20, height: 20)
-                        if let t = u.item.time { Text(t.text).monospacedDigit().foregroundStyle(.tertiary) }
+                        if let t = u.item.time { Text(verbatim: t.text + (u.item.guessed ? "?" : "")).monospacedDigit().foregroundStyle(.tertiary) }
                         Text(u.item.title).foregroundStyle(.secondary).lineLimit(1)
                             .onTapGesture(count: 2) { model.beginUnwrittenEdit(u) }
                         Spacer(minLength: 8)
@@ -518,6 +518,23 @@ final class DaySheet: NSObject, NSWindowDelegate {
     /// Acceptance only: tick the first open thing through the same path as a click.
     func demoTickFirst() {
         if let row = model.rows.first(where: { !$0.done }) { model.toggle(row) }
+    }
+
+    /// Acceptance only (slice 10): «x:N» — ✕ on the N-th thing of «Ещё не записано» (as shown, from 0), «record» —
+    /// «Записать», «snap:<name>» — the window to <dir>/<name>.png; through the same paths as a click.
+    func demo(_ op: String, dir: String?) {
+        let parts = op.split(separator: ":", maxSplits: 1).map(String.init)
+        switch parts.first {
+        case "x":
+            if let n = parts.count > 1 ? Int(parts[1]) : nil, model.unwritten.indices.contains(n) {
+                model.editUnwritten(model.unwritten[n].index, nil)
+            } else { log("demo: no unwritten thing \(op)") }
+        case "record": model.record()
+        case "snap":
+            if let dir, parts.count > 1 { snapshot(to: URL(fileURLWithPath: dir).appending(path: parts[1] + ".png")) }
+        default: log("demo: unknown sheet step \(op)")
+        }
+        log("plan sheet demo \(op): rows \(model.rows.count), unwritten \(model.unwritten.map(\.item.label)), canRecord \(model.canRecord)")
     }
 
     /// Acceptance: the sheet's own window to a PNG.

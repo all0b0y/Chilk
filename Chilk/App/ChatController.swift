@@ -410,7 +410,9 @@ final class ChatController: NSObject, NSWindowDelegate {
 
     var isOpen: Bool { window?.isVisible == true }
 
-    /// Acceptance only (CHILK_DEMO_CHAT): types each line once Codex is ready and waits for its answer; «@wait:N» pauses.
+    /// Acceptance only (CHILK_DEMO_CHAT): types each line once Codex is ready and waits for its answer; «@wait:N» pauses;
+    /// «@do:<op>» runs an app step (slice 10: the day sheet's ✕ / «Записать» / a snapshot, the card's «Изменить»).
+    var demoStep: (String) -> Void = { _ in }
     func runDemo(_ steps: [String], snapshot url: URL?) {
         demoMode = true
         Task {
@@ -420,6 +422,11 @@ final class ChatController: NSObject, NSWindowDelegate {
             for step in steps {
                 if step.hasPrefix("@wait:"), let seconds = Double(step.dropFirst(6)) {     // «@wait:40»: let time pass
                     try? await Task.sleep(for: .seconds(seconds))
+                    continue
+                }
+                if step.hasPrefix("@do:") {                            // slice 10: «@do:x:1», «@do:record», «@do:edit»…
+                    demoStep(String(step.dropFirst(4)))
+                    try? await Task.sleep(for: .seconds(1.5))
                     continue
                 }
                 model.draft = step
