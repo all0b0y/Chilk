@@ -78,7 +78,7 @@ final class Actions {
                     balance?.hideout?.request(hidden) ?? ["changed": false]
                 }, game: { [gameRelay] kind, length in
                     gameRelay.open(kind, length)
-                })
+                }, sleep: { [weak balance] r in balance?.sleepFromConversation(r) ?? ["changed": false] })
         } catch {
             executor = nil
             reportedFailure = true

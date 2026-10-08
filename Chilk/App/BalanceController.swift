@@ -350,6 +350,48 @@ final class BalanceController {
         return now >= st.warning ? Lines.trayBedtime(Self.hhmm(st.bedtime)) : nil
     }
 
+    /// `chilk_sleep` (slice 9c, decisions 19, 26): Codex switches «Сон» on with the usual bedtime, off, or moves this night;
+    /// the engine keeps the contract. The result has what Chilk confirms («в 22:00 напомню, в 23:00 — спать»).
+    func sleepFromConversation(_ r: SleepRequest) -> JSON {
+        let now = Date()
+        do {
+            switch r {
+            case .off:
+                var care = engine.state.care
+                care.sleepOn = false
+                apply(try engine.committing(Self.write) { try engine.setCare(care) })
+                syncEscalation()
+                log("sleep off (conversation)")
+                return ["changed": true, "sleep": false]
+            case .set(let m):
+                guard SleepClock.isValid(m) else { return ["changed": false, "refused": "bad_time"] }
+                var care = engine.state.care
+                care.sleepOn = true
+                care.bedtime = m
+                apply(try engine.committing(Self.write) { try engine.setCare(care) })
+            case .tonight(let m):
+                guard SleepClock.isValid(m) else { return ["changed": false, "refused": "bad_time"] }
+                _ = try engine.committing(Self.write) { try engine.shiftBedtime(tonight: m, now: now) }
+            }
+        } catch let refusal as BalanceRefusal {
+            let code = switch refusal {
+            case .sleepContract, .softeningDuringEscalation: "sleep_contract"
+            case .tooLate: "too_late"
+            case .sleepOff: "sleep_off"
+            default: "bad_time"
+            }
+            log("sleep refused \(refusal)")
+            return ["changed": false, "refused": .string(code)]
+        } catch {
+            return ["changed": false, "refused": "not_saved"]
+        }
+        lastSave = Date()
+        guard let st = engine.sleepStatus(now) else { return ["changed": true] }
+        log("sleep: bedtime \(Self.hhmm(st.bedtime))\(st.shifted ? " (tonight only)" : "")")
+        return ["changed": true, "sleep": true, "bedtime": .string(Self.hhmm(st.bedtime)), "warning": .string(Self.hhmm(st.warning)),
+                "tonightOnly": .bool(st.shifted)]
+    }
+
     /// «05:00», not «5:00» (decision 20 writes the times so).
     static func hhmm(_ d: Date) -> String {
         let c = Calendar.current.dateComponents([.hour, .minute], from: d)

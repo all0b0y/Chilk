@@ -14,6 +14,13 @@ struct PersuasionToolTests {
             try ChilkToolCatalog.parse(name: "chilk_defer", arguments: ["minutes": 15, "reason": "созвон"])
         }
         #expect(try ChilkToolCatalog.parse(name: "chilk_focus", arguments: ["minutes": 120]) == .focus(minutes: 120))
+        // Slice 9c: «Сон».
+        #expect(try ChilkToolCatalog.parse(name: "chilk_sleep", arguments: ["action": "set", "time": "23:00"]) == .sleep(.set(minutes: 1380)))
+        #expect(try ChilkToolCatalog.parse(name: "chilk_sleep", arguments: ["action": "tonight", "time": "01:00"]) == .sleep(.tonight(minutes: 60)))
+        #expect(try ChilkToolCatalog.parse(name: "chilk_sleep", arguments: ["action": "off", "time": ""]) == .sleep(.off))
+        #expect(throws: ChilkToolCatalog.ToolError.self) {
+            try ChilkToolCatalog.parse(name: "chilk_sleep", arguments: ["action": "set", "time": "23"])
+        }
         let bad: [JSON] = [["minutes": 0], ["minutes": 721], ["minutes": .number(1.5)], [:]]
         for args in bad {
             #expect(throws: ChilkToolCatalog.ToolError.self) { try ChilkToolCatalog.parse(name: "chilk_focus", arguments: args) }

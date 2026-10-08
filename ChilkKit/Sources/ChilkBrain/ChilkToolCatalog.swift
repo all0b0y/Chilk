@@ -79,6 +79,8 @@ public enum ChilkAction: Equatable, Sendable {
     /// Slice 4b: focus mode for `minutes` from now (the engine cuts it to 3 h / today's rest), or end it early.
     case focus(minutes: Int)
     case endFocus
+    /// Slice 9c (decisions 19, 26): «Сон» — on with the usual bedtime, off, or this night only.
+    case sleep(SleepRequest)
     /// Slice 6c: Chilk shows an emotion with his body (`strong` matters only for laugh).
     case emote(Emotion, strong: Bool)
     /// Slice 6d: hide behind the screen edge (`true`) or come back out for good (`false`), when the conversation closes.
@@ -179,6 +181,8 @@ public enum ChilkToolCatalog {
                  ["minutes": ["type": "integer", "enum": [15, 30, 60]]]),
             tool("chilk_focus", "The «Не беспокоить» mode (formerly «фокус»; call it «Не беспокоить» to the user), only on the user's request («не беспокой меня час», «не беспокой до вечера», «важная работа до 18:00», «фокус на 2 часа», «не трогай меня час»): until it ends Chilk only shows and asks (stages 0–1), never insists, dims or pauses; afterwards everything that piled up comes back at once, more insistently. minutes from now (for «до 18:00» compute from the time in [контекст]). At most 3 h at a time and 4 h a day: shortened=true means less was granted — say until what time. A new focus replaces the running one. With «Сон» on it ends at bedtime at the latest: untilBedtime=true — say it lasts until bedtime and then it is time to sleep. Refused: escalation_in_progress (not while Chilk dims or pauses the screen), focus_spent_today, night_after_bedtime (after bedtime it is not switched on: kindly say it is time to sleep).",
                  ["minutes": ["type": "integer", "minimum": 1, "maximum": 720]]),
+            tool("chilk_sleep", "«Сон»: Chilk sends the user to bed at a set time — an hour before he warns, at bedtime «Пора спать», and until 05:00 only that. Only on the user's own words. action set — switch it on with the usual bedtime for every day («мне нужно спать в 23», «ложусь в полночь»), time HH:MM within 20:00–03:00; action tonight — this night only («сегодня лягу в час»), at most 2 hours later than the usual time; action off — switch it off, time \"\". After set, confirm in one line when he warns and when it is bedtime, e.g. «Договорились: в 22:00 напомню, в 23:00 — спать» (warning and bedtime are in the result). Refused: sleep_contract (from the warning until 05:00 neither a later time nor switching off — earlier always works; say kindly it is time to sleep), too_late (more than 2 hours later tonight), sleep_off (tonight needs «Сон» on — offer to switch it on), bad_time (outside 20:00–03:00).",
+                 ["action": ["type": "string", "enum": ["set", "off", "tonight"]], "time": ["type": "string", "maxLength": 5]]),
             tool("chilk_end_focus", "End the «Не беспокоить» mode (formerly «фокус») early, only on the user's request («хватит не беспокоить», «можно снова беспокоить», «закончи фокус»). ended=false: it was not on.", [:]),
             tool("chilk_emote", "Optional, your own choice: Chilk shows ONE emotion with his body at the screen edge right after your words appear in his bubble (the words explain it), so do not describe the emotion itself in words. Only when it truly fits, not in every answer; at most one call per answer (a refused call still counts — then just answer in words). cheer: joy for the user's success or great news. laugh: something genuinely funny; strong=true only when it is hilarious (he falls over laughing). offended: playful offence at a tease. dizzy: too much, too confusing. sad: sad news. surprised: something truly unexpected the user tells. shy: praise or thanks to Chilk, something sweet about him. clown: EXTREMELY rare — utmost disappointment in someone or something else (a company, a person, a service), never in the user. strong matters only for laugh. Refused: not_now (the clown was shown recently; nothing replaces it), chilk_busy (Chilk cannot show it right now), one_per_answer.",
                  ["emotion": ["type": "string", "enum": .array(Emotion.allCases.map { .string($0.rawValue) })],
@@ -190,6 +194,14 @@ public enum ChilkToolCatalog {
                   "length": ["type": "integer", "minimum": 0, "maximum": 6]]),
         ]
     }()
+
+    /// «23:00» → minutes after midnight (only the form; the range is the engine's).
+    static func clockMinutes(_ text: String) -> Int? {
+        let p = text.split(separator: ":")
+        guard p.count == 2, p[0].count == 2, p[1].count == 2, let h = Int(p[0]), let m = Int(p[1]), (0..<24).contains(h),
+              (0..<60).contains(m) else { return nil }
+        return h * 60 + m
+    }
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: JSON]) -> CodexTool {
         CodexTool(name: name, description: description, inputSchema: [
@@ -499,6 +511,16 @@ public enum ChilkToolCatalog {
         case "chilk_end_focus":
             guard fields.isEmpty else { throw ToolError.invalidArguments }
             return .endFocus
+        case "chilk_sleep":
+            guard Set(fields.keys) == ["action", "time"], let action = fields["action"]?.string, let time = fields["time"]?.string
+            else { throw ToolError.invalidArguments }
+            if action == "off" { return .sleep(.off) }
+            guard let m = Self.clockMinutes(time) else { throw ToolError.invalidArguments }
+            switch action {
+            case "set": return .sleep(.set(minutes: m))
+            case "tonight": return .sleep(.tonight(minutes: m))
+            default: throw ToolError.invalidArguments
+            }
         case "chilk_emote":
             guard Set(fields.keys) == ["emotion", "strong"], let raw = fields["emotion"]?.string,
                   let emotion = Emotion(rawValue: raw), let strong = fields["strong"]?.bool else { throw ToolError.invalidArguments }
@@ -528,4 +550,11 @@ public enum ChilkToolCatalog {
         default: throw ToolError.unknownTool
         }
     }
+}
+
+/// Slice 9c: what `chilk_sleep` asks for (bedtime in minutes after midnight).
+public enum SleepRequest: Equatable, Sendable {
+    case set(minutes: Int)
+    case off
+    case tonight(minutes: Int)
 }

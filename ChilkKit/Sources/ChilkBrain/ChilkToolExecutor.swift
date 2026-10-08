@@ -14,6 +14,7 @@ public final class ChilkToolExecutor {
     private let focus: (Int) -> JSON
     private let endFocus: () -> JSON
     private let hide: (Bool) -> JSON
+    private let sleep: (SleepRequest) -> JSON
     private let game: (GameKind?, Int?) -> CodexToolResult
     public var entries: [LocalTimers.Entry] { store.timers.entries }
     public var ready: [LocalTimers.Entry] { store.timers.ready }
@@ -27,11 +28,13 @@ public final class ChilkToolExecutor {
                 focus: @escaping (Int) -> JSON = { _ in ["focus": false] },
                 endFocus: @escaping () -> JSON = { ["ended": false] },
                 hide: @escaping (Bool) -> JSON = { _ in ["changed": false] },
-                game: @escaping (GameKind?, Int?) -> CodexToolResult = { _, _ in .failure("Games unavailable") }) throws {
+                game: @escaping (GameKind?, Int?) -> CodexToolResult = { _, _ in .failure("Games unavailable") },
+                sleep: @escaping (SleepRequest) -> JSON = { _ in ["changed": false] }) throws {
         store = try LocalTimerStore(file: file)
         self.now = now; self.status = status; self.water = water; self.mode = mode; self.breaks = breaks
         self.persuade = persuade; self.focus = focus; self.endFocus = endFocus; self.hide = hide
         self.game = game
+        self.sleep = sleep
     }
 
     public func execute(name: String, arguments: JSON) -> CodexToolResult {
@@ -54,6 +57,7 @@ public final class ChilkToolExecutor {
             case .deferRequest(let m): return .ok(persuade(m))
             case .focus(let m): return .ok(focus(m))
             case .endFocus: return .ok(endFocus())
+            case .sleep(let r): return .ok(sleep(r))
             case .hide(let hidden): return .ok(hide(hidden))
             case .game(let kind, let length): return game(kind, length)
             case .timers: return .ok(["timers": .array(entries.map(Self.describe))])
