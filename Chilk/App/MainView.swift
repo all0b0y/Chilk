@@ -233,6 +233,24 @@ private struct SettingsSection: View {
     private static let careOrder: [Need] = [.water, .stretch, .eyes, .walk]
 
     var body: some View {
+        ScrollViewReader { proxy in
+            form
+                .onChange(of: model.brainFocus) { scrollToBrain(proxy) }
+                .onAppear { if model.brainFocus > 0 { scrollToBrain(proxy) } }
+        }
+    }
+
+    /// Slice 9f: the popover's «Выбрать другую» lands on «Мозг».
+    private func scrollToBrain(_ proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(150))
+            withAnimation { proxy.scrollTo(Self.brainID, anchor: .top) }
+        }
+    }
+
+    private static let brainID = "brain"
+
+    private var form: some View {
         Form {
             if model.locked || model.refusal != nil {
                 Section {
@@ -288,6 +306,7 @@ private struct SettingsSection: View {
                     }
                 }
             }
+            brainSection.id(Self.brainID)
             Section(Lines.callMe) {
                 HStack {
                     TextField(Lines.namePlaceholder, text: $name).labelsHidden().onSubmit { model.saveName(name) }
@@ -331,6 +350,33 @@ private struct SettingsSection: View {
         .formStyle(.grouped)
         .onAppear { name = model.name }
         .onChange(of: model.name) { name = model.name }
+    }
+
+    // MARK: Brain (slice 9f, decisions 36–38)
+
+    private var brainSection: some View {
+        Section {
+            if let rows = model.brainModels {
+                Picker(Lines.brainModel, selection: Binding(get: { model.brain.modelID }, set: { model.setBrainModel($0) })) {
+                    ForEach(rows) { r in Text(verbatim: r.name).tag(r.id) }
+                    if !rows.contains(where: { $0.id == model.brain.modelID }) {
+                        Text(Lines.modelMissingRow(model.brain.displayName)).tag(model.brain.modelID)
+                    }
+                }
+            } else {
+                LabeledContent(Lines.brainModel) { Text(verbatim: model.brain.displayName).foregroundStyle(.secondary) }
+                Text(Lines.brainListLater).font(.caption).foregroundStyle(.secondary)
+            }
+            Picker(Lines.brainDepth, selection: Binding(get: { model.brainDepth }, set: { model.setBrainDepth($0) })) {
+                // Only the chosen model's depths; a stored one it lacks shows (and goes) as the first offered.
+                ForEach(model.brainDepths, id: \.self) { d in Text(Lines.depthName(d)).tag(d) }
+            }
+            .pickerStyle(.segmented)
+        } header: {
+            Text(Lines.brain)
+        } footer: {
+            Text(Lines.brainNextConversation).font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     // MARK: Mode

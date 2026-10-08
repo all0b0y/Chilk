@@ -13,6 +13,9 @@ final class Brain {
         case connecting
         case ready
         case failed(String)
+        /// Slice 9f, decision 37: the chosen model is not in `model/list` (its name). Nothing answers until the user
+        /// picks another — never a silent swap.
+        case modelUnavailable(String)
     }
 
     private(set) var state: State = .connecting { didSet { if state != oldValue { onChange?() } } }
@@ -30,6 +33,23 @@ final class Brain {
     private var catalogGeneration = 0
     /// The turn in flight: an interrupted one must finish before the next starts on the same thread.
     private var inFlight: Task<Reply, Error>?
+
+    // Slice 9f (decisions 36–38): the model and depth from Settings → «Мозг».
+    /// The user's choice, read for every NEW thread (the model) and every thread that becomes the live one (the depth).
+    private let choice: () -> BrainChoice
+    /// The model of the warm spare and the model + depth of the live thread: a thread keeps what it started with.
+    private var spareModel: String?
+    private var activeChoice: BrainChoice?
+    /// The last choice applied (a save that changed nothing else does not drop threads).
+    private var applied: BrainChoice
+    /// When the live thread follows a new choice: a new model drops it, a new depth only updates it; during a
+    /// conversation, at its end («со следующего разговора»). Pure, in ChilkCore under tests.
+    private var threads = BrainThreadPolicy()
+    /// `model/list` as last read by this client (`nil` = not read, Codex did not answer, or an empty list = unknown).
+    private(set) var models: [CodexClient.Model]?
+    /// A conversation (voice) or a chat turn is going on — the thread is not swapped under it.
+    var busy: () -> Bool = { false }
+    var log: (String) -> Void = { _ in }
 
     /// An answer and the thread that gave it (slice 5b: the chat a turn belongs to follows the thread).
     struct Reply: Sendable {
@@ -49,10 +69,13 @@ final class Brain {
     var onTurnStart: ((String) -> Void)?
 
     init(tools: @escaping () -> [CodexTool] = { [] }, threadConfig: @escaping () -> JSON? = { nil },
-         memory: @escaping () -> String? = { nil }, onTool: CodexToolHandler? = nil) {
+         memory: @escaping () -> String? = { nil }, choice: @escaping () -> BrainChoice = { BrainChoice() },
+         onTool: CodexToolHandler? = nil) {
         self.tools = tools
         self.threadConfig = threadConfig
         self.memory = memory
+        self.choice = choice
+        self.applied = choice()
         self.onTool = onTool
         Task { await connect() }
     }
@@ -64,6 +87,7 @@ final class Brain {
         case .signedOut: Lines.brainSignedOut
         case .missingCodex: Lines.brainMissing
         case .failed: Lines.brainFailed
+        case .modelUnavailable(let name): Lines.modelUnavailable(name)
         }
     }
 
@@ -74,14 +98,37 @@ final class Brain {
         case .signedOut: String(localized: "Codex: не выполнен вход")
         case .missingCodex: String(localized: "Codex: не найден на этом Mac")
         case .failed(let why): String(localized: "Codex: ошибка — \(why)")
+        case .modelUnavailable(let name): String(localized: "Codex: модель «\(name)» недоступна")
+        }
+    }
+
+    /// The models to offer in Settings → «Мозг» (`nil` = «Список появится…»). `.failed` keeps the list this client
+    /// read (`connect` clears it), so a model that does not start can be left for another (9f review).
+    var offeredModels: [CodexClient.Model]? {
+        switch state {
+        case .ready, .connecting, .modelUnavailable, .failed: models
+        case .signedOut, .missingCodex: nil
+        }
+    }
+
+    /// A model check may change the state only from these: a sign-out or a failure set meanwhile stays as it is.
+    private var modelCheckApplies: Bool {
+        switch state {
+        case .ready, .connecting, .modelUnavailable: true
+        case .signedOut, .missingCodex, .failed: false
         }
     }
 
     func connect() async {
         await client?.stop()
+        client = nil                                                     // a check still awaiting the old one is stale
         active = nil
+        activeChoice = nil
         spare = nil
+        spareModel = nil
         inFlight = nil
+        models = nil
+        threads.reset()
         state = .connecting
         guard let exe = CodexSetup.locateCodex() else { state = .missingCodex; return }
         let setup = CodexSetup(dataDir: CodexSetup.defaultDataDir, executable: exe)
@@ -101,7 +148,7 @@ final class Brain {
             try await client.start()
             guard let acc = try await client.account() else { state = .signedOut; return }
             account = acc.email
-            warmSpare()
+            if await checkModel() { warmSpare() }
         } catch {
             state = .failed(String(describing: error))
         }
@@ -110,17 +157,135 @@ final class Brain {
     /// A fresh thread with one tiny turn already spent, so a clean start answers fast.
     private func warmSpare() {
         guard let client, let setup else { return }
+        if case .modelUnavailable = state { return }                     // decision 37: nothing warms on a missing model
         let tools = self.tools(), config = threadConfig()
         let instructions = memory().map { Persona.text + "\n\n" + $0 } ?? Persona.text
+        let model = choice().modelID
+        log("brain thread start model=\(model) (warm spare)")
         let task = Task<String, Error> {
-            let id = try await client.startThread(model: setup.model, instructions: instructions, cwd: setup.workDir,
+            let id = try await client.startThread(model: model, instructions: instructions, cwd: setup.workDir,
                                                   tools: tools, config: config, onTool: self.onTool)
-            _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».", allowTools: false)
+            _ = try await client.ask(threadId: id, text: "Прогрев. Ответь одним словом: «готов».",
+                                     effort: BrainChoice.backgroundDepth.rawValue, allowTools: false)
             return id
         }
         spare = task
+        spareModel = model
         Task {
-            do { _ = try await task.value; if state != .ready { state = .ready } } catch { state = .failed(String(describing: error)) }
+            do {
+                let id = try await task.value
+                // An orphan (dropped by a choice / catalog change or a reconnect) says nothing about this connection;
+                // a spare taken by a turn meanwhile is the live thread now.
+                guard spare == task || active == id else { return }
+                if case .modelUnavailable = state { return }             // an older spare finished after the check
+                if state != .ready { state = .ready }
+            } catch {
+                guard spare == task else { return }
+                // A thread on a model that left the list fails: say that, not «Codex не отвечает» (decision 37).
+                if await checkModel(), spare == task { state = .failed(String(describing: error)) }
+            }
+        }
+    }
+
+    /// Reads `model/list` and checks the chosen model against it (decision 37). Missing: `.modelUnavailable`, the spare
+    /// is dropped and nothing answers until another model is chosen. Back (or another one chosen): warms again.
+    /// `true` = can go on (available, or the list is unknown — then the thread start itself is the check). An answer
+    /// that comes after a reconnect, or into a state a check must not change (signed out, failed), changes nothing.
+    @discardableResult
+    private func checkModel() async -> Bool {
+        guard let client else { return true }
+        var listed: [CodexClient.Model]?
+        do { listed = try await client.models() } catch { log("brain: model list unavailable — \(error)") }
+        guard self.client === client else {
+            log("brain: model list ignored — Codex reconnected meanwhile")
+            return false
+        }
+        if listed?.isEmpty == true {
+            log("brain: model list is empty — unknown, not «unavailable»")
+            listed = nil
+        }
+        models = listed
+        guard modelCheckApplies else {
+            log("brain: model list read, state \(state) kept")
+            return false
+        }
+        let c = choice()
+        if c.isAvailable(in: listed?.map(\.id)) == false {
+            if state != .modelUnavailable(c.displayName) {
+                log("brain: model \(c.modelID) is not in model/list (\(listed?.map(\.id).joined(separator: ",") ?? "")) — "
+                    + "problem «\(Lines.modelUnavailable(c.displayName))»")
+            }
+            catalogGeneration += 1
+            spare = nil
+            spareModel = nil
+            state = .modelUnavailable(c.displayName)
+            return false
+        }
+        if case .modelUnavailable = state {
+            state = .connecting
+            warmSpare()
+        }
+        return true
+    }
+
+    /// Settings → «Мозг» opened (or is open): the list again, so it appears as soon as Codex is back.
+    func reloadModels() {
+        guard client != nil else { return }
+        switch state {
+        case .ready, .connecting, .modelUnavailable: Task { await checkModel() }
+        case .signedOut, .missingCodex, .failed: break
+        }
+    }
+
+    /// Settings → «Мозг» changed (decision 36: from the next conversation). A new model needs a new warm spare; the
+    /// live thread is dropped now, or when the conversation going on ends — it is never swapped under it. A new depth
+    /// only reaches the live thread (it is sent with every turn), so a depth change keeps the conversation's context.
+    func choiceChanged() {
+        let c = choice(), old = applied
+        guard c.modelID != old.modelID || c.depth != old.depth else { return }
+        applied = c
+        log("brain choice model=\(c.modelID) effort=\(c.depth.rawValue) — from the next conversation")
+        switch state {
+        case .ready, .connecting, .modelUnavailable: break
+        case .failed:
+            // A model that does not start must be possible to leave: another one reconnects (9f review).
+            guard c.modelID != old.modelID else { return }              // `connect` reads the depth
+            log("brain: Codex failed — reconnecting with model=\(c.modelID)")
+            Task { await connect() }
+            return
+        case .signedOut, .missingCodex: return                           // `connect` reads it
+        }
+        guard client != nil else { return }
+        let step = threads.choiceChanged(from: old, to: c, busy: busy())
+        follow(step.live)
+        guard step.rewarmSpare else { return }
+        catalogGeneration += 1
+        spare = nil
+        spareModel = nil
+        Task {
+            guard await checkModel() else { return }
+            if spare == nil { warmSpare() }
+        }
+    }
+
+    /// A conversation (or a chat turn) ended: a choice made during it now reaches the live thread.
+    func conversationEnded() {
+        let live = threads.conversationEnded(busy: busy())
+        guard live != .keep else { return }
+        follow(live)
+        log("brain: the conversation ended — next turns: model=\(applied.modelID) effort=\(applied.depth.rawValue)")
+    }
+
+    private func follow(_ live: BrainThreadPolicy.Live) {
+        switch live {
+        case .keep: break
+        case .setDepth(let depth):
+            guard activeChoice != nil else { return }
+            activeChoice?.depth = depth
+            log("brain: the live thread keeps its context, next turns at effort=\(depth.rawValue)")
+        case .drop:
+            active = nil
+            activeChoice = nil
         }
     }
 
@@ -130,6 +295,7 @@ final class Brain {
         guard state == .ready || state == .connecting, client != nil else { return }
         catalogGeneration += 1
         active = nil
+        activeChoice = nil
         spare = nil
         warmSpare()
     }
@@ -163,16 +329,41 @@ final class Brain {
         _ = try? await inFlight?.value
         let task = Task<Reply, Error> {
             guard let client = self.client else { throw CodexClient.ClientError.notStarted }
-            if fresh { self.active = nil }
-            let (thread, isNew) = try await self.threadForNow()
-            self.onTurnStart?(thread)
-            let message = isNew ? seed.map { $0 + "\n\n" + text } ?? text : text
-            let reply = try await client.ask(threadId: thread, text: message, outputSchema: JSON(any: Dialogue.schema), onDelta: onDelta)
-            self.lastExchange = Date()
-            return Reply(text: reply, thread: thread)
+            if case .modelUnavailable = self.state { throw CodexClient.ClientError.notStarted }   // decision 37
+            do {
+                if fresh { self.active = nil }
+                let (thread, isNew) = try await self.threadForNow()
+                self.onTurnStart?(thread)
+                let message = isNew ? seed.map { $0 + "\n\n" + text } ?? text : text
+                let turn = self.activeChoice ?? self.choice()
+                let depth = self.turnDepth(turn)
+                self.log("brain turn model=\(turn.modelID) effort=\(depth.rawValue)\(isNew ? " (new thread)" : "")")
+                let reply = try await client.ask(threadId: thread, text: message, effort: depth.rawValue,
+                                                 outputSchema: JSON(any: Dialogue.schema), onDelta: onDelta)
+                self.lastExchange = Date()
+                return Reply(text: reply, thread: thread)
+            } catch {
+                // Decision 37 mid-work: the model may have left the list while Chilk ran. One check, so the user
+                // hears «Модель «X» недоступна…» (`problem`) instead of the generic failure.
+                if self.client === client, self.state == .ready || self.state == .connecting {
+                    self.log("brain: turn failed (\(error)) — checking the model")
+                    await self.checkModel()
+                }
+                throw error
+            }
         }
         inFlight = task
         return try await task.value
+    }
+
+    /// The depth a turn goes at: the chosen one, or — when the model does not support it (its list changed) — the
+    /// first it offers among Быстро / Средне / Вдумчиво (`low`), logged (9f review).
+    private func turnDepth(_ c: BrainChoice) -> AnswerDepth {
+        let depth = c.effectiveDepth(supported: models?.first { $0.id == c.modelID }?.efforts)
+        if depth != c.depth {
+            log("brain: model \(c.modelID) does not offer effort=\(c.depth.rawValue) — the turn goes at \(depth.rawValue)")
+        }
+        return depth
     }
 
     /// Same thread within 15 minutes of the last answer; otherwise the warm spare (and a new spare behind it).
@@ -181,10 +372,16 @@ final class Brain {
         if spare == nil { warmSpare() }
         guard let spare else { throw CodexClient.ClientError.notStarted }
         let generation = catalogGeneration
+        let model = spareModel ?? choice().modelID
         let fresh = try await spare.value
         // A switch flipped while the old spare warmed: that thread has the old catalog (maybe web search) — not ours.
         guard generation == catalogGeneration else { return try await threadForNow() }
         active = fresh
+        // The thread's model is the one it started with; the depth is the user's choice as the conversation starts.
+        var live = choice()
+        live.model = model
+        activeChoice = live
+        log("brain thread live model=\(model) effort=\(live.depth.rawValue)")
         warmSpare()
         return (fresh, true)
     }
@@ -195,10 +392,14 @@ final class Brain {
 
     /// One structured turn on a fresh thread of its own, without tools (the daily phrase batch). Never the
     /// conversation thread, so it cannot delay or mix with what the user is saying.
+    /// Slice 9f, decision 38: the chosen model, always at «Быстро».
     func oneOff(instructions: String, text: String, schema: JSON) async throws -> String {
         guard state == .ready, let client, let setup else { throw CodexClient.ClientError.notStarted }
-        let thread = try await client.startThread(model: setup.model, instructions: instructions, cwd: setup.workDir)
-        return try await client.ask(threadId: thread, text: text, outputSchema: schema, allowTools: false)
+        let model = choice().modelID
+        log("brain one-off model=\(model) effort=\(BrainChoice.backgroundDepth.rawValue)")
+        let thread = try await client.startThread(model: model, instructions: instructions, cwd: setup.workDir)
+        return try await client.ask(threadId: thread, text: text, effort: BrainChoice.backgroundDepth.rawValue,
+                                    outputSchema: schema, allowTools: false)
     }
 
     func login() {
@@ -212,7 +413,7 @@ final class Brain {
         guard ok else { state = .signedOut; return }
         Task {
             account = try? await client?.account()?.email
-            warmSpare()
+            if await checkModel() { warmSpare() }
         }
     }
 

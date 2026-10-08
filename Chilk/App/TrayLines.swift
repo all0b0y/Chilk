@@ -44,6 +44,13 @@ extension Lines {
     static let focusSpent = String(localized: "«Не беспокоить» на сегодня кончилось — 4 часа уже были")
     static let focusHelp = String(localized: "Пока включено «Не беспокоить», Чилк только напоминает, не настаивает. Потом всё набравшееся вернётся настойчивее")
 
+    // Slice 9f, decision 37: the chosen model left Codex's list — said by voice / in the chat, and a popover row.
+    static func modelUnavailable(_ name: String) -> String {
+        String(localized: "Модель «\(name)» недоступна — выбери другую в Настройках → Мозг")
+    }
+    static let modelUnavailableRow = String(localized: "Модель недоступна")
+    static let modelPickAnother = String(localized: "Выбрать другую")
+
     static func abilityName(_ a: ChilkAbility) -> String {
         switch a {
         case .webSearch: String(localized: "Поиск в интернете")

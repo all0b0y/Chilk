@@ -26,6 +26,12 @@ final class MainModel {
         let id: String
         let name: String
     }
+    /// Slice 9f: one model of Codex's list in «Мозг».
+    struct ModelRow: Identifiable, Equatable {
+        let id: String
+        let name: String
+        let efforts: [String]
+    }
 
     var section: MainSection? = .today
 
@@ -61,6 +67,22 @@ final class MainModel {
     var launchNote: String?
     var launchNeedsApproval = false
     var permissions: [Permissions.Kind: Permissions.State] = [:]
+    /// Slice 9f, «Мозг»: Codex's list (`nil` while Codex is away — the saved choice and a caption) and the choice.
+    var brainModels: [ModelRow]?
+    var brain = BrainChoice()
+    /// Bumped to scroll Settings to «Мозг» (the popover's «Выбрать другую»).
+    var brainFocus = 0
+
+    /// The depths to offer: those of the chosen model among Быстро / Средне / Вдумчиво (all three while it is unknown).
+    var brainDepths: [AnswerDepth] {
+        let offered = AnswerDepth.offered(chosenRow?.efforts ?? [])
+        return offered.isEmpty ? AnswerDepth.allCases : offered
+    }
+
+    /// The depth the segments show: a stored one the model lacks shows as the depth turns really go at (9f review).
+    var brainDepth: AnswerDepth { brain.effectiveDepth(supported: chosenRow?.efforts) }
+
+    private var chosenRow: ModelRow? { brainModels?.first { $0.id == brain.modelID } }
 
     // Actions, wired by the controller (the same paths the demo hooks use).
     var setMode: (BalanceMode) -> Void = { _ in }
@@ -75,6 +97,8 @@ final class MainModel {
     var setLaunch: (Bool) -> Void = { _ in }
     var openPermission: (Permissions.Kind) -> Void = { _ in }
     var openLoginItems: () -> Void = {}
+    var setBrainModel: (String) -> Void = { _ in }
+    var setBrainDepth: (AnswerDepth) -> Void = { _ in }
 }
 
 /// The main window: a normal big window with a sidebar (decision 16). While it is open the app is a regular one.
@@ -103,6 +127,10 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// While the user records a new hotkey the current one is off (otherwise pressing it would call Chilk).
     var pauseHotkey: (Bool) -> Void = { _ in }
     var log: (String) -> Void = { _ in }
+    /// Slice 9f: Codex's model list while it is reachable (`nil` = away), reading it again, and «the choice changed».
+    var brainModels: () -> [CodexClient.Model]? = { nil }
+    var reloadModels: () -> Void = {}
+    var brainChanged: () -> Void = {}
 
     init(balance: BalanceController, settings: SettingsStore, profile: ProfileStore, chats: ChatStore, memory: MemoryStore,
          tools: ToolsBridge, edge: EdgeController) {
@@ -123,6 +151,13 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     /// Slice 9, decision 2: ⌘Q / the Dock's «Завершить» close the window (Chilk stays at the edge).
     func close() { window?.performClose(nil) }
+
+    /// Slice 9f: Settings scrolled to «Мозг» (the popover's «Модель недоступна — выбрать другую»).
+    func showBrain() {
+        show(.settings)
+        model.brainFocus += 1
+        log("main window: settings → brain")
+    }
 
     func show(_ section: MainSection) {
         if window == nil {
@@ -148,6 +183,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.section = section
         refresh()
         refreshSettings()
+        if section == .settings { reloadModels() }
         if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
         if !counted {
@@ -209,6 +245,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if model.launchAtLogin != (launch != .off) { model.launchAtLogin = launch != .off }
         if model.launchNeedsApproval != (launch == .needsApproval) { model.launchNeedsApproval = launch == .needsApproval }
         refreshApps()
+        refreshBrain()
         tools.refresh()
         // Monitors come and go while Settings are open.
         let screens = NSScreen.screens.map { MainModel.ScreenRow(id: EdgeController.uuid(of: $0) ?? "", name: $0.localizedName) }
@@ -226,6 +263,18 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         model.name = profile.profile.name ?? ""
         if model.chatDays != chats.log.autoDeleteDays { model.chatDays = chats.log.autoDeleteDays }
         refreshApps()
+        refreshBrain()
+    }
+
+    /// Slice 9f: the list from Codex (hidden models only when chosen) and the saved choice.
+    private func refreshBrain() {
+        let choice = settings.settings.brain
+        if model.brain != choice { model.brain = choice }
+        let rows = brainModels().map { list in
+            list.filter { !$0.hidden || $0.id == choice.modelID }
+                .map { MainModel.ModelRow(id: $0.id, name: $0.displayName, efforts: $0.efforts) }
+        }
+        if rows != model.brainModels { model.brainModels = rows }
     }
 
     private func refreshApps() {
@@ -335,6 +384,23 @@ final class MainWindowController: NSObject, NSWindowDelegate {
             self.refresh()
             self.log("settings launch at login \(on)\(self.model.launchNote.map { ": \($0)" } ?? "")")
         }
+        model.setBrainModel = { [weak self] id in
+            guard let self else { return }
+            let listed = self.brainModels()?.first { $0.id == id }
+            self.settings.update {
+                $0.brain = $0.brain.choosing(model: id, name: listed?.displayName ?? id, supported: listed?.efforts ?? [])
+            }
+            self.refreshBrain()
+            self.log("settings brain model \(id) effort \(self.settings.settings.brain.depth.rawValue)")
+            self.brainChanged()
+        }
+        model.setBrainDepth = { [weak self] depth in
+            guard let self else { return }
+            self.settings.update { $0.brain.depth = depth }
+            self.refreshBrain()
+            self.log("settings brain effort \(depth.rawValue) (model \(self.settings.settings.brain.modelID))")
+            self.brainChanged()
+        }
         model.openPermission = { Permissions.open($0) }
         model.openLoginItems = { LoginItem.openSystemSettings() }
         memoryModel.remember = { [weak self] text in
@@ -412,7 +478,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
     /// Runs Settings steps through the same model actions a click uses, logs what each did, then (optionally) draws
     /// every section. Steps: `off:water`, `on:water`, `low:water:30`, `high:walk:200`, `budget:weekday:9`,
     /// `mode:strict`, `due:stretch`, `stage:3` (wait for it), `app:<bundle>:<work|leisure|call|untouchable|auto>`,
-    /// `hotkey` (⌃⌥K), `hotkey:std`, `chats:30|never`, `name:<text>`, `reset`, `shot:<section>:<label>`.
+    /// `hotkey` (⌃⌥K), `hotkey:std`, `chats:30|never`, `name:<text>`, `reset`, `shot:<section>:<label>`; slice 9f (an
+    /// isolated run only): `model:<id>`, `depth:<low|medium|high>`, `brain` (scroll Settings to «Мозг»), `wait:<s>`.
     func runDemo(_ steps: [String], snapshot dir: URL?) {
         Task {
             for step in steps where !step.isEmpty {
@@ -442,6 +509,19 @@ final class MainWindowController: NSObject, NSWindowDelegate {
                 case "chats": model.setChatDays(parts.count > 1 ? Int(parts[1]) : nil)
                 case "name": model.saveName(parts.dropFirst().joined(separator: ":"))
                 case "reset": balance.resetNeeds()
+                case "model" where AppState.isolated != nil:
+                    for _ in 0..<40 where model.brainModels == nil {            // the list comes once Codex is up
+                        try? await Task.sleep(for: .milliseconds(500))
+                        refreshBrain()
+                    }
+                    if parts.count > 1 { model.setBrainModel(parts.dropFirst().joined(separator: ":")) }
+                case "depth" where AppState.isolated != nil:
+                    if parts.count > 1, let d = AnswerDepth(rawValue: parts[1]) { model.setBrainDepth(d) }
+                case "wait" where AppState.isolated != nil:                 // let a chat demo turn pass first
+                    try? await Task.sleep(for: .seconds(parts.count > 1 ? Double(parts[1]) ?? 1 : 1))
+                case "brain" where AppState.isolated != nil:
+                    model.section = .settings
+                    model.brainFocus += 1
                 case "shot":                                                   // draw a section right now
                     model.section = parts.count > 1 ? MainSection(rawValue: parts[1]) ?? .settings : .settings
                     try? await Task.sleep(for: .milliseconds(1500))
@@ -454,7 +534,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
                 log("main demo \(step): refused=\(model.refusal != nil) locked=\(model.locked) mode=\(model.mode.rawValue) "
                     + "off=\(care.off.map(\.rawValue).sorted()) water=\(care.range(.water).low)-\(care.range(.water).high) "
                     + "weekday=\(care.weekdayHours)h hotkey=\(model.hotkeyLabel) chats=\(model.chatDays.map(String.init) ?? "never") "
-                    + "stage=\(balance.engine.state.episode.map { "\($0.need.rawValue)@\($0.stage)" } ?? "-")")
+                    + "stage=\(balance.engine.state.episode.map { "\($0.need.rawValue)@\($0.stage)" } ?? "-") "
+                    + "brain=\(model.brain.modelID)/\(model.brain.depth.rawValue) models=\(model.brainModels?.count ?? -1)")
                 try? await Task.sleep(for: .milliseconds(800))
             }
             if let dir { await snapshots(to: dir) }

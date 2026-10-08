@@ -1,3 +1,4 @@
+import ChilkCore
 import Foundation
 
 /// Чилк's own Codex profile (В4, spike 002): a separate CODEX_HOME inside the app's data, a fake HOME so the
@@ -8,8 +9,10 @@ public struct CodexSetup: Sendable {
     public var isolatedHome: URL
     public var workDir: URL
     public var realHome: String
-    public var model = "gpt-6-luna"
-    public var effort = "low"
+    /// config.toml's defaults only: a conversation's model and depth come from Settings → «Мозг» per thread / turn
+    /// (slice 9f), so a demo run with another choice never rewrites the shared profile.
+    public var model = BrainChoice.defaultModel
+    public var effort = BrainChoice.backgroundDepth.rawValue
 
     /// - Parameter dataDir: `~/Library/Application Support/Chilk`.
     public init(dataDir: URL, executable: URL, realHome: String = NSHomeDirectory()) {
@@ -121,6 +124,63 @@ extension CodexClient {
         return url
     }
 
+    /// One entry of `model/list` (slice 9f): what Settings → «Мозг» offers and what a chosen model is checked against.
+    public struct Model: Sendable, Equatable {
+        public var id: String
+        public var displayName: String
+        public var isDefault: Bool
+        /// `supportedReasoningEfforts[].reasoningEffort`, in Codex's order.
+        public var efforts: [String]
+        public var defaultEffort: String?
+        /// Codex lists it but would not show it in a picker.
+        public var hidden: Bool
+
+        public init(id: String, displayName: String, isDefault: Bool = false, efforts: [String] = [],
+                    defaultEffort: String? = nil, hidden: Bool = false) {
+            self.id = id
+            self.displayName = displayName
+            self.isDefault = isDefault
+            self.efforts = efforts
+            self.defaultEffort = defaultEffort
+            self.hidden = hidden
+        }
+
+        /// `nil` when the entry has no id.
+        init?(_ json: JSON) {
+            guard let id = json["id"]?.string ?? json["model"]?.string, !id.isEmpty else { return nil }
+            self.id = id
+            displayName = json["displayName"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? id
+            isDefault = json["isDefault"]?.bool ?? false
+            efforts = (json["supportedReasoningEfforts"]?.elements ?? []).compactMap { $0["reasoningEffort"]?.string }
+            defaultEffort = json["defaultReasoningEffort"]?.string
+            hidden = json["hidden"]?.bool ?? false
+        }
+    }
+
+    /// The models this account offers (`model/list`, all pages; read-only, no model turn). Hidden ones included —
+    /// a chosen hidden model is still available; the picker leaves them out. Throws when the list cannot be read
+    /// whole: a cursor that repeats or one still left after `maxPages` pages means «unknown», never a partial list
+    /// (a model on a page not read would show as «недоступна»). An empty list is returned as is — the caller treats it
+    /// as unknown too.
+    public func models(maxPages: Int = 10) async throws -> [Model] {
+        var all: [Model] = []
+        var cursor: String?
+        var seen: Set<String> = []
+        for _ in 0..<maxPages {
+            var params: [String: JSON] = [:]
+            if let cursor { params["cursor"] = .string(cursor) }
+            let r = try await request("model/list", .object(params))
+            guard let data = r["data"]?.elements else { throw ClientError.rpc(code: 0, message: "no model list") }
+            for m in data.compactMap(Model.init) where !all.contains(where: { $0.id == m.id }) { all.append(m) }
+            guard let next = r["nextCursor"]?.string, !next.isEmpty else { return all }
+            guard seen.insert(next).inserted else {
+                throw ClientError.rpc(code: 0, message: "model/list cursor \(next) repeats")
+            }
+            cursor = next
+        }
+        throw ClientError.rpc(code: 0, message: "model/list has more than \(maxPages) pages")
+    }
+
     /// `environments: []` = no execution environment: no shell, no apply_patch, no file edits. Chilk's actions
     /// are only its own dynamic tools (plus web search). Verified against the live tool list (codex 0.160):
     /// `unified_exec = false` alone is not honoured, so this parameter is the real guard.
@@ -140,4 +200,9 @@ extension CodexClient {
         if let onTool { installTools(tools, thread: id, handler: onTool) }
         return id
     }
+}
+
+private extension JSON {
+    /// The items of a JSON array (`nil` for anything else).
+    var elements: [JSON]? { if case .array(let a) = self { return a } else { return nil } }
 }

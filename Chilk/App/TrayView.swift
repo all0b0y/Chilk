@@ -11,6 +11,8 @@ final class TrayModel {
     enum Page { case main, tools, games }
     enum Problem: Equatable {
         case codexSignedOut, codexDown(String), earsBroken(String)
+        /// Slice 9f: the chosen model is not in Codex's list (its name).
+        case modelUnavailable(String)
     }
     struct TimerRow: Identifiable, Equatable {
         let id: String
@@ -57,6 +59,8 @@ final class TrayModel {
     var plan: PlanLine?
     var openPlan: () -> Void = {}
     var openSettings: () -> Void = {}
+    /// Slice 9f: «Выбрать другую» → Settings, scrolled to «Мозг».
+    var openBrainSettings: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
     /// «Не беспокоить…» → 1 / 2 / 3 h; the answer is a refusal line, `nil` = started.
@@ -258,6 +262,10 @@ struct TrayView: View {
                 Text(String(localized: "Codex не на связи")).font(.callout).help(why)
                 Spacer()
                 Button(String(localized: "Переподключить")) { model.reconnect() }.controlSize(.small)
+            case .modelUnavailable(let name):
+                Text(Lines.modelUnavailableRow).font(.callout).help(Lines.modelUnavailable(name))
+                Spacer()
+                Button(Lines.modelPickAnother) { model.openBrainSettings() }.controlSize(.small)
             case .earsBroken(let why):
                 Text(String(localized: "Слух сломался")).font(.callout).help(why)
                 Spacer()

@@ -194,6 +194,78 @@ struct CodexClientTests {
         await #expect(throws: CodexClient.ClientError.self) { try await c.start() }
     }
 
+    // MARK: Slice 9f — the model and the depth
+
+    @Test func theModelListIsReadPageByPageIntoTypedEntries() async throws {
+        let c = client()
+        try await c.start()
+        let models = try await c.models()
+        #expect(models.map(\.id) == ["gpt-6-sol", "gpt-6-luna", "secret-preview"])     // the id-less entry is skipped
+        #expect(models[0] == CodexClient.Model(id: "gpt-6-sol", displayName: "GPT-6-Sol", isDefault: true,
+                                               efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                                               defaultEffort: "medium"))
+        #expect(models[1].efforts == ["low", "medium"] && !models[1].isDefault && models[1].defaultEffort == "low")
+        #expect(models[2].hidden && models[2].displayName == "secret-preview")             // no name: the id
+        await c.stop()
+    }
+
+    @Test func theChosenModelAndDepthReachCodexWithoutAFallback() async throws {
+        let c = client()
+        try await c.start()
+        // The fake asserts `allowProviderModelFallback == false` and echoes a non-default model into the thread id.
+        let thread = try await c.startThread(model: "gpt-6-sol", instructions: "", cwd: Self.temporary)
+        #expect(thread == "t1@gpt-6-sol")
+        #expect(try await c.ask(threadId: thread, text: "effort", effort: "high") == "high")
+        #expect(try await c.ask(threadId: thread, text: "effort") == "low")                 // the default stays «Быстро»
+        await c.stop()
+    }
+
+    /// A fake whose `model/list` misbehaves as `mode` says (`error`, `empty`, `loop`, `endless`).
+    func client(modelList mode: String) -> CodexClient {
+        var env = ProcessInfo.processInfo.environment
+        env["FAKE_MODEL_LIST"] = mode
+        return CodexClient(executable: URL(fileURLWithPath: "/usr/bin/python3"), arguments: [Self.script.path],
+                           environment: env, workDir: Self.temporary)
+    }
+
+    @Test func aModelListErrorIsThrownNotAnEmptyList() async throws {
+        let c = client(modelList: "error")
+        try await c.start()
+        await #expect(throws: CodexClient.ClientError.self) { try await c.models() }
+        await c.stop()
+    }
+
+    @Test func anEmptyModelListComesBackEmpty() async throws {
+        // The client returns it as is; Brain reads `[]` as «unknown» (BrainChoice.isAvailable) — never «недоступна».
+        let c = client(modelList: "empty")
+        try await c.start()
+        #expect(try await c.models().isEmpty)
+        await c.stop()
+    }
+
+    @Test func aRepeatingCursorMeansTheListIsUnknown() async throws {
+        let c = client(modelList: "loop")
+        try await c.start()
+        await #expect(throws: CodexClient.ClientError.rpc(code: 0, message: "model/list cursor p1 repeats")) {
+            try await c.models()
+        }
+        await c.stop()
+    }
+
+    @Test func aCursorLeftAfterThePageLimitMeansTheListIsUnknown() async throws {
+        let c = client(modelList: "endless")
+        try await c.start()
+        await #expect(throws: CodexClient.ClientError.rpc(code: 0, message: "model/list has more than 3 pages")) {
+            try await c.models(maxPages: 3)
+        }
+        await c.stop()
+        // The regular two-page list fits a limit of exactly two pages.
+        let whole = client()
+        try await whole.start()
+        #expect(try await whole.models(maxPages: 2).count == 3)
+        await whole.stop()
+    }
+
     @Test func setupIsolatesSkillsButKeepsTheRealHomeForCommands() throws {
         let dir = Self.temporary.appendingPathComponent("chilk-setup-\(UUID().uuidString)")
         let s = CodexSetup(dataDir: dir, executable: URL(fileURLWithPath: "/usr/bin/true"), realHome: "/Users/me")

@@ -114,6 +114,21 @@ extension Lines {
     static func days(_ d: Int) -> String { String(localized: "через \(d) дн.") }
     static let never = String(localized: "Не удалять")
 
+    // Slice 9f (decisions 36–38): «Мозг».
+    static let brain = String(localized: "Мозг")
+    static let brainModel = String(localized: "Модель")
+    static let brainDepth = String(localized: "Глубина ответа")
+    static let brainListLater = String(localized: "Список появится, когда Codex на связи")
+    static let brainNextConversation = String(localized: "Действует со следующего разговора")
+    static func modelMissingRow(_ name: String) -> String { String(localized: "\(name) (недоступна)") }
+    static func depthName(_ d: AnswerDepth) -> String {
+        switch d {
+        case .low: String(localized: "Быстро")
+        case .medium: String(localized: "Средне")
+        case .high: String(localized: "Вдумчиво")
+        }
+    }
+
     static let launchTitle = String(localized: "Запуск")
     static let launchAtLogin = String(localized: "Запускать при входе в систему")
     static let launchNeedsApproval = String(localized: "Нужно разрешить в Системных настройках → Объекты входа")

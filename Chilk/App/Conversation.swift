@@ -554,7 +554,7 @@ final class Conversation {
                 guard !Task.isCancelled, phase != .idle else { return }
                 log("brain error: \(error)")
                 _ = takeEmote()
-                leave(saying: Lines.brainFailed, after: 3.5)
+                leave(saying: brain.problem ?? Lines.brainFailed, after: 3.5)   // 9f: a model gone mid-work is named
             }
         }
     }

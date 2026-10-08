@@ -80,7 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let memory = self.memory
         let brain = Brain(tools: { ChilkToolCatalog.tools(for: switches.switches) },
                           threadConfig: { ChilkToolCatalog.threadConfig(for: switches.switches) },
-                          memory: { memory.book.instructions }) { [weak actions] call in
+                          memory: { memory.book.instructions },
+                          choice: { settings.settings.brain }) { [weak actions] call in
             guard let actions else { return .failure("Chilk actions unavailable") }
             return await actions.execute(call)
         }
@@ -108,7 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let note = self?.planner?.context() else { return base }
             return VoiceContext.adding(note, to: base)
         }
-        conversation.onEnd = { [weak balance, weak ears, weak hide] in hide?.applyPending(); balance?.resume(); ears?.resume() }
+        conversation.onEnd = { [weak balance, weak ears, weak hide, weak brain] in
+            hide?.applyPending(); balance?.resume(); ears?.resume()
+            brain?.conversationEnded()                     // 9f: a model / depth chosen meanwhile takes over now
+        }
         conversation.refusal = { [weak balance] in balance?.refusal() }        // «лежит» (6b)
         conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
 
@@ -143,7 +147,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.playEmote = { [weak balance] e, strong in balance?.playBesideBubble(e, strong: strong) }
         brain.onWebSearch = { [weak chat] thread in chat?.chip(ChatChip(kind: .webSearch), thread: thread) }
         brain.onTurnStart = { [weak chat] thread in chat?.turnStarted(thread) }
-        chat.onTurnEnd = { [weak balance, weak hide] in hide?.applyPending(); balance?.resume() }
+        chat.onTurnEnd = { [weak balance, weak hide, weak brain] in hide?.applyPending(); balance?.resume(); brain?.conversationEnded() }
+        // Slice 9f: a model / depth change never swaps the thread under a conversation or a chat turn in flight.
+        brain.busy = { [weak conversation, weak chat] in (conversation?.isActive ?? false) || (chat?.thinking ?? false) }
+        brain.log = { [weak balance] in balance?.log($0) }
         memory.onChange.append { [weak brain] in brain?.memoryChanged() }
         conversation.onTurn = { [weak chat] question, answer, thread in
             chat?.recordVoice(question: question, answer: answer, thread: thread)
@@ -195,6 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.main = main
         tray.openMain = { [weak main] in main?.show(.today) }
         tray.openSettings = { [weak main] in main?.show(.settings) }
+        tray.openBrainSettings = { [weak main] in main?.showBrain() }
+        main.brainModels = { [weak brain] in brain?.offeredModels }
+        main.reloadModels = { [weak brain] in brain?.reloadModels() }
+        main.brainChanged = { [weak brain] in brain?.choiceChanged() }
         chat.model.openMemory = { [weak main] in main?.show(.memory) }
         let greeting = FirstMeeting(profile: profile, edge: edge, balance: balance)
         greeting.log = { [weak balance] in balance?.log($0) }
@@ -453,9 +464,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else if settings.settings.launchAtLogin == true, AppState.isolated == nil {
             _ = LoginItem.set(true)                         // follows the app if it moved (build folder → /Applications)
         }
-        if env["CHILK_DEMO_TALK"] != nil {
-            Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation] _ in
-                MainActor.assumeIsolated { conversation?.trigger() }
+        if env["CHILK_DEMO_TALK"] != nil, AppState.isolated != nil {
+            Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak conversation, weak edge, weak balance] _ in
+                MainActor.assumeIsolated {
+                    conversation?.trigger()
+                    // 9f acceptance: what he said instead of listening (e.g. «Модель … недоступна») goes to the log.
+                    balance?.log("demo talk: bubble «\(edge?.sim.bubbleWords ?? "-")»")
+                }
             }
         }
         // Acceptance only: CHILK_DEMO_TRAY=<seconds> opens the popover after that long (no Screen Recording needed

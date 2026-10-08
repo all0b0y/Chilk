@@ -47,6 +47,8 @@ final class Tray: NSObject, NSPopoverDelegate {
     var planSummary: () -> (done: Int, total: Int)? = { nil }
     var openPlan: () -> Void = {}
     var openSettings: () -> Void = {}
+    /// Slice 9f: the main window on «Настройки», scrolled to «Мозг».
+    var openBrainSettings: () -> Void = {}
     var log: (String) -> Void = { _ in }
     private var spaceObserver: NSObjectProtocol?
 
@@ -269,9 +271,13 @@ final class Tray: NSObject, NSPopoverDelegate {
         case .signedOut: .codexSignedOut
         case .failed(let why): .codexDown(why)
         case .missingCodex: .codexDown(brain.statusLine)
+        case .modelUnavailable(let name): .modelUnavailable(name)
         case .ready, .connecting: ears.broken ? .earsBroken(ears.status) : nil
         }
-        if problem != model.problem { model.problem = problem }
+        if problem != model.problem {
+            model.problem = problem
+            if case .modelUnavailable(let name) = problem { log("tray problem: model «\(name)» unavailable") }
+        }
         tools.refresh()
     }
 
@@ -294,6 +300,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         model.openMain = { [weak self] in self?.closing { self?.openMain() } }
         model.openPlan = { [weak self] in self?.closing { self?.openPlan() } }
         model.openSettings = { [weak self] in self?.closing { self?.openSettings() } }
+        model.openBrainSettings = { [weak self] in self?.closing { self?.openBrainSettings() } }
         model.reconnect = { [weak self] in
             guard let brain = self?.brain else { return }
             Task { await brain.connect() }

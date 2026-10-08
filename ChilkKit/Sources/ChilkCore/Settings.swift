@@ -301,6 +301,144 @@ public enum ScreenChoice: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Brain (slice 9f, decisions 36–38)
+
+/// «Глубина ответа» instead of a temperature (Codex has none): only these three reach the picker — `xhigh` / `max` /
+/// `ultra` take tens of seconds per voice answer (decision 36).
+public enum AnswerDepth: String, Codable, CaseIterable, Sendable {
+    case low, medium, high
+
+    /// The depths of `supported` (a model's `supportedReasoningEfforts`) Chilk offers, in order.
+    public static func offered(_ supported: [String]) -> [AnswerDepth] {
+        allCases.filter { supported.contains($0.rawValue) }
+    }
+}
+
+/// The Codex model and depth of a conversation (Settings → «Мозг»). Background turns (phrase batch, warm-ups) take the
+/// same model, always at `low` (decision 38). A change counts from the next conversation.
+public struct BrainChoice: Codable, Equatable, Sendable {
+    public static let defaultModel = "gpt-6-luna"
+    public static let defaultModelName = "GPT-6-Luna"
+    /// The background depth (decision 38).
+    public static let backgroundDepth = AnswerDepth.low
+
+    /// `nil` = never chosen: GPT-6-Luna.
+    public var model: String?
+    /// The model's `displayName` when it was chosen — to name it while Codex (and so the list) is away.
+    public var modelName: String?
+    public var depth = AnswerDepth.low
+
+    public init(model: String? = nil, modelName: String? = nil, depth: AnswerDepth = .low) {
+        self.model = model
+        self.modelName = modelName
+        self.depth = depth
+    }
+
+    /// The model id sent to Codex.
+    public var modelID: String { model ?? Self.defaultModel }
+    /// How to name the model to the user.
+    public var displayName: String {
+        if let modelName, !modelName.isEmpty { return modelName }
+        return model ?? Self.defaultModelName
+    }
+
+    /// The choice after picking `model` from the list: its depth stays when the model supports it, otherwise the first
+    /// of the offered depths (`low` for every model Codex lists today).
+    public func choosing(model id: String, name: String, supported: [String]) -> BrainChoice {
+        var c = self
+        c.model = id
+        c.modelName = name
+        let offered = AnswerDepth.offered(supported)
+        if !offered.isEmpty, !offered.contains(depth) { c.depth = offered[0] }
+        return c
+    }
+
+    /// Whether the chosen model is still offered: `nil` = the list is unknown (Codex away, or an empty list — the
+    /// catalog not loaded yet), so nothing can be said. No silent substitution (decision 37): a missing model is a
+    /// problem to show, never a reason to use another.
+    public func isAvailable(in listed: [String]?) -> Bool? {
+        guard let listed, !listed.isEmpty else { return nil }
+        return listed.contains(modelID)
+    }
+
+    /// The depth a turn really goes at, given the model's `supportedReasoningEfforts` (`nil` = unknown): the chosen one
+    /// when the model has it, otherwise the first offered — `low` for every model Codex lists (9f review). Unknown or
+    /// nothing offered: the choice as is (Codex itself is then the check).
+    public func effectiveDepth(supported: [String]?) -> AnswerDepth {
+        guard let supported else { return depth }
+        let offered = AnswerDepth.offered(supported)
+        guard let first = offered.first, !offered.contains(depth) else { return depth }
+        return first
+    }
+
+    private enum CodingKeys: String, CodingKey { case model, modelName, depth }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let id = (try? c.decodeIfPresent(String.self, forKey: .model)) ?? nil
+        model = id.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        modelName = (try? c.decodeIfPresent(String.self, forKey: .modelName)) ?? nil
+        depth = (try? c.decodeIfPresent(AnswerDepth.self, forKey: .depth)) ?? .low
+    }
+}
+
+/// When the conversation's threads follow a new «Мозг» choice (slice 9f, decision 36: «со следующего разговора»). A
+/// thread keeps the model it started with, so a new model drops the live thread and re-warms the spare; the depth is
+/// sent with every turn, so a depth-only change just updates the live thread. Nothing is swapped under a conversation
+/// or a chat turn in flight (`busy`): it waits for its end. Pure, so the timing is tested without Codex.
+public struct BrainThreadPolicy: Equatable, Sendable {
+    /// What the live thread needs.
+    public enum Live: Equatable, Sendable {
+        case keep
+        /// Its next turns go at this depth.
+        case setDepth(AnswerDepth)
+        /// Another model: it goes, the next conversation starts on a new spare.
+        case drop
+    }
+
+    public struct Step: Equatable, Sendable {
+        public var live: Live
+        /// The warm spare was started on the old model: drop it and warm a new one (right away — it is not live).
+        public var rewarmSpare: Bool
+
+        public init(live: Live, rewarmSpare: Bool) {
+            self.live = live
+            self.rewarmSpare = rewarmSpare
+        }
+    }
+
+    /// A change that waits for the conversation going on to end.
+    public private(set) var pending = Live.keep
+
+    public init() {}
+
+    /// The choice went from `old` to `new`; `busy` = a conversation or a chat turn is going on.
+    public mutating func choiceChanged(from old: BrainChoice, to new: BrainChoice, busy: Bool) -> Step {
+        let modelChanged = old.modelID != new.modelID
+        guard modelChanged || old.depth != new.depth else { return Step(live: .keep, rewarmSpare: false) }
+        pending = Self.merge(pending, modelChanged ? .drop : .setDepth(new.depth))
+        guard !busy else { return Step(live: .keep, rewarmSpare: modelChanged) }
+        defer { pending = .keep }
+        return Step(live: pending, rewarmSpare: modelChanged)
+    }
+
+    /// A conversation or a chat turn ended (`busy`: another one still goes on — wait for it too).
+    public mutating func conversationEnded(busy: Bool) -> Live {
+        guard !busy else { return .keep }
+        defer { pending = .keep }
+        return pending
+    }
+
+    /// A reconnect: no thread survives it anyway.
+    public mutating func reset() { pending = .keep }
+
+    /// A model change wins over any depth; a later depth over an earlier one.
+    private static func merge(_ earlier: Live, _ later: Live) -> Live {
+        if earlier == .drop || later == .drop { return .drop }
+        return later == .keep ? earlier : later
+    }
+}
+
 // MARK: - All settings (settings.json)
 
 /// Everything of Settings that is not the engine's: care and the mode live in `balance.json` with the engine state.
@@ -310,10 +448,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var screen = ScreenChoice.follow
     /// `nil` = never chosen: on by default (SPEC «Умолчания»).
     public var launchAtLogin: Bool?
+    /// Slice 9f: the Codex model and depth.
+    public var brain = BrainChoice()
 
     public init() {}
 
-    private enum CodingKeys: String, CodingKey { case apps, hotkey, screen, launchAtLogin }
+    private enum CodingKeys: String, CodingKey { case apps, hotkey, screen, launchAtLogin, brain }
 
     /// Field by field: an older or partly damaged file keeps what it can and defaults the rest.
     public init(from decoder: any Decoder) throws {
@@ -322,5 +462,16 @@ public struct AppSettings: Codable, Equatable, Sendable {
         hotkey = (try? c.decodeIfPresent(HotkeySpec.self, forKey: .hotkey)) ?? .standard
         screen = (try? c.decodeIfPresent(ScreenChoice.self, forKey: .screen)) ?? .follow
         launchAtLogin = try? c.decodeIfPresent(Bool.self, forKey: .launchAtLogin)
+        brain = (try? c.decodeIfPresent(BrainChoice.self, forKey: .brain)) ?? BrainChoice()
+    }
+
+    /// `brain` only once chosen: a file from before slice 9f re-encodes unchanged, so it is not copied aside as lossy.
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(apps, forKey: .apps)
+        try c.encode(hotkey, forKey: .hotkey)
+        try c.encode(screen, forKey: .screen)
+        try c.encodeIfPresent(launchAtLogin, forKey: .launchAtLogin)
+        if brain != BrainChoice() { try c.encode(brain, forKey: .brain) }
     }
 }
