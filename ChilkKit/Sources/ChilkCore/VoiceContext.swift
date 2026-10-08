@@ -67,9 +67,9 @@ public struct BalanceBrief: Equatable, Sendable {
             let f = DateFormatter()
             f.timeZone = zone
             f.dateFormat = "HH:mm"
-            parts.append("фокус до \(f.string(from: until)), на сегодня ещё \(focusLeftMinutes) мин фокуса")
+            parts.append("«Не беспокоить» до \(f.string(from: until)), на сегодня ещё \(focusLeftMinutes) мин «Не беспокоить»")
         } else {
-            parts.append("фокуса нет, на сегодня осталось \(focusLeftMinutes) мин фокуса")
+            parts.append("«Не беспокоить» не включено, на сегодня осталось \(focusLeftMinutes) мин «Не беспокоить»")
         }
         return parts.joined(separator: "; ")
     }

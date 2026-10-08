@@ -35,6 +35,10 @@ final class CardDesk {
     private var pendingResult: (line: String, until: Date)?
     private var timer: Timer?
     private let panel = CardEditPanel()
+    /// Slice 9, decision 8: cards first shown in a voice conversation — back at the edge, he listens for the answer.
+    private var bornInVoice: Set<UUID> = []
+    /// A voice-born card is shown again at the edge (the conversation opens a minute without the name).
+    var onShownAgain: () -> Void = {}
     /// Counts proposals: a conversation shows the card in its bubble only if its own turn proposed one.
     private(set) var proposals = 0
 
@@ -133,6 +137,7 @@ final class CardDesk {
     func showInConversation() {
         guard let card = current else { return }
         inConversation = true
+        bornInVoice.insert(card.id)
         let words = text(card)
         let labels = buttons(card)
         sim.say(words, duration: .infinity, buttons: labels)
@@ -258,6 +263,7 @@ final class CardDesk {
     private func settle(_ card: ActionCard, how: String) {
         panel.close()
         queue.settle(card.id)
+        bornInVoice.remove(card.id)
         correcting = false
         log("card answered: \(how)")
         if showing { hide() }
@@ -341,6 +347,7 @@ final class CardDesk {
         showing = true
         displaced = false
         log("card shown\(again ? " again" : "")")
+        if again, bornInVoice.contains(card.id) { onShownAgain() }
         if let snapshot {
             shots += 1
             let name = String(format: "card-%02d", shots)

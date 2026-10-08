@@ -37,6 +37,33 @@ public struct ChatChip: Codable, Equatable, Sendable {
     }
 }
 
+/// Slice 9, decision 1: the chips under one answer as the chat shows them — one chip as it is; two and more fold into
+/// one «Сделал N действий ›» (red «N действий · M не вышло ›» when any failed) that opens into a list.
+public enum ChipSummary: Equatable, Sendable {
+    case none
+    case single(ChatChip)
+    case group(count: Int, failed: Int)
+
+    public init(_ chips: [ChatChip]) {
+        switch chips.count {
+        case 0: self = .none
+        case 1: self = .single(chips[0])
+        default: self = .group(count: chips.count, failed: chips.filter(\.failed).count)
+        }
+    }
+}
+
+/// Russian plural forms: 1 действие, 2–4 действия, 5–20 действий, 21 действие, 22 действия, 25 действий.
+public enum RussianPlural {
+    public static func form(_ n: Int, _ one: String, _ few: String, _ many: String) -> String {
+        let m100 = abs(n) % 100, m10 = abs(n) % 10
+        if (11...14).contains(m100) { return many }
+        if m10 == 1 { return one }
+        if (2...4).contains(m10) { return few }
+        return many
+    }
+}
+
 public struct ChatTurn: Codable, Equatable, Sendable, Identifiable {
     public enum Role: String, Codable, Sendable { case user, chilk }
     /// How the question came: by voice (heard and kept as text) or typed in the chat window.

@@ -34,12 +34,13 @@ public enum Ambience: String, Codable, Sendable, CaseIterable {
     /// Bright: sunglasses, while brightness > 50 % and the eyes need is under 50 % (the bags matter more).
     case sunglasses
 
-    /// The chance of a look when the brightness settles: none around 50 %, then 0.1 % · 100^d towards the ends
-    /// (d = distance from 50 % as a share of the half): a quarter — 1 %, the minimum / maximum — 10 %.
+    /// The chance of a look when the brightness settles (slice 9, decision 6; was: 0.1 % · 100^d towards the ends, at
+    /// most 10 % — read as «it never works»): very dark (≤ 20 %) or very bright (≥ 85 %) — always; nothing around the
+    /// middle (40–60 %); a quarter in between.
     public static func chance(level: Double) -> Double {
-        let d = min(1, abs(level - 0.5) / 0.5)
-        guard d > 0.06 else { return 0 }
-        return 0.001 * pow(100, d)
+        if level <= 0.20 + 1e-9 || level >= 0.85 - 1e-9 { return 1 }
+        if level > 0.40 + 1e-9 && level < 0.60 - 1e-9 { return 0 }
+        return 0.25
     }
 
     /// `roll`, `coin` in [0, 1): the look for this settled brightness, or nil.
@@ -56,4 +57,20 @@ public enum Ambience: String, Codable, Sendable, CaseIterable {
         case .sunglasses: level > 0.5 && eyesPressure < 0.5
         }
     }
+}
+
+/// Slice 9, decision 6: a light scene at most once in 10 minutes (wall clock), so playing with the brightness does
+/// not dress him up every second. Only a scene that was put on starts the pause; a missed roll does not.
+public struct AmbienceCooldown: Equatable, Sendable {
+    public static let pause: TimeInterval = 600
+    private var last: TimeInterval?
+
+    public init() {}
+
+    public func ready(now: TimeInterval) -> Bool {
+        guard let last else { return true }
+        return now - last >= Self.pause - 1e-9
+    }
+
+    public mutating func played(now: TimeInterval) { last = now }
 }

@@ -43,6 +43,14 @@ extension Lines {
 
     // MARK: Chips (decision 14)
 
+    /// Slice 9, decision 1: the folded chip — «Сделал 3 действия», with a failure «3 действия · 1 не вышло».
+    static func chipGroup(count: Int, failed: Int) -> String {
+        let word = RussianPlural.form(count, String(localized: "действие"), String(localized: "действия"),
+                                      String(localized: "действий"))
+        if failed > 0 { return String(localized: "\(count) \(word) · \(failed) не вышло") }
+        return String(localized: "Сделал \(count) \(word)")
+    }
+
     static func chipTitle(_ c: ChatChip) -> String {
         let s = c.subject ?? ""
         let title: String = switch c.kind {
@@ -76,8 +84,8 @@ extension Lines {
             if let m = c.minutes, let need = Need(rawValue: s) { String(localized: "Отложил «\(requestName(need))» · \(m) мин") }
             else { String(localized: "Отсрочка") }
         case .focus:
-            if let at = c.at { String(localized: "Фокус до \(at.formatted(date: .omitted, time: .shortened))") } else { String(localized: "Фокус") }
-        case .endFocus: c.failed ? String(localized: "Закончить фокус") : String(localized: "Фокус закончен")
+            if let at = c.at { String(localized: "Не беспокою до \(at.formatted(date: .omitted, time: .shortened))") } else { String(localized: "Не беспокоить") }
+        case .endFocus: c.failed ? String(localized: "Закончить «Не беспокоить»") : String(localized: "«Не беспокоить» закончено")
         case .game:
             c.failed ? String(localized: "Игра") : (GameKind(rawValue: s).map(GameLines.name) ?? String(localized: "Игра"))
         case .hide:

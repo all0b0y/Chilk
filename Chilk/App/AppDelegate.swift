@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMainMenu()
+        powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.powerOffAt = Date() }
+        }
         let settings = self.settings
         let edge = EdgeController()
         edge.screenChoice = { settings.settings.screen }
@@ -283,6 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.clock = clock
         clock.checkAtLaunch()
         cards.onLeftConversation = { [weak conversation] in conversation?.cardLeft() }
+        cards.onShownAgain = { [weak conversation] in conversation?.awaitCardAnswer() }
         if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             cards.snapshot = { [weak edge, weak chat] name in
@@ -470,6 +475,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
+    // MARK: Quitting (slice 9, decision 2)
+
+    /// Only the tray's «Выйти из Чилка» ends Chilk for real (and the system: logout, restart, shutdown).
+    private var quitForReal = false
+
+    /// macOS announced a logout / restart / shutdown (a backup for a quit event without its reason); a cancelled
+    /// logout must not leave ⌘Q quitting for real, so it counts for a minute.
+    private var powerOffAt: Date?
+    private var powerOffObserver: NSObjectProtocol?
+
+    /// ⌘Q and the Dock's «Завершить» close Chilk's windows; he stays at the edge and in the tray.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let powerOff = powerOffAt.map { Date().timeIntervalSince($0) < 60 } ?? false
+        if quitForReal || powerOff || Self.sessionEnding() { return .terminateNow }
+        balance?.log("quit asked (⌘Q / Dock) → only the windows closed")
+        closeWindows()
+        return .terminateCancel
+    }
+
+    /// The quit Apple event of a logout, restart or shutdown carries its reason; the Dock's «Завершить» does not.
+    private static func sessionEnding() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent else { return false }
+        let why = fourCC("why?")
+        guard let reason = (event.attributeDescriptor(forKeyword: why) ?? event.paramDescriptor(forKeyword: why))?
+            .enumCodeValue else { return false }
+        return ["logo", "rlgo", "rrst", "rest", "rsdn", "shut"].map(fourCC).contains(reason)
+    }
+
+    private static func fourCC(_ s: String) -> OSType { s.utf8.reduce(0) { $0 << 8 | OSType($1) } }
+
+    @objc private func quitChilk() {
+        quitForReal = true
+        NSApp.terminate(nil)
+    }
+
+    @objc private func closeWindows() {
+        chat?.close()
+        main?.close()
+    }
+
     // MARK: Right click on the tray icon (decision 5)
 
     /// «Позвать Чилка», «Проверка ▸» for acceptance, «О Чилке», «Выйти». Everything else is in the popover.
@@ -539,7 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let about = NSMenuItem(title: String(localized: "О Чилке"), action: #selector(about), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
-        menu.addItem(withTitle: String(localized: "Выйти из Чилка"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
+        menu.addItem(item(String(localized: "Выйти из Чилка"), #selector(quitChilk)))      // slice 9: the only real quit
         return menu
     }
 
@@ -588,9 +633,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return i
     }
 
-    /// Under the pause ⌘Q is off: the way out is the emergency exit. Logout and Force Quit still work.
+    /// Under the pause ⌘Q is off: the way out is the emergency exit. Logout and Force Quit still work. (Since slice 9
+    /// ⌘Q only closes the windows; it stays off under the pause as before.)
     private func quitShortcut(enabled: Bool) {
-        NSApp.mainMenu?.items.first?.submenu?.items.first { $0.action == #selector(NSApplication.terminate(_:)) }?
+        NSApp.mainMenu?.items.first?.submenu?.items.first { $0.action == #selector(closeWindows) }?
             .keyEquivalent = enabled ? "q" : ""
     }
 
@@ -601,7 +647,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: String(localized: "О Чилке"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: String(localized: "Выйти из Чилка"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let closeAll = NSMenuItem(title: String(localized: "Закрыть окна Чилка"), action: #selector(closeWindows), keyEquivalent: "q")
+        closeAll.target = self                                // slice 9, decision 2: ⌘Q closes the windows only
+        appMenu.addItem(closeAll)
         appItem.submenu = appMenu
         // Slice 5b: the chat window needs editing keys (⌘C / ⌘V / ⌘A / ⌘Z) and ⌘W / ⌘M.
         let editItem = NSMenuItem()

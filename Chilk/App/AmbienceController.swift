@@ -7,6 +7,7 @@ import ChilkCore
 final class AmbienceController {
     private let sim: CharacterSim
     private var watch = BrightnessWatch()
+    private var cooldown = AmbienceCooldown()
     private var timer: Timer?
     private var rng = SystemRandom()
     private let env = ProcessInfo.processInfo.environment
@@ -84,8 +85,13 @@ final class AmbienceController {
                 sim.wakeUp()                                    // his own request / a conversation wakes him
             }
         }
-        guard let settled = watch.feed(level, now: Date().timeIntervalSince(started)) else { return }
+        let now = Date().timeIntervalSince(started)
+        guard let settled = watch.feed(level, now: now) else { return }
         guard look == nil, !sim.isAsleep else { return }
+        // Slice 9, decision 6: one scene in 10 minutes at most (a missed roll starts no pause).
+        guard cooldown.ready(now: now) else {
+            return log(String(format: "ambience: brightness settled at %.2f — cooldown, no roll", settled))
+        }
         let roll = env["CHILK_DEMO_AMBIENCE_ROLL"].flatMap(Double.init) ?? rng.next()
         let coin = env["CHILK_DEMO_AMBIENCE_COIN"].flatMap(Double.init) ?? rng.next()
         let pick = Ambience.pick(level: settled, roll: roll, coin: coin, eyesPressure: eyesPressure())
@@ -94,6 +100,7 @@ final class AmbienceController {
         guard let pick else { return }
         if busy() || sim.act != nil { return log("ambience: \(pick.rawValue) lost, Chilk busy") }
         put(pick)
+        cooldown.played(now: now)
     }
 
     /// Put a look on (also «Проверка ▸ Свет» past the roll: `check` keeps it 20 s whatever the brightness).

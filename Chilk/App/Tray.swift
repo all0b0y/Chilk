@@ -45,6 +45,7 @@ final class Tray: NSObject, NSPopoverDelegate {
     var openMain: () -> Void = {}
     var openSettings: () -> Void = {}
     var log: (String) -> Void = { _ in }
+    private var spaceObserver: NSObjectProtocol?
 
     init(edge: EdgeController, balance: BalanceController, brain: Brain, ears: Ears, actions: Actions,
          conversation: Conversation, tools: ToolsBridge) {
@@ -73,6 +74,16 @@ final class Tray: NSObject, NSPopoverDelegate {
         hero.fatigue = { [weak balance] in balance?.engine.leafFatigue ?? 0 }
         hero.eyeStrain = { [weak balance] in balance?.engine.eyeStrain ?? 0 }
         wire()
+        // Slice 9, decision 3: a swipe to another desktop (or into a full-screen app) closes the popover; Chilk peeks
+        // back at the edge as on any close.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.popover.isShown else { return }
+                self.log("popover closed: space changed")
+                self.close()
+            }
+        }
         refreshIcon()
         iconTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshIcon() }
@@ -298,6 +309,7 @@ final class Tray: NSObject, NSPopoverDelegate {
     }
 
     func shutdown() {
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
         iconTimer?.invalidate()
         openTimer?.invalidate()
         hero.stop()

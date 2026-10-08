@@ -188,21 +188,61 @@ private struct TurnRow: View {
     }
 }
 
-/// Decision 14: system icons, no content; a failure is red.
+/// Decision 14: system icons, no content; a failure is red. Slice 9, decision 1: two and more fold into one chip
+/// («Сделал 3 действия ›», red with «· 1 не вышло» when any failed) that opens into a list, one row per action.
 private struct ChipRow: View {
     let chips: [ChatChip]
+    @State private var open = ChipRow.demoOpen
+    /// Acceptance only (an isolated run with CHILK_DEMO_CHIPS_OPEN): folded chips start open for the snapshot.
+    private static let demoOpen = AppState.isolated != nil
+        && ProcessInfo.processInfo.environment["CHILK_DEMO_CHIPS_OPEN"] != nil
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
-                Label(Lines.chipTitle(chip), systemImage: Lines.chipIcon(chip))
+        switch ChipSummary(chips) {
+        case .none:
+            EmptyView()
+        case .single(let chip):
+            ChipLabel(chip: chip)
+        case .group(let count, let failed):
+            VStack(alignment: .leading, spacing: 4) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.18)) { open.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: failed > 0 ? "exclamationmark.circle" : "checkmark.circle")
+                        Text(Lines.chipGroup(count: count, failed: failed))
+                        Image(systemName: "chevron.right").rotationEffect(.degrees(open ? 90 : 0))
+                    }
                     .font(.caption)
                     .lineLimit(1)
                     .padding(.horizontal, 8).padding(.vertical, 3)
-                    .foregroundStyle(chip.failed ? Color.red : Color.secondary)
-                    .background(Capsule().fill(chip.failed ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12)))
+                    .foregroundStyle(failed > 0 ? Color.red : Color.secondary)
+                    .background(Capsule().fill(failed > 0 ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12)))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                if open {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in ChipLabel(chip: chip) }
+                    }
+                    .padding(.leading, 10)
+                    .transition(.opacity)
+                }
             }
         }
+    }
+}
+
+private struct ChipLabel: View {
+    let chip: ChatChip
+
+    var body: some View {
+        Label(Lines.chipTitle(chip), systemImage: Lines.chipIcon(chip))
+            .font(.caption)
+            .lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .foregroundStyle(chip.failed ? Color.red : Color.secondary)
+            .background(Capsule().fill(chip.failed ? Color.red.opacity(0.12) : Color.secondary.opacity(0.12)))
     }
 }
 

@@ -219,12 +219,12 @@ extension Lines {
     }
 
     static func focusOn(until: String) -> String {
-        String(localized: "Фокус до \(until). Не мешаю — только тихонько напомню")
+        String(localized: "Не беспокою до \(until) — только тихонько напомню")
     }
 
     static let focusEnded: [String] = [
-        String(localized: "Фокус всё. Теперь моя очередь — кое-что набралось"),
-        String(localized: "Фокус закончился. Я снова слежу всерьёз"),
+        String(localized: "«Не беспокоить» всё. Теперь моя очередь — кое-что набралось"),
+        String(localized: "Режим «Не беспокоить» закончился. Я снова слежу всерьёз"),
     ]
 
     static let jokes: [String] = [

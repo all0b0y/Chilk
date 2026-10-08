@@ -90,6 +90,8 @@ final class GameController: NSObject, NSWindowDelegate {
         model.tap = { [weak self] i in self?.tap(i) }
         model.again = { [weak self] in self?.again() }
         model.close = { [weak self] in self?.close() }
+        model.dark = history.dark
+        model.toggleTheme = { [weak self] in self?.toggleTheme() }
         model.answer = { [weak self] i in self?.answer(i) }
         model.fire = { [weak self] c in self?.fire(c) }
         model.place = { [weak self] i, x, y, h in
@@ -102,6 +104,14 @@ final class GameController: NSObject, NSWindowDelegate {
         }
         model.battle = { [weak self] in self?.battle() }
         model.square = { [weak self] s in self?.square(s) }
+    }
+
+    /// Slice 9, decision 5: ☀️/🌙 — the sheet for every notebook game, remembered in games.json.
+    private func toggleTheme() {
+        history.dark.toggle()
+        model.dark = history.dark
+        try? history.save(to: Self.historyFile)
+        log("notebook sheet \(history.dark ? "dark" : "light")")
     }
 
     /// Opens the notebook (from the popover, by voice or chat). `length` skips the first sheet. Returns the line Chilk

@@ -29,8 +29,26 @@ final class Conversation {
     /// The card was on screen when he was called: «да / нет» may answer it (a hidden card is not answered blind).
     private var cardSeen = false
 
+    /// Slice 9, decision 8: he listens for the answer to a card that came back to the edge; silence leaves the card's
+    /// bubble as it is (clearing it would bring the card back «again» and open the microphone in a loop).
+    private var cardWatch = false
+
     /// The card was answered elsewhere (the chat) while it was in his bubble.
     func cardLeft() { cardInBubble = false; cardSeen = false }
+
+    /// Slice 9, decision 8: a card first proposed by voice came back to the edge («А карточку-то подтвердишь?») — he
+    /// listens a minute without his name for «да / нет / поправка», as right after the card in a conversation.
+    /// Nothing happens when he is busy, the ears are off or he would refuse to talk.
+    func awaitCardAnswer() {
+        guard phase == .idle, !closing, ears.enabled, ears.ready, brain.problem == nil, refusal() == nil,
+              let cards, cards.hasCard else { return }
+        log("card back at the edge: listening for the answer")
+        suppressFollowUps = false
+        turns = 0
+        cardSeen = true
+        cardWatch = true
+        listen(window: Dialogue.cardAnswerWindow)
+    }
 
     /// His window on screen and whether he lives on the left edge: the long-answer panel opens beside him.
     var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
@@ -508,7 +526,7 @@ final class Conversation {
                     guard !Task.isCancelled, phase == .answering else { return }
                 }
                 if cardInBubble {
-                    listen(window: Dialogue.followUpWindow(mode: .question, replyLength: 0))   // «да» by voice
+                    listen(window: Dialogue.cardAnswerWindow)   // «да» by voice (slice 9, decision 8: a minute)
                 } else if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
@@ -542,6 +560,8 @@ final class Conversation {
 
     /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
     private func leave(saying line: String?, after seconds: Double) {
+        let keepCard = cardWatch && line == nil && cards?.hasCard == true   // a silent watch: the card stays as it is
+        cardWatch = false
         settleQuestion(nil)
         cardInBubble = false
         cardSeen = false
@@ -563,8 +583,10 @@ final class Conversation {
                 guard let self, self.phase == .idle else { return }
                 self.closing = false
                 self.closeLongAnswer()
-                self.sim.clearBubble()
-                self.sim.standOut = .docked
+                if !keepCard {
+                    self.sim.clearBubble()
+                    self.sim.standOut = .docked
+                }
                 self.log("conversation over after \(self.turns) turn(s)")
                 self.onEnd?()
             }

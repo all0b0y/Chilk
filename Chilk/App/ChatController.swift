@@ -302,6 +302,9 @@ final class ChatController: NSObject, NSWindowDelegate {
 
     // MARK: Window (decision 2)
 
+    /// Slice 9, decision 2: ⌘Q / the Dock's «Завершить» close the window (Chilk stays at the edge).
+    func close() { window?.performClose(nil) }
+
     func show() {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 560),

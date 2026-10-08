@@ -86,8 +86,7 @@ final class Ears {
     private func prepare() {
         if ready { startPassive(); return }
         guard preparation == nil else { status = String(localized: "Учусь слышать…"); return }
-        status = String(localized: "Учусь слышать…")
-        notice(String(localized: "Учусь слышать твоё имя 👂 Горячая клавиша уже работает"))
+        status = String(localized: "Учусь слышать…")         // slice 9, decision 4: the tray line only, no bubble
         let env = ProcessInfo.processInfo.environment
         let folder = env["CHILK_WAKE_MODEL"].map { URL(fileURLWithPath: $0) }
         let base = env["CHILK_WAKE_BASE"].map { URL(fileURLWithPath: $0) }

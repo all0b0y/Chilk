@@ -13,16 +13,19 @@ public enum GameKind: String, CaseIterable, Codable, Sendable, CodingKeyRepresen
 /// When each game was last played — «давай поиграем» without a name picks the one not played for longest.
 public struct GameHistory: Codable, Equatable, Sendable {
     public var lastPlayed: [GameKind: Date] = [:]
+    /// Slice 9, decision 5: the notebook's dark sheet (☀️/🌙), shared by every notebook game.
+    public var dark = false
 
     public init() {}
 
     public mutating func played(_ kind: GameKind, at date: Date) { lastPlayed[kind] = date }
 
-    private enum CodingKeys: String, CodingKey { case lastPlayed }
+    private enum CodingKeys: String, CodingKey { case lastPlayed, dark }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         lastPlayed = (try? c.decodeIfPresent([GameKind: Date].self, forKey: .lastPlayed)) ?? [:]
+        dark = (try? c.decodeIfPresent(Bool.self, forKey: .dark)) ?? false
     }
 
     public static func load(from url: URL) -> GameHistory {

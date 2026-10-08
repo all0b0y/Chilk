@@ -3,6 +3,7 @@ import Testing
 @testable import ChilkCore
 
 // Slice 6f-1 (SPEC 22–23): the built-in display's brightness — a nightcap and sleep, a lamp, sunglasses.
+// Slice 9a (SPEC «Срез 9», decision 6): the ends always react, a quarter chance between, once in 10 min.
 
 struct BrightnessWatchTests {
     @Test func theFirstReadingIsOnlyThePlace() {
@@ -32,19 +33,34 @@ struct BrightnessWatchTests {
 }
 
 struct AmbienceTests {
-    @Test func theChanceGrowsGeometricallyTowardsTheEnds() {
-        #expect(Ambience.chance(level: 0.5) == 0)
-        #expect(Ambience.chance(level: 0.52) == 0)
-        #expect(abs(Ambience.chance(level: 0.25) - 0.01) < 1e-9)
-        #expect(abs(Ambience.chance(level: 0.75) - 0.01) < 1e-9)
-        #expect(abs(Ambience.chance(level: 0) - 0.1) < 1e-9 && abs(Ambience.chance(level: 1) - 0.1) < 1e-9)
-        #expect(Ambience.chance(level: 0.45) > 0.001 && Ambience.chance(level: 0.45) < 0.002)
+    // Slice 9, decision 6: the ends always react, a quarter chance in between, nothing around the middle.
+    @Test func theEndsAlwaysReactTheMiddleNeverAndAQuarterInBetween() {
+        for level in [0.0, 0.05, 0.2, 0.85, 0.9, 1.0] { #expect(Ambience.chance(level: level) == 1, "\(level)") }
+        for level in [0.21, 0.3, 0.4, 0.6, 0.7, 0.84] { #expect(Ambience.chance(level: level) == 0.25, "\(level)") }
+        for level in [0.41, 0.46, 0.5, 0.54, 0.59] { #expect(Ambience.chance(level: level) == 0, "\(level)") }
+    }
+
+    @Test func atTheEndsTheLookComesWhateverTheRoll() {
+        #expect(Ambience.pick(level: 0.1, roll: 0.999, coin: 0.2, eyesPressure: 0) == .nightcap)
+        #expect(Ambience.pick(level: 0.9, roll: 0.999, coin: 0.2, eyesPressure: 0) == .sunglasses)
+        #expect(Ambience.pick(level: 0.3, roll: 0.3, coin: 0.2, eyesPressure: 0) == nil)            // a quarter missed
+        #expect(Ambience.pick(level: 0.3, roll: 0.2, coin: 0.7, eyesPressure: 0) == .lamp)
+        #expect(Ambience.pick(level: 0.5, roll: 0, coin: 0.2, eyesPressure: 0) == nil)
+    }
+
+    @Test func aSceneComesAtMostOnceInTenMinutesAndAMissStartsNoPause() {
+        var gate = AmbienceCooldown()
+        #expect(gate.ready(now: 0))
+        gate.played(now: 100)
+        #expect(!gate.ready(now: 100))
+        #expect(!gate.ready(now: 100 + 599))
+        #expect(gate.ready(now: 100 + 600))
+        #expect(AmbienceCooldown.pause == 600)
     }
 
     @Test func darkIsANightcapOrALampBrightIsSunglassesUnlessTheEyesAreTired() {
         #expect(Ambience.pick(level: 0.05, roll: 0.05, coin: 0.2, eyesPressure: 0) == .nightcap)
         #expect(Ambience.pick(level: 0.05, roll: 0.05, coin: 0.7, eyesPressure: 0) == .lamp)
-        #expect(Ambience.pick(level: 0.05, roll: 0.2, coin: 0.2, eyesPressure: 0) == nil)          // unlucky
         #expect(Ambience.pick(level: 0.95, roll: 0.05, coin: 0.2, eyesPressure: 0.3) == .sunglasses)
         #expect(Ambience.pick(level: 0.95, roll: 0.05, coin: 0.2, eyesPressure: 0.5) == nil)      // bags first
     }

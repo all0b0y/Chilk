@@ -74,6 +74,9 @@ enum GameLines {
     static var hisSea: String { String(localized: "Море Чилка") }
     static var placeShips: String { String(localized: "Расставь корабли: тащи, клик — повернуть") }
     static var shuffle: String { String(localized: "Случайно") }
+    /// Slice 9, decision 5: the ☀️/🌙 button's hint.
+    static var darkSheet: String { String(localized: "Тёмный лист") }
+    static var lightSheet: String { String(localized: "Белый лист") }
     static var toBattle: String { String(localized: "В бой!") }
     // Slice 7d: draughts.
     static var yourMoveDraughts: String { String(localized: "Твой ход — ты синие, снизу") }

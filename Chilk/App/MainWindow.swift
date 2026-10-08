@@ -117,6 +117,9 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     // MARK: Window
 
+    /// Slice 9, decision 2: ⌘Q / the Dock's «Завершить» close the window (Chilk stays at the edge).
+    func close() { window?.performClose(nil) }
+
     func show(_ section: MainSection) {
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),

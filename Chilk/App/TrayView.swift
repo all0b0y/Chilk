@@ -55,7 +55,7 @@ final class TrayModel {
     var openSettings: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
-    /// «Фокус…» → 1 / 2 / 3 h; the answer is a refusal line, `nil` = started.
+    /// «Не беспокоить…» → 1 / 2 / 3 h; the answer is a refusal line, `nil` = started.
     var startFocus: (Int) -> String? = { _ in nil }
     var endFocus: () -> Void = {}
 
@@ -183,7 +183,7 @@ struct TrayView: View {
         .controlSize(.small)
     }
 
-    /// Slice 4b: «Фокус…» (1 / 2 / 3 h), or «Фокус до 18:00 · Закончить» while it runs.
+    /// Slice 4b: «Не беспокоить…» (1 / 2 / 3 h), or «Не беспокою до 18:00 · Закончить» while it runs (slice 9).
     private var focusRow: some View {
         HStack(spacing: 6) {
             Group { focusControls }.help(Lines.focusHelp)

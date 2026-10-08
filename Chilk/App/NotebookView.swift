@@ -50,6 +50,9 @@ final class TicTacToeModel {
     var square: (Int) -> Void = { _ in }
     var again: () -> Void = {}
     var close: () -> Void = {}
+    /// Slice 9, decision 5: the dark sheet (remembered in games.json, shared by every notebook game).
+    var dark = false
+    var toggleTheme: () -> Void = {}
 }
 
 struct GameCard: Equatable {
@@ -57,8 +60,28 @@ struct GameCard: Equatable {
     let buttons: [String]
 }
 
-/// The notebook: a sheet of squared paper, the board drawn by hand, Chilk beside it at the sheet's right edge
-/// (he comes out from behind it, as from behind the screen edge). Light on purpose: it is paper.
+/// The sheet's colours (slice 9, decision 5; was: squared paper with a red margin): plain white, or a dark graphite
+/// sheet with light lines. One palette for every notebook game; the sticky request card stays light.
+struct NotebookPalette: Equatable {
+    var paper: Color
+    var graphite: Color
+    /// You write with a blue pen, Chilk draws with a pencil.
+    var ink: Color
+    /// A short reply written on the sheet («Бить обязательно!»).
+    var note: Color
+
+    static let light = NotebookPalette(paper: .white, graphite: Color(red: 0.24, green: 0.25, blue: 0.29),
+                                       ink: Color(red: 0.16, green: 0.34, blue: 0.68),
+                                       note: Color(red: 0.84, green: 0.33, blue: 0.33))
+    /// Graphite #2B2938 — the colour of Chilk's own outline — with light lines.
+    static let dark = NotebookPalette(paper: Color(red: 0x2B / 255, green: 0x29 / 255, blue: 0x38 / 255),
+                                      graphite: Color(red: 0xEC / 255, green: 0xE9 / 255, blue: 0xF2 / 255),
+                                      ink: Color(red: 0.55, green: 0.75, blue: 1.0),
+                                      note: Color(red: 1.0, green: 0.56, blue: 0.56))
+}
+
+/// The notebook: a plain sheet, the board drawn by hand, Chilk beside it at the sheet's right edge (he comes out
+/// from behind it, as from behind the screen edge). White, or dark with the ☀️/🌙 button (slice 9).
 struct NotebookView: View {
     @Bindable var model: TicTacToeModel
     let hero: HeroView
@@ -72,23 +95,24 @@ struct NotebookView: View {
         default: size
         }
     }
-    static let paper = Color(red: 0.985, green: 0.975, blue: 0.94)
-    static let grid = Color(red: 0.55, green: 0.72, blue: 0.86).opacity(0.38)
-    static let margin = Color(red: 0.9, green: 0.45, blue: 0.45).opacity(0.55)
-    /// You write with a blue pen, Chilk draws with a pencil.
-    static let ink = Color(red: 0.16, green: 0.34, blue: 0.68)
-    static let graphite = Color(red: 0.24, green: 0.25, blue: 0.29)
+    /// The sheet's palette now; the root view is rebuilt (`.id`) when it changes, so every board redraws with it.
+    nonisolated(unsafe) static var palette = NotebookPalette.light
+    static var paper: Color { palette.paper }
+    static var ink: Color { palette.ink }
+    static var graphite: Color { palette.graphite }
+    static var note: Color { palette.note }
 
     var body: some View {
+        let _ = (Self.palette = model.dark ? .dark : .light)
         ZStack(alignment: .bottomTrailing) {
-            SquaredPaper()
+            Self.paper
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(model.headline).font(.system(size: 22, weight: .semibold, design: .rounded))
                     Text(model.status).font(.system(size: 15, design: .rounded)).foregroundStyle(Self.graphite.opacity(0.75))
                     // A fixed line: a reply or «Бить обязательно!» must not move the board under the cursor.
                     Text(model.note ?? " ").font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundStyle(Self.margin.opacity(1))
+                        .foregroundStyle(Self.note)
                 }
                 .foregroundStyle(Self.graphite)
                 if model.kind == .battleship {
@@ -115,6 +139,10 @@ struct NotebookView: View {
             .padding(.bottom, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             HeroPortrait(view: hero).frame(width: hero.size.width, height: hero.size.height)
+            ThemeButton(dark: model.dark, toggle: model.toggleTheme)
+                .padding(.top, 12)
+                .padding(.trailing, 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             if let card = model.card {
                 RequestCard(card: card, answer: model.answer)
                     .frame(width: 250)
@@ -124,8 +152,9 @@ struct NotebookView: View {
             }
         }
         .frame(width: Self.size(for: model.kind).width, height: Self.size(for: model.kind).height)
-        .environment(\.colorScheme, .light)
+        .environment(\.colorScheme, model.dark ? .dark : .light)
         .tint(TrayView.peach)
+        .id(model.dark)                                    // a new palette: every board and mark is drawn again
     }
 
     private var setup: some View {
@@ -195,6 +224,25 @@ struct NotebookView: View {
     }
 }
 
+/// ☀️ / 🌙 in the sheet's corner (slice 9, decision 5): the sheet goes dark or white for every notebook game.
+private struct ThemeButton: View {
+    let dark: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            Image(systemName: dark ? "sun.max" : "moon")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(NotebookView.graphite.opacity(0.8))
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(NotebookView.graphite.opacity(0.08)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(dark ? GameLines.lightSheet : GameLines.darkSheet)
+    }
+}
+
 /// A request pinned to the sheet like a sticky note, with the request's own buttons (decision 32).
 private struct RequestCard: View {
     let card: GameCard
@@ -204,7 +252,7 @@ private struct RequestCard: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(card.text)
                 .font(.system(size: 15, weight: .medium, design: .rounded))
-                .foregroundStyle(NotebookView.graphite)
+                .foregroundStyle(NotebookPalette.light.graphite)    // a light sticky note on either sheet
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 ForEach(Array(card.buttons.enumerated()), id: \.offset) { i, title in
@@ -216,27 +264,8 @@ private struct RequestCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color(red: 1, green: 0.95, blue: 0.66))
             .shadow(color: .black.opacity(0.14), radius: 3, y: 2))
+        .environment(\.colorScheme, .light)
         .rotationEffect(.degrees(-1.2))
-    }
-}
-
-/// Squared paper with the red margin line.
-private struct SquaredPaper: View {
-    var body: some View {
-        Canvas { ctx, size in
-            ctx.fill(Path(CGRect(origin: .zero, size: size)), with: .color(NotebookView.paper))
-            var grid = Path()
-            let step: CGFloat = 18
-            var x: CGFloat = 0
-            while x <= size.width { grid.move(to: CGPoint(x: x, y: 0)); grid.addLine(to: CGPoint(x: x, y: size.height)); x += step }
-            var y: CGFloat = 0
-            while y <= size.height { grid.move(to: CGPoint(x: 0, y: y)); grid.addLine(to: CGPoint(x: size.width, y: y)); y += step }
-            ctx.stroke(grid, with: .color(NotebookView.grid), lineWidth: 0.7)
-            var margin = Path()
-            margin.move(to: CGPoint(x: 46, y: 0))
-            margin.addLine(to: CGPoint(x: 46, y: size.height))
-            ctx.stroke(margin, with: .color(NotebookView.margin), lineWidth: 1.2)
-        }
     }
 }
 
