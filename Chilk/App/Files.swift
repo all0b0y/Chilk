@@ -190,7 +190,8 @@ final class Files {
         do {
             let refused = try await add(kind, urls: urls)
             if let first = refused.first {
-                lines = Self.alertLines(first.error, names: urls.count > 1 ? refused.map(\.url.lastPathComponent) : [])
+                lines = urls.count == 1 ? Self.alertLines(first.error)
+                    : Self.alertLines(FolderAccessStore.RefusalSummary(chosen: urls.count, refused: refused))
             }
             log?("folders chosen (\(kind.rawValue)): \(urls.count), refused \(refused.map(\.url.lastPathComponent)), "
                  + "shared now \(grants.map { "\($0.name)/\($0.kind.rawValue)" })")
@@ -213,18 +214,41 @@ final class Files {
 
     private func report(_ error: Error) { show(Self.alertLines(error)) }
 
-    /// The alert's two lines; `names` — the refused folders when several were chosen (the others were added).
-    static func alertLines(_ error: Error, names: [String] = []) -> (title: String, text: String) {
-        let list = names.map { "«\($0)»" }.joined(separator: ", ")
-        let title = names.isEmpty ? String(localized: "Не получилось изменить доступ")
-                                  : String(localized: "Не получилось добавить: \(list)")
-        switch error {
-        case FolderAccessStore.AccessError.invalidVault:
-            return (title, String(localized: "Выбери корневую папку хранилища Obsidian: внутри должна быть папка .obsidian."))
-        case FolderAccessStore.AccessError.tooBroad:
-            return (title, String(localized: "Целиком домашнюю папку или диск дать нельзя — выбери папку внутри."))
-        default:
+    /// The alert's two lines for one folder or a change of access.
+    static func alertLines(_ error: Error) -> (title: String, text: String) {
+        let title = String(localized: "Не получилось изменить доступ")
+        switch FolderAccessStore.RefusalSummary.Reason(error) {
+        case .unavailable:
             return (title, String(localized: "Папка недоступна или выбор не удалось сохранить. Прежний доступ не изменён. Скрытые и системные папки выбирать нельзя."))
+        case let reason:
+            return (title, reasonText(reason))
+        }
+    }
+
+    /// The alert after a multiple choice: the refused folders in the title; each reason once — with its folders when
+    /// the reasons differ; then whether the rest were added (review 2026-10-08: the first reason alone could be untrue
+    /// for the others, and «Прежний доступ не изменён» read as «nothing happened»).
+    static func alertLines(_ summary: FolderAccessStore.RefusalSummary) -> (title: String, text: String) {
+        let quoted = { (names: [String]) in names.map { "«\($0)»" }.joined(separator: ", ") }
+        let title = String(localized: "Не получилось добавить: \(quoted(summary.names))")
+        let reasons = summary.groups.map { group -> String in
+            let text = reasonText(group.reason)
+            return summary.groups.count == 1 ? text : quoted(group.names) + " — " + text.prefix(1).lowercased() + text.dropFirst()
+        }
+        let tail = summary.othersAdded ? String(localized: "Остальные добавлены.") : String(localized: "Прежний доступ не изменён.")
+        return (title, (reasons + [tail]).joined(separator: "\n"))
+    }
+
+    private static func reasonText(_ reason: FolderAccessStore.RefusalSummary.Reason) -> String {
+        switch reason {
+        case .notAVault:
+            String(localized: "Выбери корневую папку хранилища Obsidian: внутри должна быть папка .obsidian.")
+        case .tooBroad:
+            String(localized: "Целиком домашнюю папку или диск дать нельзя — выбери папку внутри.")
+        case .tooMany:
+            String(localized: "Больше \(FolderAccessStore.maxGrants) папок дать нельзя — убери ненужные.")
+        case .unavailable:
+            String(localized: "Папка недоступна или выбор не удалось сохранить. Скрытые и системные папки выбирать нельзя.")
         }
     }
 

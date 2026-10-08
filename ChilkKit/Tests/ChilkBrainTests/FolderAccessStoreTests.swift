@@ -172,4 +172,53 @@ struct FolderAccessStoreTests {
         let reopened = try await FolderAccessStore(file: file, allowedContainer: trusted, home: home)
         #expect(await reopened.grants.map(\.name) == ["MYMIND", "STUDY"])
     }
+
+    /// Review 2026-10-08: in one choice the same vault twice, or a link to it, is still one grant; a hidden folder is
+    /// refused on its own; past the limit the rest are refused as too many while the earlier ones stay.
+    @Test func aChoiceSkipsRepeatsRefusesHiddenFoldersAndStopsAtTheLimit() async throws {
+        let root = try SelectedFolderToolTests().fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let a = root.appendingPathComponent("A"), hidden = root.appendingPathComponent(".hidden")
+        for dir in [a, hidden] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+        let link = root.appendingPathComponent("A-link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: a)
+        let store = try await FolderAccessStore(file: root.appendingPathComponent("grants.json"),
+                                                allowedContainer: root.deletingLastPathComponent())
+        let refused = await store.add(.files, urls: [a, a, link, hidden])
+        #expect(refused.map(\.url) == [hidden])
+        #expect(refused.map { FolderAccessStore.RefusalSummary.Reason($0.error) } == [.unavailable])
+        #expect(await store.grants.map(\.name) == ["A"])
+
+        var many: [URL] = []
+        for index in 0..<FolderAccessStore.maxGrants {
+            let dir = root.appendingPathComponent("F\(index)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            many.append(dir)
+        }
+        let past = await store.add(.files, urls: many)
+        #expect(past.map(\.url) == [many[FolderAccessStore.maxGrants - 1]])
+        #expect(past.map { FolderAccessStore.RefusalSummary.Reason($0.error) } == [.tooMany])
+        #expect(await store.grants.count == FolderAccessStore.maxGrants)
+    }
+
+    /// Review 2026-10-08: one alert for a multiple choice names every refused folder in the order chosen, gives each
+    /// reason once with its folders, and knows whether the rest were added.
+    @Test func refusalsAreGroupedByReasonInTheOrderChosen() {
+        let url = { (name: String) in URL(fileURLWithPath: "/v/\(name)", isDirectory: true) }
+        let refused = [
+            FolderAccessStore.Refusal(url: url("A"), error: FolderAccessStore.AccessError.invalidVault),
+            FolderAccessStore.Refusal(url: url("B"), error: FolderAccessStore.AccessError.invalidFolder),
+            FolderAccessStore.Refusal(url: url("C"), error: FolderAccessStore.AccessError.invalidVault),
+            FolderAccessStore.Refusal(url: url("D"), error: CocoaError(.fileReadNoPermission)),
+            FolderAccessStore.Refusal(url: url("E"), error: FolderAccessStore.AccessError.tooMany),
+        ]
+        let summary = FolderAccessStore.RefusalSummary(chosen: 6, refused: refused)
+        #expect(summary.names == ["A", "B", "C", "D", "E"])
+        #expect(summary.groups == [.init(reason: .notAVault, names: ["A", "C"]),
+                                   .init(reason: .unavailable, names: ["B", "D"]),
+                                   .init(reason: .tooMany, names: ["E"])])
+        #expect(summary.othersAdded)
+        #expect(FolderAccessStore.RefusalSummary(chosen: 2, refused: Array(refused.prefix(2))).othersAdded == false)
+        #expect(FolderAccessStore.RefusalSummary.Reason(FolderAccessStore.AccessError.tooBroad) == .tooBroad)
+    }
 }

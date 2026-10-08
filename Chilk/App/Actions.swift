@@ -5,12 +5,9 @@ import ChilkBrain
 
 /// Test state is separate from both personal balance aggregates and the official Chilk Codex login.
 enum AppState {
-    static var directory: URL {
-        if let path = ProcessInfo.processInfo.environment["CHILK_STATE_DIR"], !path.isEmpty {
-            return URL(fileURLWithPath: path, isDirectory: true)
-        }
-        return CodexSetup.defaultDataDir
-    }
+    /// An acceptance run with its own state (CHILK_STATE_DIR set and non-empty): demo hooks act only then.
+    static var isolated: URL? { StateDir.isolated(in: ProcessInfo.processInfo.environment) }
+    static var directory: URL { isolated ?? CodexSetup.defaultDataDir }
 }
 
 @MainActor

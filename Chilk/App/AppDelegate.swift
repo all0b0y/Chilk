@@ -362,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        if let s = env["CHILK_DEMO_CRASH"].flatMap(Double.init), env["CHILK_STATE_DIR"] != nil {
+        if let s = env["CHILK_DEMO_CRASH"].flatMap(Double.init), AppState.isolated != nil {
             Timer.scheduledTimer(withTimeInterval: s, repeats: false) { _ in fatalError("CHILK_DEMO_CRASH: acceptance crash") }
         }
         if let spec = env["CHILK_DEMO_GAME"] { game.demo(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
@@ -371,14 +371,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let spec = env["CHILK_DEMO_COURT"] { game.demoCourt(spec, snapshots: env["CHILK_DEMO_GAME_SNAPSHOT"]) }
         // SPEC «Умолчания»: launch at login is on until the user switches it off (not in isolated acceptance runs).
         // Saved only once it really worked: a failed registration is tried again at the next launch.
-        if settings.settings.launchAtLogin == nil, env["CHILK_STATE_DIR"] == nil {
+        if settings.settings.launchAtLogin == nil, AppState.isolated == nil {
             if let failure = LoginItem.set(true) {
                 balance.log("launch at login not registered, will retry: \(failure)")
             } else {
                 settings.update { $0.launchAtLogin = true }
                 balance.log("launch at login on by default")
             }
-        } else if settings.settings.launchAtLogin == true, env["CHILK_STATE_DIR"] == nil {
+        } else if settings.settings.launchAtLogin == true, AppState.isolated == nil {
             _ = LoginItem.set(true)                         // follows the app if it moved (build folder → /Applications)
         }
         if env["CHILK_DEMO_TALK"] != nil {
@@ -414,7 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Acceptance only: CHILK_DEMO_PICK="obsidian:/a|/b" sends these folders through the panel's «Разрешить» after
         // 1.5 s, several at once (before CHILK_DEMO_MAIN's window at 3 s); what the alert would say goes to the log.
-        if let spec = env["CHILK_DEMO_PICK"], env["CHILK_STATE_DIR"] != nil {
+        if let spec = env["CHILK_DEMO_PICK"], AppState.isolated != nil {
             Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak actions, weak balance] _ in
                 MainActor.assumeIsolated { actions?.files.demoPick(spec) { balance?.log($0) } }
             }

@@ -92,6 +92,47 @@ public actor FolderAccessStore {
         public let error: any Error
     }
 
+    /// What the one alert after a multiple choice says (review 2026-10-08): every refused folder in the order chosen,
+    /// each reason once with its folders, and whether any chosen folder is in the list now.
+    public struct RefusalSummary: Equatable, Sendable {
+        public enum Reason: Equatable, Sendable {
+            case notAVault, tooBroad, tooMany, unavailable
+
+            public init(_ error: any Error) {
+                switch error as? AccessError {
+                case .invalidVault: self = .notAVault
+                case .tooBroad: self = .tooBroad
+                case .tooMany: self = .tooMany
+                default: self = .unavailable
+                }
+            }
+        }
+
+        public struct Group: Equatable, Sendable {
+            public let reason: Reason
+            public let names: [String]
+        }
+
+        public let names: [String]
+        public let groups: [Group]                                  // reasons in the order first met
+        public let othersAdded: Bool
+
+        public init(chosen: Int, refused: [Refusal]) {
+            names = refused.map(\.url.lastPathComponent)
+            var groups: [Group] = []
+            for refusal in refused {
+                let reason = Reason(refusal.error), name = refusal.url.lastPathComponent
+                if let index = groups.firstIndex(where: { $0.reason == reason }) {
+                    groups[index] = Group(reason: reason, names: groups[index].names + [name])
+                } else {
+                    groups.append(Group(reason: reason, names: [name]))
+                }
+            }
+            self.groups = groups
+            othersAdded = chosen > refused.count
+        }
+    }
+
     /// Several folders chosen at once (the panel allows a multiple selection): each is added as by `add(_:url:)`, in
     /// order; the ones that cannot be added come back with the reason, the others are kept.
     public func add(_ kind: ChilkFileScope, urls: [URL]) -> [Refusal] {

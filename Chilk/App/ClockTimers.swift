@@ -56,7 +56,7 @@ final class ClockTimers {
     /// Once per installed build: the shortcut is checked and, if missing or old, offered. Demo runs with an isolated
     /// state dir never pop the import window unless the Clock is fake.
     func checkAtLaunch() {
-        let isolated = ProcessInfo.processInfo.environment["CHILK_STATE_DIR"] != nil
+        let isolated = AppState.isolated != nil
         guard !isolated || fake != nil else { return }
         let offered = (try? String(contentsOf: markFile, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard offered != Self.build else { return }
