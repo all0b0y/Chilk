@@ -169,8 +169,9 @@ public enum PlanDay {
 public struct PlanDraft: Equatable, Sendable {
     public let day: Date
     public private(set) var items: [PlanItem] = []
-    /// Titles already in the plan for that day (decision 13: «Уже в плане: …», not created again).
-    public let already: [String]
+    /// Titles already in the plan for that day (decision 13: «Уже в плане: …», not created again). Slice 10, decision 8:
+    /// re-read on every turn and every change in Reminders, not once at the start.
+    public private(set) var already: [String]
 
     public init(day: Date, already: [String]) {
         self.day = day
@@ -189,6 +190,22 @@ public struct PlanDraft: Equatable, Sendable {
         }
     }
 
+    /// Slice 10, decision 8: what is in Reminders now; a draft thing written meanwhile («+» in the sheet) leaves the draft.
+    public mutating func refresh(already titles: [String]) {
+        already = titles
+        let known = Set(titles.map(Self.key))
+        items.removeAll { known.contains(Self.key($0.title)) }
+    }
+
+    /// Slice 10, decision 3: the user's own edit in «Лист дня» — nil removes the thing.
+    @discardableResult
+    public mutating func edit(_ index: Int, to item: PlanItem?) -> PlanItem? {
+        guard items.indices.contains(index) else { return nil }
+        let old = items[index]
+        if let item { items[index] = item } else { items.remove(at: index) }
+        return old
+    }
+
     /// Decision 12: one card for the whole plan (nil: nothing to plan).
     public func card() -> ActionCard? {
         items.isEmpty ? nil : ActionCard(kind: .plan(day: day, items: items, already: already))
@@ -196,5 +213,61 @@ public struct PlanDraft: Equatable, Sendable {
 
     static func key(_ title: String) -> String {
         title.lowercased().replacingOccurrences(of: "ё", with: "е").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+// MARK: - Slice 10 (SPEC «Срез 10», decisions 2, 5): what Codex hears about the user's own edits and the card's end
+
+/// «11:00 созвон» / «купить хлеб».
+public extension PlanItem {
+    var label: String { (time.map { $0.text + " " } ?? "") + title }
+}
+
+/// The user's edits of a draft or a plan card in «Лист дня» — the model sends the whole list again on its next turn, so it
+/// must know what the user took out or changed, or the old list comes back (Б2).
+public struct PlanEdits: Equatable, Sendable {
+    public private(set) var removed: [String] = []
+    public private(set) var changed: [String] = []
+    public init() {}
+
+    public var isEmpty: Bool { removed.isEmpty && changed.isEmpty }
+
+    public mutating func record(_ old: PlanItem, _ new: PlanItem?) {
+        guard let new else { removed.append(old.label); return }
+        if new.label != old.label { changed.append(old.label + " → " + new.label) }
+    }
+
+    /// «убрано пользователем — A, B; изменено пользователем — X → Y» (nil: nothing).
+    public var text: String? {
+        var parts: [String] = []
+        if !removed.isEmpty { parts.append("убрано пользователем — " + removed.joined(separator: ", ")) }
+        if !changed.isEmpty { parts.append("изменено пользователем — " + changed.joined(separator: ", ")) }
+        return parts.isEmpty ? nil : parts.joined(separator: "; ")
+    }
+}
+
+/// Decision 2: the end of a plan card, told to Codex on the next turn.
+public enum PlanOutcome {
+    public static let rule = "Убранное пользователем не предлагай снова, пока он сам его не назовёт"
+
+    /// «Да» (or «Записать» in the sheet): what was written, what Reminders refused, the user's edits.
+    public static func written(day: Date, written: [String], failed: [String], edits: PlanEdits, now: Date,
+                               calendar: Calendar) -> String {
+        let dayText: String = PlanDay.title(day, now: now, calendar: calendar, accusative: true)
+        let iso: String = PlanDay.iso(day, calendar: calendar)
+        let list: String = written.isEmpty ? "ничего" : written.joined(separator: ", ")
+        var parts: [String] = ["итог карточки плана на \(dayText) (\(iso)): записано — \(list)"]
+        if !failed.isEmpty { parts.append("не записалось — " + failed.joined(separator: ", ")) }
+        if let e = edits.text { parts.append(e) }
+        var text = parts.joined(separator: "; ") + ". Черновика больше нет; новое на этот день — новый chilk_plan collect"
+        if !edits.removed.isEmpty { text += ". " + rule }
+        return text
+    }
+
+    /// «Нет»: nothing was written.
+    public static func declined(day: Date, now: Date, calendar: Calendar) -> String {
+        let dayText: String = PlanDay.title(day, now: now, calendar: calendar, accusative: true)
+        let iso: String = PlanDay.iso(day, calendar: calendar)
+        return "карточку плана на \(dayText) (\(iso)) пользователь отклонил — ничего не записано, черновика больше нет"
     }
 }
