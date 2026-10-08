@@ -54,6 +54,20 @@ struct ActionCardTests {
         }
     }
 
+    /// Slice 10, decision 10 (Б4): the user's own words of 2026-10-08 were corrections and the card came back twice.
+    @Test func aYesIsHeardByItsStemNotOnlyByExactWords() {
+        for yes in ["Да пиши", "Запиши пожалуйста я разрешаю записать", "запиши", "записать", "сохрани", "добавь",
+                    "поставь", "удали", "отправляй", "можно", "валяй", "да, запиши это", "напиши её", "давай записывай",
+                    "да, сохрани заметку", "разрешаю", "вперёд", "да, создавай", "отметь", "сделай"] {
+            #expect(CardAnswer.parse(yes) == .yes, "\(yes)")
+        }
+        for other in ["да, но в 16", "запиши в 16", "добавь ещё хлеб", "напиши лучше «купить молоко»", "запиши?",
+                      "можно в пятницу", "пиши в заметку про работу", "не записывай", "запиши потом"] {
+            #expect(CardAnswer.parse(other) != .yes, "\(other)")
+        }
+        #expect(CardAnswer.parse("не записывай") == .no)
+    }
+
     @Test func aClockTimerCardSaysTheLengthAndWhenItRings() {
         let card = ActionCard(kind: .timer(title: "Чай", seconds: 300))
         #expect(card.lines(now: now, calendar: cal) == ["⏱ Таймер: Чай", "5 мин — до 21:05", "«Часы»"])

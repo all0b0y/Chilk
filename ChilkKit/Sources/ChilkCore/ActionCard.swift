@@ -345,15 +345,29 @@ public enum CardAnswer: Equatable, Sendable {
     private static let neutral: Set<String> = ["чилк", "чилка", "эй", "пожалуйста", "спасибо", "ну", "а", "так",
                                                "вот", "всё", "все", "уж"]
 
+    /// Slice 10, decision 10: the forms of an assent verb — «запиши», «записать», «пиши», «сохрани», «поставь»… — by the
+    /// word's start (a verb said in any form is still the user's own «да» to what the card shows).
+    private static let yesStems: [String] = ["пиш", "напиш", "запиш", "допиш", "запис", "сохран", "добав", "став",
+                                             "постав", "отправ", "удал", "перенес", "перенос", "отмеч", "отмет",
+                                             "сдела", "созда", "разреш"]
+    private static let yesExtra: Set<String> = ["можно", "валяй", "вперед", "запускай", "погнали", "пойдет"]
+    /// Slice 10: the words that only point at the card («запиши её», «да, сохрани заметку»).
+    private static let pointers: Set<String> = ["я", "это", "ее", "его", "их", "мне", "заметку", "напоминание", "дело",
+                                                "дела", "план", "событие", "таймер", "тогда", "уже", "просто"]
+
+    static func isYes(_ word: String) -> Bool {
+        yesWords.contains(word) || yesExtra.contains(word) || yesStems.contains { word.hasPrefix($0) }
+    }
+
     public static func parse(_ text: String) -> CardAnswer {
         // A question is not an answer («точно?», «да?»): the model explains, the card stays.
         if text.contains("?") { return .correction(text) }
         let words = text.lowercased().replacingOccurrences(of: "ё", with: "е")
             .split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        let meaningful = words.filter { !neutral.contains($0) }
+        let meaningful = words.filter { !neutral.contains($0) && !pointers.contains($0) }
         guard !meaningful.isEmpty else { return .correction(text) }
         if isNo(meaningful) { return .no }
-        return meaningful.allSatisfy(yesWords.contains) ? .yes : .correction(text)
+        return meaningful.allSatisfy(isYes) ? .yes : .correction(text)
     }
 
     /// Every word says «no»: a «нет» word, or «не» followed by «надо / нужно / ставь…».
