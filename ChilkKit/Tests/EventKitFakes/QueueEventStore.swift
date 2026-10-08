@@ -36,5 +36,11 @@ final class MadeUpReminder: EKReminder {
         set {}
     }
 
+    /// Slice 9b: the app reads «done» too.
+    override var isCompleted: Bool {
+        get { false }
+        set {}
+    }
+
     static func make() -> EKReminder { class_createInstance(MadeUpReminder.self, 0) as! EKReminder }
 }

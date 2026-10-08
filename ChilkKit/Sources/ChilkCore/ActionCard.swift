@@ -32,6 +32,9 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         /// One of Chilk's notes rewritten: the new title and the whole new text (`oldText`: what it replaces).
         case noteRewrite(id: String, oldTitle: String, oldText: String, title: String, text: String)
         case noteDelete(id: String, title: String)
+        /// Slice 9b (decisions 9–12): a whole day's plan — one reminder of the «Чилк» list per item, with a time or on the
+        /// date only. `already`: titles that are in the plan for that day already (shown, not created again).
+        case plan(day: Date, items: [PlanItem], already: [String])
     }
 
     public let id: UUID
@@ -56,7 +59,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .reminderChange(_, _, let oldDue, _, let due): due != oldDue ? due : nil
         case .event(_, let start, _, _): start
         case .eventChange(_, _, let oldStart, _, _, _, let start, _): start != oldStart ? start : nil
-        case .reminderComplete, .reminderDelete, .timer, .eventDelete, .note, .noteAppend, .noteRewrite, .noteDelete: nil
+        case .reminderComplete, .reminderDelete, .timer, .eventDelete, .note, .noteAppend, .noteRewrite, .noteDelete, .plan: nil
         }
     }
 
@@ -66,6 +69,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         switch kind {
         case .event(_, let start, _, true): return dayOver(start)
         case .eventChange(_, _, let oldStart, _, true, _, let start, _): return start != oldStart && dayOver(start)
+        case .plan(let day, _, _): return dayOver(day)            // a plan of today stands until the day is over
         default: return (when.map { $0 <= now }) ?? false
         }
     }
@@ -73,7 +77,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
     /// Can be edited in the «Изменить» panel (decision 5): title and date/time; completing or deleting cannot.
     public var editable: Bool {
         switch kind {
-        case .reminder, .message, .reminderChange, .timer, .event, .eventChange, .note, .noteAppend, .noteRewrite: true
+        case .reminder, .message, .reminderChange, .timer, .event, .eventChange, .note, .noteAppend, .noteRewrite, .plan: true
         case .reminderComplete, .reminderDelete, .eventDelete, .noteDelete: false
         }
     }
@@ -132,6 +136,8 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
                 + Self.excerpt(oldText, prefix: "Было: ", limit: 120) + Self.excerpt(text, prefix: "Станет: ") + [notesPlace]
         case .noteDelete(_, let title):
             out = ["🗑 Удалить заметку: \(title)", notesPlace + " · останется в «Недавно удалённых»"]
+        case .plan(let day, let items, let already):
+            out = Self.planLines(day: day, items: items, already: already, now: now, calendar: calendar) + [place]
         }
         if expired(now: now, calendar: calendar) { out.append("Время уже прошло — измени его") }
         return out
@@ -202,7 +208,30 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .noteAppend(_, let title, let text): return "append to note «\(title)»: «\(text)»"
         case .noteRewrite(_, let oldTitle, _, let title, let text): return "rewrite note «\(oldTitle)» → «\(title)»: «\(text)»"
         case .noteDelete(_, let title): return "delete note «\(title)»"
+        case .plan(let day, let items, let already):
+            let (timed, untimed) = PlanDay.ordered(items)
+            var parts = timed.map { "\($0.time!.text) «\($0.title)»" + ($0.guessed ? " (guessed time)" : "") }
+            parts += untimed.map { "no time «\($0.title)»" }
+            return "day plan for \(PlanDay.iso(day, calendar: calendar)) (\(PlanDay.title(day, now: Date(), calendar: calendar))): "
+                + parts.joined(separator: "; ") + (already.isEmpty ? "" : "; already in the plan: " + already.map { "«\($0)»" }.joined(separator: ", "))
         }
+    }
+
+    /// Decision 12: «🗓 План на четверг, 9 октября», the timed items by time (guesses marked), «Без времени: …»,
+    /// «Уже в плане: …». A time of today that has passed is written without a time — the card says so.
+    static func planLines(day: Date, items: [PlanItem], already: [String], now: Date, calendar: Calendar) -> [String] {
+        var out = ["🗓 План на " + PlanDay.title(day, now: now, calendar: calendar, accusative: true)]
+        let (timed, untimed) = PlanDay.ordered(items)
+        for item in timed.prefix(PlanDay.cardTimedLines) {
+            let t = item.time!
+            var line = t.text + (item.guessed ? " · " + CardFormat.part(t.hour) + "?" : "") + " — " + item.title
+            if PlanDay.passed(item, day: day, now: now, calendar: calendar) { line += " · уже прошло, без времени" }
+            out.append(line)
+        }
+        if timed.count > PlanDay.cardTimedLines { out.append("…и ещё \(timed.count - PlanDay.cardTimedLines) со временем") }
+        if !untimed.isEmpty { out.append("Без времени: " + untimed.map(\.title).joined(separator: ", ")) }
+        if !already.isEmpty { out.append("Уже в плане: " + already.joined(separator: ", ")) }
+        return out
     }
 
     /// Slice 8f: a note's text on the card — its lines joined by « / », at most `limit` characters («…» when cut; the

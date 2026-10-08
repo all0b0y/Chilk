@@ -128,6 +128,8 @@ final class CardDesk {
         // «нет, допиши это в «Покупки»» turns a new note into an append (the same text).
         case (.note(let t1, let x1), .note(let t2, let x2)): t1 == t2 || sameText(x1, x2)
         case (.note(_, let x1), .noteAppend(_, _, let x2)), (.noteAppend(_, _, let x1), .note(_, let x2)): sameText(x1, x2)
+        // Slice 9b: a correction of the plan of the same day («маме не в 15, а в 16») replaces its card.
+        case (.plan(let d1, _, _), .plan(let d2, _, _)): Calendar.current.isDate(d1, inSameDayAs: d2)
         default: noteID(a.kind).map { $0 == noteID(b.kind) } ?? false
         }
     }
@@ -497,6 +499,9 @@ final class CardEditModel {
             title = t; date = Date(); text = x; hasText = true; hasDate = false; startDate = nil; dateOnly = false
         case .noteDelete(_, let t):
             title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
+        case .plan(let d, let items, _):
+            // Slice 9b: a plan is edited as a list (`PlanEditModel`); this one-item model is never shown for it.
+            title = items.first?.title ?? ""; date = d; text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
         }
         hasMinutes = length != nil
         if let length {

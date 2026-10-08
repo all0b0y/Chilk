@@ -1,3 +1,4 @@
+import ChilkCore
 import Foundation
 
 public struct ReminderInfo: Sendable, Equatable {
@@ -5,10 +6,17 @@ public struct ReminderInfo: Sendable, Equatable {
     public let due: Date?
     /// EventKit's `calendarItemIdentifier` (slice 8c: the model changes a reminder by it); nil from older stores.
     public let id: String?
-    public init(title: String, due: Date?, id: String? = nil) {
+    /// Slice 9b (decision 9): the due date has a time of day and an alarm; false — a date only (a plan item «без
+    /// времени»: no alarm, it waits in «Сегодня»).
+    public let timed: Bool
+    /// Slice 9b: ticked off (the plan sheet reads a day's done items too).
+    public let done: Bool
+    public init(title: String, due: Date?, id: String? = nil, timed: Bool = true, done: Bool = false) {
         self.title = title
         self.due = due
         self.id = id
+        self.timed = timed && due != nil
+        self.done = done
     }
 }
 
@@ -17,12 +25,25 @@ public enum ReminderAccessError: Error { case denied, unavailable, notFound }
 /// Apple Reminders, Chilk's own «Чилк» list only (decision 2026-10-05). The app supplies EventKit; access is asked
 /// on the first request, never at launch.
 public protocol ReminderStore: Sendable {
-    func add(title: String, due: Date) async throws -> ReminderInfo
+    /// `timed: false` (slice 9b, decision 9): the date only — no alarm.
+    func add(title: String, due: Date, timed: Bool) async throws -> ReminderInfo
     func open() async throws -> [ReminderInfo]
-    /// Slice 8c (decision 7): only a reminder of the «Чилк» list, only after the card's «Да».
-    func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo
-    func complete(id: String) async throws
+    /// Slice 8c (decision 7): only a reminder of the «Чилк» list, only after the card's «Да» (slice 9b: or a direct
+    /// action on Chilk's plan sheet). `due` nil keeps the date as it is; `timed` matters only with a `due`.
+    func update(id: String, title: String?, due: Date?, timed: Bool) async throws -> ReminderInfo
+    /// Slice 9b (decision 14): ticked or unticked; completing is `setDone(id:done: true)`.
+    func setDone(id: String, done: Bool) async throws
     func delete(id: String) async throws
+    /// Slice 9b: every reminder of the «Чилк» list due on `day` — open and done, with a time or on the date only.
+    func day(_ day: Date) async throws -> [ReminderInfo]
+}
+
+public extension ReminderStore {
+    func add(title: String, due: Date) async throws -> ReminderInfo { try await add(title: title, due: due, timed: true) }
+    func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo {
+        try await update(id: id, title: title, due: due, timed: true)
+    }
+    func complete(id: String) async throws { try await setDone(id: id, done: true) }
 }
 
 /// Reading here; writing (create, change, complete, delete) only from a confirmed card (slice 8c, decisions 3–7):
@@ -53,6 +74,24 @@ public struct ChilkReminderExecutor: Sendable {
     public func create(title: String, due: Date) async -> CodexToolResult {
         await run { .ok(Self.describe(try await store.add(title: title, due: due))) }
     }
+
+    /// Slice 9b: one item of a confirmed plan (or one added on the plan sheet) — with a time, or on the date only.
+    public func create(title: String, due: Date, timed: Bool) async -> CodexToolResult {
+        await run { .ok(Self.describe(try await store.add(title: title, due: due, timed: timed))) }
+    }
+
+    /// Slice 9b: a direct edit on the plan sheet — the title, and the time (`due` with `timed`) or the date only.
+    public func edit(id: String, title: String?, due: Date?, timed: Bool) async -> CodexToolResult {
+        await run { .ok(Self.describe(try await store.update(id: id, title: title, due: due, timed: timed))) }
+    }
+
+    /// Slice 9b: a tick on the plan sheet (and its undo).
+    public func setDone(id: String, done: Bool) async -> CodexToolResult {
+        await run { try await store.setDone(id: id, done: done); return .ok(["done": .bool(done)]) }
+    }
+
+    /// Slice 9b: the day's plan as it is in the «Чилк» list (throws on no access).
+    public func day(_ day: Date) async throws -> [ReminderInfo] { try await store.day(day) }
 
     public func change(id: String, title: String?, due: Date?) async -> CodexToolResult {
         await run { .ok(Self.describe(try await store.update(id: id, title: title, due: due))) }
@@ -99,7 +138,12 @@ public struct ChilkReminderExecutor: Sendable {
         f.timeZone = .current
         var fields: [String: JSON] = ["title": .string(info.title), "list": .string(listTitle)]
         if let id = info.id { fields["id"] = .string(id) }
-        if let due = info.due { fields["at"] = .string(f.string(from: due)) }
+        // Slice 9b: a plan item without a time has a day, not a midnight time.
+        if let due = info.due {
+            if info.timed { fields["at"] = .string(f.string(from: due)) }
+            else { fields["day"] = .string(PlanDay.iso(due, calendar: .current)) }
+        }
+        if info.done { fields["done"] = .bool(true) }
         return .object(fields)
     }
 }

@@ -11,9 +11,9 @@ struct ChilkReminderTests {
         var items: [ReminderInfo] = []
         func setDeny(_ value: Bool) { deny = value }
         func setItems(_ value: [ReminderInfo]) { items = value }
-        func add(title: String, due: Date) async throws -> ReminderInfo {
+        func add(title: String, due: Date, timed: Bool) async throws -> ReminderInfo {
             if deny { throw ReminderAccessError.denied }
-            let info = ReminderInfo(title: title, due: due)
+            let info = ReminderInfo(title: title, due: due, timed: timed)
             added.append(info)
             return info
         }
@@ -22,14 +22,18 @@ struct ChilkReminderTests {
             return items
         }
         var changed: [String] = []
-        func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo {
+        func update(id: String, title: String?, due: Date?, timed: Bool) async throws -> ReminderInfo {
             guard let r = items.first(where: { $0.id == id }) else { throw ReminderAccessError.notFound }
             changed.append("update \(id)")
-            return ReminderInfo(title: title ?? r.title, due: due ?? r.due, id: id)
+            return ReminderInfo(title: title ?? r.title, due: due ?? r.due, id: id, timed: due == nil ? r.timed : timed)
         }
-        func complete(id: String) async throws {
+        func setDone(id: String, done: Bool) async throws {
             guard items.contains(where: { $0.id == id }) else { throw ReminderAccessError.notFound }
-            changed.append("complete \(id)")
+            changed.append(done ? "complete \(id)" : "reopen \(id)")
+        }
+        func day(_ day: Date) async throws -> [ReminderInfo] {
+            if deny { throw ReminderAccessError.denied }
+            return items.filter { $0.due.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
         }
         func delete(id: String) async throws {
             guard items.contains(where: { $0.id == id }) else { throw ReminderAccessError.notFound }

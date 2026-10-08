@@ -14,8 +14,10 @@ enum AppState {
 final class Actions {
     let executor: ChilkToolExecutor?
     let files: Files
-    private let reminders = ChilkReminderExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil
-                                                  ? FakeReminders() : EventKitReminders())
+    /// CHILK_FAKE_REMINDERS=1 | seed: a fake list in the state dir (slice 9b: `seed` plans three things for tomorrow).
+    let reminders = ChilkReminderExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil
+                                          ? FakeReminders(seed: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] == "seed")
+                                          : EventKitReminders())
     /// Slice 8e: Chilk's own «Чилк» calendar (CHILK_FAKE_CALENDAR=1 | seed: a fake in the state dir for acceptance runs).
     private let calendar = ChilkCalendarExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] != nil
                                                  ? FakeCalendar(seed: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] == "seed")
@@ -364,7 +366,32 @@ final class Actions {
         let result: CodexToolResult
         let line: String
         let tool: String
+        /// Slice 9b (decision 12): some of a plan's items were written — he names the rest.
+        var partial: String?
         switch card.kind {
+        case .plan(let day, let items, _):
+            tool = "card_plan"
+            let entries = PlanDay.entries(day: day, items: items, now: started, calendar: .current)
+            var failed: [String] = []
+            var failure: CodexToolResult?
+            for entry in entries {
+                let r = await reminders.create(title: entry.title, due: entry.due, timed: entry.timed)
+                if !r.success { failed.append(entry.title); failure = r }
+            }
+            let written = entries.count - failed.count
+            let dayText = PlanDay.title(day, now: started, calendar: .current, accusative: true)
+            let things = RussianPlural.form(written, String(localized: "дело"), String(localized: "дела"), String(localized: "дел"))
+            if failed.isEmpty {
+                result = .ok(["created": .number(Double(written))])
+                line = String(localized: "Готово: план на \(dayText) — \(written) \(things) в «Напоминаниях»")
+            } else if written == 0 {
+                result = failure ?? .failure("reminders_unreachable")
+                line = ""
+            } else {
+                result = .ok(["created": .number(Double(written)), "failed": .number(Double(failed.count))])
+                line = String(localized: "Записал \(written) из \(entries.count). Не записалось: \(failed.joined(separator: ", "))")
+                partial = line
+            }
         case .reminder(let title, let due):
             tool = "card_reminder"
             result = await reminders.create(title: title, due: due)
@@ -441,7 +468,8 @@ final class Actions {
         journal.write(ToolJournal.line(at: started, tool: tool,
                                        outcome: result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")),
                                        seconds: Date().timeIntervalSince(started)))
-        balance?.log("card \(tool) success=\(result.success)")
+        balance?.log("card \(tool) success=\(result.success)" + (partial == nil ? "" : " (partly)"))
+        if let partial { return (false, partial) }
         if result.success { return (true, line) }
         if case .timer = card.kind { return (false, line) }
         let code = ToolJournal.code(of: result.value["error"]?.string ?? "")

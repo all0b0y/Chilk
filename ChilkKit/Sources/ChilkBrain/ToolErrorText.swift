@@ -1,3 +1,4 @@
+import ChilkCore
 import Foundation
 
 /// Slice 8a (decision 13): when a tool call does not parse, Codex is told which field is wrong and how to fix it,
@@ -13,6 +14,7 @@ extension ChilkToolCatalog {
             return "invalid_arguments: \(extra) — not a field of \(name); its fields: \(names.isEmpty ? "none" : names.joined(separator: ", "))"
         }
         if let missing = names.first(where: { fields[$0] == nil }) { return "invalid_arguments: \(missing) — missing" }
+        if name == "chilk_plan" { return planProblem(fields) ?? "invalid_arguments: a value is malformed or out of range" }
         if let problem = actionProblem(name, fields) { return problem }
         for key in names {
             if let schema = props[key], let value = fields[key], let problem = problem(name, key, value, schema) {
@@ -38,6 +40,36 @@ extension ChilkToolCatalog {
         if ["rename", "move_rename"].contains(action),
            fields["title"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
             return "invalid_arguments: title — \(action) needs the new title"
+        }
+        return nil
+    }
+
+    /// Slice 9b: `chilk_plan` — the day may be empty, and the items are objects of their own.
+    private static func planProblem(_ fields: [String: JSON]) -> String? {
+        guard let action = fields["action"]?.string, PlanAction(rawValue: action) != nil else {
+            return "invalid_arguments: action — must be one of \"collect\", \"finish\", \"cancel\""
+        }
+        guard let day = fields["day"]?.string else { return "invalid_arguments: day — must be a string" }
+        if !day.isEmpty, dateOnly(day) == nil {
+            return "invalid_arguments: day — a date like 2026-10-09, or empty when the user did not name a day"
+        }
+        guard case .array(let items)? = fields["items"] else { return "invalid_arguments: items — must be an array" }
+        if items.count > 30 { return "invalid_arguments: items — at most 30 things in one plan" }
+        for (i, item) in items.enumerated() {
+            guard case .object(let f) = item else { return "invalid_arguments: items[\(i)] — an object with title, time and guess" }
+            if let extra = f.keys.sorted().first(where: { !["title", "time", "guess"].contains($0) }) {
+                return "invalid_arguments: items[\(i)].\(extra) — not a field; the fields: guess, time, title"
+            }
+            if let missing = ["guess", "time", "title"].first(where: { f[$0] == nil }) {
+                return "invalid_arguments: items[\(i)].\(missing) — missing"
+            }
+            guard let title = f["title"]?.string, validTitle(title, limit: 120) else {
+                return "invalid_arguments: items[\(i)].title — the thing in a few words, 1–120 characters, one line"
+            }
+            guard let time = f["time"]?.string, time.isEmpty || PlanTime(time) != nil else {
+                return "invalid_arguments: items[\(i)].time — HH:mm like 09:30, or empty when no time was said"
+            }
+            if f["guess"]?.bool == nil { return "invalid_arguments: items[\(i)].guess — must be true or false" }
         }
         return nil
     }

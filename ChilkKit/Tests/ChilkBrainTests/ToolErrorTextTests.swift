@@ -27,10 +27,11 @@ struct ToolErrorTextTests {
 }
 
 private actor NoReminders: ReminderStore {
-    func add(title: String, due: Date) async throws -> ReminderInfo { ReminderInfo(title: title, due: due) }
+    func add(title: String, due: Date, timed: Bool) async throws -> ReminderInfo { ReminderInfo(title: title, due: due, timed: timed) }
     func open() async throws -> [ReminderInfo] { [] }
-    func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo { throw ReminderAccessError.notFound }
-    func complete(id: String) async throws { throw ReminderAccessError.notFound }
+    func update(id: String, title: String?, due: Date?, timed: Bool) async throws -> ReminderInfo { throw ReminderAccessError.notFound }
+    func setDone(id: String, done: Bool) async throws { throw ReminderAccessError.notFound }
+    func day(_ day: Date) async throws -> [ReminderInfo] { [] }
     func delete(id: String) async throws { throw ReminderAccessError.notFound }
 }
 

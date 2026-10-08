@@ -4,7 +4,8 @@ import Foundation
 
 /// Apple Reminders through EventKit (decision 2026-10-05): Chilk's own «Чилк» list, created on first use in the
 /// default reminders account (iCloud → iPhone/Watch). Access is asked on the first reminder request, never at launch.
-/// Create and read only. Slice 8a: moved into the package so the real call's thread is tested; the store is injected.
+/// Slice 8a: moved into the package so the real call's thread is tested; the store is injected. Slice 9b: plan items
+/// on a date only (no alarm), ticks, and a day's items.
 @MainActor
 public final class EventKitReminders: ReminderStore {
     private let store: EKEventStore
@@ -14,39 +15,47 @@ public final class EventKitReminders: ReminderStore {
         self.store = store
     }
 
-    public func add(title: String, due: Date) async throws -> ReminderInfo {
+    public func add(title: String, due: Date, timed: Bool) async throws -> ReminderInfo {
         try await ensureAccess()
         guard let list = try chilkList(create: true) else { throw ReminderAccessError.unavailable }
         let reminder = EKReminder(eventStore: store)
         reminder.title = title
         reminder.calendar = list
-        var parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
-        parts.timeZone = .current
-        reminder.dueDateComponents = parts
-        reminder.addAlarm(EKAlarm(absoluteDate: due))                // the notification itself, on every device
+        Self.setDue(reminder, due, timed: timed)
         try store.save(reminder, commit: true)
-        return ReminderInfo(title: title, due: due, id: reminder.calendarItemIdentifier)
+        return Self.info(reminder)
     }
 
-    /// Slice 8c (decision 7): only a reminder of the «Чилк» list, after the card's «Да».
-    public func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo {
+    /// With a time: year … minute and an alarm (the notification itself, on every device). Slice 9b, decision 9: a date
+    /// only — year, month, day and no alarm (it does not ring; it waits in «Сегодня»), like Reminders' own all-day items.
+    static func setDue(_ reminder: EKReminder, _ due: Date, timed: Bool) {
+        var parts = Calendar.current.dateComponents(timed ? [.year, .month, .day, .hour, .minute] : [.year, .month, .day], from: due)
+        if timed { parts.timeZone = .current }
+        reminder.dueDateComponents = parts
+        for alarm in reminder.alarms ?? [] { reminder.removeAlarm(alarm) }
+        if timed { reminder.addAlarm(EKAlarm(absoluteDate: due)) }
+    }
+
+    /// The value the app works with: a due without an hour is a date only.
+    nonisolated static func info(_ r: EKReminder) -> ReminderInfo {
+        let parts = r.dueDateComponents
+        return ReminderInfo(title: r.title ?? "", due: parts.flatMap { Calendar.current.date(from: $0) }, id: r.calendarItemIdentifier,
+                            timed: parts?.hour != nil, done: r.isCompleted)
+    }
+
+    /// Slice 8c (decision 7): only a reminder of the «Чилк» list, after the card's «Да» (slice 9b: or a direct action on
+    /// the plan sheet). A rename keeps the date, the time and the alarm as they are.
+    public func update(id: String, title: String?, due: Date?, timed: Bool) async throws -> ReminderInfo {
         let reminder = try own(id)
         if let title { reminder.title = title }
-        if let due {
-            var parts = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: due)
-            parts.timeZone = .current
-            reminder.dueDateComponents = parts
-            for alarm in reminder.alarms ?? [] { reminder.removeAlarm(alarm) }
-            reminder.addAlarm(EKAlarm(absoluteDate: due))
-        }
+        if let due { Self.setDue(reminder, due, timed: timed) }
         try store.save(reminder, commit: true)
-        return ReminderInfo(title: reminder.title ?? "", due: reminder.dueDateComponents.flatMap { Calendar.current.date(from: $0) },
-                            id: reminder.calendarItemIdentifier)
+        return Self.info(reminder)
     }
 
-    public func complete(id: String) async throws {
+    public func setDone(id: String, done: Bool) async throws {
         let reminder = try own(id)
-        reminder.isCompleted = true
+        reminder.isCompleted = done
         try store.save(reminder, commit: true)
     }
 
@@ -69,6 +78,18 @@ public final class EventKitReminders: ReminderStore {
         return await fetch(store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: [list]))
     }
 
+    /// Slice 9b: the day's items of the «Чилк» list, open and done. Done items keep their due date, so the whole list is
+    /// read (it is Chilk's own, short) and filtered by the day.
+    public func day(_ day: Date) async throws -> [ReminderInfo] {
+        try await ensureAccess()
+        guard let list = try chilkList(create: false) else { return [] }
+        return Self.onDay(await fetch(store.predicateForReminders(in: [list])), day)
+    }
+
+    nonisolated static func onDay(_ items: [ReminderInfo], _ day: Date) -> [ReminderInfo] {
+        items.filter { $0.due.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
+    }
+
     /// EventKit calls back on its own queue (`com.apple.eventkit.reminders.search`) and the SDK does not mark the
     /// completion `@Sendable`: inside this `@MainActor` class the closure would inherit MainActor, and Swift 6's runtime
     /// check crashed the app on the first open reminder (slice 8a, `_dispatch_assert_queue_fail`). The completion is
@@ -76,10 +97,7 @@ public final class EventKitReminders: ReminderStore {
     func fetch(_ predicate: NSPredicate) async -> [ReminderInfo] {
         await withCheckedContinuation { continuation in
             _ = store.fetchReminders(matching: predicate) { @Sendable reminders in
-                let items = (reminders ?? []).map { r in
-                    ReminderInfo(title: r.title ?? "", due: r.dueDateComponents.flatMap { Calendar.current.date(from: $0) },
-                                 id: r.calendarItemIdentifier)
-                }
+                let items = (reminders ?? []).map(EventKitReminders.info)
                 continuation.resume(returning: items)
             }
         }

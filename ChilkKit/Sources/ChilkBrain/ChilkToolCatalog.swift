@@ -86,6 +86,18 @@ public enum ChilkAction: Equatable, Sendable {
     /// Slice 7a: open the notebook with a game (`nil` = Chilk picks the one not played for longest) and a match of
     /// `length` games (`nil` = the user picks on the first sheet).
     case game(GameKind?, length: Int?)
+    /// Slice 9b: the day plan being collected — `day` nil: not said (the app picks it); `items`: the whole list.
+    case plan(PlanAction, day: Date?, items: [PlanItem])
+}
+
+/// Slice 9b (decisions 9–12): what `chilk_plan` does with the plan being collected.
+public enum PlanAction: String, Equatable, Sendable {
+    /// Start the plan of a day or update its draft (the whole list, corrections applied).
+    case collect
+    /// The user said «всё»: one card for the whole plan.
+    case finish
+    /// The user no longer wants to plan.
+    case cancel
 }
 
 /// Parse again on the host. Model-supplied JSON schema is a guide, not authorization or validation.
@@ -124,6 +136,14 @@ public enum ChilkToolCatalog {
                  ["id": ["type": "string", "minLength": 1, "maxLength": 256],
                   "action": ["type": "string", "enum": ["move", "rename", "move_rename", "done", "delete"]],
                   "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120]]),
+            tool("chilk_plan", "Plan a day with the user. The plan lives in Chilk's own «Чилк» list of Apple Reminders: a thing with a time rings on Mac and iPhone, a thing without a time waits on its date. Use when the user wants to plan a day («давай спланируем завтра», «план на пятницу», several things for one day at once); a single thing is chilk_reminder. action collect: start the plan of a day or update it — items is ALWAYS the whole current list with the user's corrections applied («хлеб убери», «маме не в 15, а в 16»); call it after every user message while planning. action finish: the user said «всё» / «это всё» / «вроде всё» — the app shows ONE card for the whole plan; nothing is created before «Да». action cancel: the user no longer wants to plan. day: YYYY-MM-DD, or empty when the user did not name a day (the app takes today before 17:00, tomorrow after); between 00:00 and 05:00 «завтра» is the day after sleep, i.e. today's calendar date. items: title — the thing in the user's words; time — HH:mm, or empty when no time was said (never ask for a time); guess=true when the time is a guess: утром → 09:00, днём → 13:00, вечером → 19:00, or an hour 1–12 said without утра/дня/вечера (pick the likely daytime one). Result: day_text — always name the day exactly so («Планируем четверг, 9 октября. Что делаем?»); count; already — things already in the plan for that day (say «На четверг уже N дела — добавим?» and do not put them into items). While collecting answer in a few words («Ага, уже 3. Ещё?»), never repeat the list back. Refused: day_out_of_range (the day has passed or is over a year away), empty_plan (finish with nothing new), no_plan (nothing is being planned).",
+                 ["action": ["type": "string", "enum": ["collect", "finish", "cancel"]],
+                  "day": ["type": "string", "maxLength": 10],
+                  "items": ["type": "array", "maxItems": 30,
+                            "items": ["type": "object", "additionalProperties": false, "required": ["guess", "time", "title"],
+                                      "properties": ["title": ["type": "string", "minLength": 1, "maxLength": 120],
+                                                     "time": ["type": "string", "maxLength": 5],
+                                                     "guess": ["type": "boolean"]]]]]),
             tool("chilk_event", "Propose an event in Chilk's own «Чилк» calendar in Apple Calendar (syncs to iPhone): a meeting, a class, an appointment — something that takes a time slot — or anything the user asks to put «в календарь». Only a NEW event: a change to one already in the calendar — its time, its length («сделай йогу на два часа», «продли до 12») or its title — is chilk_events + chilk_event_change, never a second chilk_event; when the user names an event as a known one («завтрашнюю йогу», «встречу с Сашей»), look with chilk_events first and change it if it is there. No start time said and not all day: ask when, never invent one. A thing to do at a time («напомни позвонить») is chilk_reminder; a countdown from now is chilk_timer. at: the start, ISO-8601; without a timezone it is the user's local time. minutes: the length, 1–1439 (60 when the user did not say). all_day=true: the whole day of at's date (a day off, a trip day; at may be just the date, e.g. 2026-10-10); then minutes is 0. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows a confirmation card built from these values and creates the event only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["title": ["type": "string", "minLength": 1, "maxLength": 120], "at": ["type": "string", "maxLength": 64],
                   "minutes": ["type": "integer", "minimum": 0, "maximum": 1439], "all_day": ["type": "boolean"]]),
@@ -218,7 +238,7 @@ public enum ChilkToolCatalog {
         switch name {
         case "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
         case "chilk_timer", "chilk_clock_open": .clock
-        case "chilk_reminder", "chilk_reminders", "chilk_reminder_change": .reminders
+        case "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_plan": .reminders
         case "chilk_event", "chilk_events", "chilk_event_change": .calendar
         case "chilk_note", "chilk_notes", "chilk_note_change": .notes
         default: nil
@@ -229,7 +249,7 @@ public enum ChilkToolCatalog {
         validTitle(title, limit: 80)
     }
 
-    private static func validTitle(_ title: String, limit: Int) -> Bool {
+    static func validTitle(_ title: String, limit: Int) -> Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= limit
         && !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
@@ -372,6 +392,28 @@ public enum ChilkToolCatalog {
             case "delete": return .reminderChange(id: id, change: .delete)
             default: throw ToolError.invalidArguments
             }
+        case "chilk_plan":
+            guard Set(fields.keys) == ["action", "day", "items"], let raw = fields["action"]?.string,
+                  let action = PlanAction(rawValue: raw), let dayText = fields["day"]?.string,
+                  case .array(let list)? = fields["items"], list.count <= 30 else { throw ToolError.invalidArguments }
+            var day: Date?
+            if !dayText.isEmpty {
+                guard let d = dateOnly(dayText) else { throw ToolError.invalidArguments }
+                day = d
+            }
+            var items: [PlanItem] = []
+            for entry in list {
+                guard case .object(let f) = entry, Set(f.keys) == ["title", "time", "guess"], let title = f["title"]?.string,
+                      validTitle(title, limit: 120), let t = f["time"]?.string, let guess = f["guess"]?.bool
+                else { throw ToolError.invalidArguments }
+                var time: PlanTime?
+                if !t.isEmpty {
+                    guard let pt = PlanTime(t) else { throw ToolError.invalidArguments }
+                    time = pt
+                }
+                items.append(PlanItem(title: title.trimmingCharacters(in: .whitespacesAndNewlines), time: time, guessed: guess))
+            }
+            return .plan(action, day: day, items: items)
         case "chilk_event":
             guard Set(fields.keys) == ["title", "at", "minutes", "all_day"], let title = fields["title"]?.string,
                   validTitle(title, limit: 120), let text = fields["at"]?.string, let allDay = fields["all_day"]?.bool,

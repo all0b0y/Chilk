@@ -1,33 +1,60 @@
 import ChilkBrain
 import Foundation
 
-/// Acceptance runs (CHILK_FAKE_REMINDERS): the real Codex and tool path without touching the user's Reminders.
-/// Every created reminder is appended to `reminders-fake.json` in CHILK_STATE_DIR.
+/// Acceptance runs (CHILK_FAKE_REMINDERS=1 | seed): the real Codex and tool path without touching the user's Reminders.
+/// The list lives in `reminders-fake.json` in CHILK_STATE_DIR (read back at launch, so a run can be continued).
+/// Slice 9b: `seed` starts with three things planned for tomorrow (one done), for «На … уже 3 дела — добавим?».
 actor FakeReminders: ReminderStore {
+    private struct Row: Codable {
+        var id: String
+        var title: String
+        var at: String
+        var timed: Bool?
+        var state: String
+    }
+
     private var items: [ReminderInfo] = []
     private let file = AppState.directory.appendingPathComponent("reminders-fake.json")
 
-    private var done: [ReminderInfo] = []
+    init(seed: Bool = false) {
+        let f = ISO8601DateFormatter()
+        if let data = try? Data(contentsOf: file), let rows = try? JSONDecoder().decode([Row].self, from: data) {
+            items = rows.map { r in
+                ReminderInfo(title: r.title, due: r.at.isEmpty ? nil : f.date(from: r.at), id: r.id, timed: r.timed ?? true,
+                             done: r.state == "done")
+            }
+        } else if seed {
+            let cal = Calendar.current
+            let tomorrow = cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!
+            items = [ReminderInfo(title: "зал", due: tomorrow.addingTimeInterval(8 * 3600), id: "fake-seed-1"),
+                     ReminderInfo(title: "стирка", due: tomorrow, id: "fake-seed-2", timed: false),
+                     ReminderInfo(title: "почта", due: tomorrow, id: "fake-seed-3", timed: false, done: true)]
+        }
+    }
 
-    func add(title: String, due: Date) async throws -> ReminderInfo {
-        let info = ReminderInfo(title: title, due: due, id: "fake-\(UUID().uuidString.prefix(8))")
+    func add(title: String, due: Date, timed: Bool) async throws -> ReminderInfo {
+        let day = timed ? due : Calendar.current.startOfDay(for: due)
+        let info = ReminderInfo(title: title, due: day, id: "fake-\(UUID().uuidString.prefix(8))", timed: timed)
         items.append(info)
         try save()
         return info
     }
 
-    func open() async throws -> [ReminderInfo] { items }
+    func open() async throws -> [ReminderInfo] { items.filter { !$0.done } }
 
-    func update(id: String, title: String?, due: Date?) async throws -> ReminderInfo {
+    func update(id: String, title: String?, due: Date?, timed: Bool) async throws -> ReminderInfo {
         guard let i = items.firstIndex(where: { $0.id == id }) else { throw ReminderAccessError.notFound }
-        items[i] = ReminderInfo(title: title ?? items[i].title, due: due ?? items[i].due, id: id)
+        let old = items[i]
+        let newDue = due.map { timed ? $0 : Calendar.current.startOfDay(for: $0) } ?? old.due
+        items[i] = ReminderInfo(title: title ?? old.title, due: newDue, id: id, timed: due == nil ? old.timed : timed, done: old.done)
         try save()
         return items[i]
     }
 
-    func complete(id: String) async throws {
+    func setDone(id: String, done: Bool) async throws {
         guard let i = items.firstIndex(where: { $0.id == id }) else { throw ReminderAccessError.notFound }
-        done.append(items.remove(at: i))
+        let r = items[i]
+        items[i] = ReminderInfo(title: r.title, due: r.due, id: id, timed: r.timed, done: done)
         try save()
     }
 
@@ -37,12 +64,17 @@ actor FakeReminders: ReminderStore {
         try save()
     }
 
+    func day(_ day: Date) async throws -> [ReminderInfo] {
+        items.filter { $0.due.map { Calendar.current.isDate($0, inSameDayAs: day) } ?? false }
+    }
+
     private func save() throws {
         let f = ISO8601DateFormatter()
-        func row(_ r: ReminderInfo, _ state: String) -> [String: String] {
-            ["id": r.id ?? "", "title": r.title, "at": r.due.map { f.string(from: $0) } ?? "", "state": state]
+        let rows = items.map { r in
+            Row(id: r.id ?? "", title: r.title, at: r.due.map { f.string(from: $0) } ?? "", timed: r.timed, state: r.done ? "done" : "open")
         }
-        let rows = items.map { row($0, "open") } + done.map { row($0, "done") }
-        try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted]).write(to: file, options: .atomic)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        try encoder.encode(rows).write(to: file, options: .atomic)
     }
 }
