@@ -42,7 +42,7 @@ struct ChilkToolExecutorTests {
     }
 
     @Test func theRegisteredCatalogMatchesTheSupportedActions() {
-        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_clock_open", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_plan", "chilk_plan_show", "chilk_event", "chilk_events", "chilk_event_change", "chilk_note", "chilk_notes", "chilk_note_change", "chilk_mode", "chilk_eye_gym", "chilk_warmup", "chilk_breathe", "chilk_walk", "chilk_remember", "chilk_defer", "chilk_focus", "chilk_end_focus", "chilk_sleep", "chilk_emote", "chilk_hide", "chilk_game"])
+        #expect(Set(ChilkToolCatalog.tools.map(\.name)) == ["chilk_status", "chilk_water", "chilk_timer", "chilk_clock_open", "chilk_schedule", "chilk_timers", "chilk_cancel_timer", "chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder", "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_plan", "chilk_plan_show", "chilk_event", "chilk_events", "chilk_event_change", "chilk_note", "chilk_notes", "chilk_note_change", "chilk_mode", "chilk_eye_gym", "chilk_warmup", "chilk_breathe", "chilk_walk", "chilk_remember", "chilk_defer", "chilk_focus", "chilk_end_focus", "chilk_sleep", "chilk_hide", "chilk_game"])
         #expect(ChilkToolCatalog.tools.allSatisfy { $0.inputSchema["additionalProperties"]?.bool == false })
     }
 

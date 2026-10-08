@@ -142,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             !(balance?.engine.slumped ?? false) && ((conversation?.canEmote ?? false) || (chat?.canEmote ?? false))
         }
         actions.playEmote = { [weak balance] e, strong in balance?.queueEmote(e, strong: strong) }
+        brain.onEmotion = { [weak actions] r in actions?.replyEmotion(r) }        // 9e: the answer's emotion field
         conversation.takeEmote = { [weak balance] in balance?.takeQueuedEmote() }
         conversation.playEmote = { [weak balance] e, strong in balance?.playBesideBubble(e, strong: strong) }
         chat.takeEmote = { [weak balance] in balance?.takeQueuedEmote() }

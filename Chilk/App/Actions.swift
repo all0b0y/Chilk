@@ -139,6 +139,24 @@ final class Actions {
         }
     }
 
+    /// Slice 9e (decision 33): the answer's own emotion field — the old tool's limits stay (the clown rests; he must be free
+    /// to show it); one per answer by construction.
+    func replyEmotion(_ r: ReplyEmotion) {
+        guard let play = r.play else { return }
+        let (e, strong) = play
+        switch emotes.request(e, turn: UUID().uuidString, now: Date(), stageFree: canEmote()) {
+        case .play:
+            if e == .clown {
+                do { try emotes.book.save(to: Self.emotesFile) } catch { balance?.log("emote: clown date not saved") }
+            }
+            playEmote(e, strong)
+            balance?.log("emote \(e.rawValue)\(strong ? " strong" : "") from the answer")
+        case .clownResting: balance?.log("emote clown resting — nothing shown")
+        case .busy: balance?.log("emote \(e.rawValue) not shown: busy")
+        case .onePerAnswer: break
+        }
+    }
+
     private func remember(_ call: CodexToolCall) -> CodexToolResult {
         guard case .remember(let fact, let asked)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
         else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }

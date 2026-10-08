@@ -13,6 +13,23 @@ public enum ReplyMode: String, Sendable, Equatable, CaseIterable {
     case end
 }
 
+/// Slice 9e (decision 33): the reaction every answer carries with its body — «none» is the normal choice for ordinary
+/// answers. `laugh_hard` is «смех до упаду».
+public enum ReplyEmotion: String, Sendable, Equatable, CaseIterable {
+    case none, cheer, laugh
+    case laughHard = "laugh_hard"
+    case offended, dizzy, sad, clown, surprised, shy
+
+    /// What he plays (nil: nothing).
+    public var play: (emotion: Emotion, strong: Bool)? {
+        switch self {
+        case .none: nil
+        case .laughHard: (.laugh, true)
+        default: Emotion(rawValue: rawValue).map { ($0, false) }
+        }
+    }
+}
+
 /// Where a conversation is.
 public enum DialoguePhase: Sendable, Equatable {
     case idle
@@ -106,8 +123,9 @@ public enum Dialogue {
         "properties": [
             "reply": ["type": "string"],
             "mode": ["type": "string", "enum": ReplyMode.allCases.map(\.rawValue)],
+            "emotion": ["type": "string", "enum": ReplyEmotion.allCases.map(\.rawValue)],
         ],
-        "required": ["reply", "mode"],
+        "required": ["reply", "mode", "emotion"],
         "additionalProperties": false,
         ]
     }
@@ -151,6 +169,15 @@ public enum Dialogue {
             return (reply.trimmingCharacters(in: .whitespacesAndNewlines), mode)
         }
         return (trimmed, trimmed.hasSuffix("?") ? .question : .answer)
+    }
+
+    /// Slice 9e (decision 33): the answer's emotion field; plain text, a missing or unknown value — none.
+    public static func emotion(_ message: String) -> ReplyEmotion {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = jsonObjectText(trimmed).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = object["emotion"] as? String else { return .none }
+        return ReplyEmotion(rawValue: raw) ?? .none
     }
 
     /// The reply text so far while the JSON is still streaming in (`{"reply":"Прив` → «Прив»).
