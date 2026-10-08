@@ -233,9 +233,8 @@ struct DeskKeeperTests {
 
     @Test func withoutFramesTheWatchdogAloneBringsHimForAnErrand() {
         // His display link stopped (his window is on a desktop nobody sees): only the 3 Hz watchdog steps the keeper.
-        #expect(DeskKeeper.needsWatchdog(onActive: false, oneDesk: false))
-        #expect(DeskKeeper.needsWatchdog(onActive: true, oneDesk: true))
-        #expect(!DeskKeeper.needsWatchdog(onActive: true, oneDesk: false))
+        #expect(DeskKeeper.needsWatchdog(onActive: false))
+        #expect(!DeskKeeper.needsWatchdog(onActive: true))              // on the active desktop his frames run
         var k = DeskKeeper()
         var onActive = false
         var commands: [(Double, DeskKeeper.Command)] = []

@@ -119,8 +119,16 @@ final class Brain {
         }
     }
 
+    /// Bumped by every `connect`: an older attempt still awaiting writes nothing (9f re-review: two model changes while
+    /// `.failed` started two connects — one left an app-server running, the stale one wrote its state over the new).
+    private var connectGeneration = 0
+
     func connect() async {
-        await client?.stop()
+        // Everything synchronous first: a check or a second `connect` arriving meanwhile sees no client and
+        // `.connecting`; each await below makes sure this is still the current attempt.
+        connectGeneration += 1
+        let generation = connectGeneration
+        let old = client
         client = nil                                                     // a check still awaiting the old one is stale
         active = nil
         activeChoice = nil
@@ -130,6 +138,8 @@ final class Brain {
         models = nil
         threads.reset()
         state = .connecting
+        await old?.stop()
+        guard generation == connectGeneration else { return }
         guard let exe = CodexSetup.locateCodex() else { state = .missingCodex; return }
         let setup = CodexSetup(dataDir: CodexSetup.defaultDataDir, executable: exe)
         do { try setup.prepare() } catch { state = .failed(error.localizedDescription); return }
@@ -146,10 +156,14 @@ final class Brain {
         }
         do {
             try await client.start()
-            guard let acc = try await client.account() else { state = .signedOut; return }
+            guard generation == connectGeneration, self.client === client else { return }   // a newer one stops this
+            let acc = try await client.account()
+            guard generation == connectGeneration, self.client === client else { return }
+            guard let acc else { state = .signedOut; return }
             account = acc.email
             if await checkModel() { warmSpare() }
         } catch {
+            guard generation == connectGeneration, self.client === client else { return }
             state = .failed(String(describing: error))
         }
     }

@@ -123,8 +123,19 @@ struct BrainChoiceTests {
         #expect(p.choiceChanged(from: Self.luna, to: Self.lunaMedium, busy: true) == .init(live: .keep, rewarmSpare: false))
         #expect(p.choiceChanged(from: Self.lunaMedium, to: BrainChoice(depth: .high), busy: true).live == .keep)
         #expect(p.conversationEnded(busy: false) == .setDepth(.high))                    // the last one wins
-        // A change after the end, once nothing is busy, applies at once — even with a leftover from a reconnect.
+        // A reconnect drops what was waiting (9f re-review: the old lines checked nothing): after `reset()` the end of
+        // the conversation changes nothing.
+        #expect(p.choiceChanged(from: Self.luna, to: Self.lunaMedium, busy: true).live == .keep)
         p.reset()
+        #expect(p.conversationEnded(busy: false) == .keep)
+        // A change once nothing is busy applies at once.
         #expect(p.choiceChanged(from: Self.lunaMedium, to: Self.luna, busy: false).live == .setDepth(.low))
+    }
+
+    @Test func aModelPickedAfterADepthDuringAConversationStillDropsTheLiveThread() {
+        var p = BrainThreadPolicy()
+        #expect(p.choiceChanged(from: Self.luna, to: Self.lunaMedium, busy: true).live == .keep)
+        #expect(p.choiceChanged(from: Self.lunaMedium, to: BrainChoice(model: "gpt-6-sol", depth: .medium), busy: true).live == .keep)
+        #expect(p.conversationEnded(busy: false) == .drop)
     }
 }

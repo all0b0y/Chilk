@@ -38,12 +38,22 @@ final class EdgePanel: NSPanel {
     /// behaviors must never be combined (AppKit treats them as exclusive).
     func moveToActiveDesk() {
         guard !collectionBehavior.contains(.canJoinAllSpaces) else { return orderFrontRegardless() }
-        let here = Self.marker(at: frame.origin)
+        let here = Self.marker(at: Self.inside(frame))
         here.orderFrontRegardless()
         here.addChildWindow(self, ordered: .above)
         here.removeChildWindow(self)
         here.orderOut(nil)
+        here.close()                                                     // `isReleasedWhenClosed` is off: safe
         orderFrontRegardless()
+    }
+
+    /// A point on this window's screen: arriving, he stands behind the edge, and a marker off every screen could join
+    /// another monitor's desktop when each has its own (re-review 9d).
+    private static func inside(_ frame: NSRect) -> CGPoint {
+        guard let s = (NSScreen.screens.first { $0.frame.intersects(frame) } ?? NSScreen.main)?.visibleFrame else {
+            return frame.origin
+        }
+        return CGPoint(x: min(max(frame.midX, s.minX), s.maxX - 1), y: min(max(frame.midY, s.minY), s.maxY - 1))
     }
 
     /// Onto `home`'s desktop, even when it is not the active one (spike 9d: a child window joins its parent's desktop

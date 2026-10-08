@@ -74,12 +74,12 @@ public struct DeskKeeper: Equatable, Sendable {
     public var isLeaving: Bool { leavingSince != nil }
 
     /// The watchdog (fix of review 9d): his display link may stop while his window sits on a desktop nobody sees, so the
-    /// app also steps the keeper from a timer this often — while he is not on the active desktop, or one desk is on
-    /// (home is elsewhere) — and re-reads the desktops this long after a switch (the system's answer may still be stale
-    /// when the notification arrives).
+    /// app also steps the keeper from a timer this often — only while he is not on the active desktop (on it, his frames
+    /// run; re-review 9d: not all the time «one desk» is on) — and re-reads the desktops this long after a switch (the
+    /// system's answer may still be stale when the notification arrives; a re-read that finds him elsewhere starts it).
     public static let watchdogInterval = 1.0 / 3
     public static let rereadsAfterSwitch = [0.15, 0.4, 0.8]
-    public static func needsWatchdog(onActive: Bool, oneDesk: Bool) -> Bool { !onActive || oneDesk }
+    public static func needsWatchdog(onActive: Bool) -> Bool { !onActive }
 
     /// The one place that says «he has business with the user» — something that waits for the user (review 9d: a short
     /// line, a «спасибо», a clock line or `cheer()` is not worth a trip to another desktop or monitor):

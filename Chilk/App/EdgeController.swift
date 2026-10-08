@@ -680,7 +680,7 @@ final class EdgeController: NSObject {
 
     /// The watchdog runs only while it is needed (`DeskKeeper.needsWatchdog`).
     private func updateWatchdog() {
-        let need = DeskKeeper.needsWatchdog(onActive: onActiveDesk, oneDesk: homeMarker != nil)
+        let need = DeskKeeper.needsWatchdog(onActive: onActiveDesk)
         if need, deskWatchdog == nil {
             let timer = Timer(timeInterval: DeskKeeper.watchdogInterval, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.watchdogStep(why: "watchdog") }
@@ -738,7 +738,7 @@ final class EdgeController: NSObject {
             // An arrival in flight is dropped: on every desktop he is here already (and `.moveToActiveSpace` must never
             // meet `.canJoinAllSpaces`). A dive of ours is over too — he stays where the user is.
             arriving = 0
-            divedForDesk = false
+            giveBackHisPlace()          // a dive cut short by the dance or a flight must not leave him away (re-review 9d)
             panel.collectionBehavior = EdgePanel.allDesks
             demoDesks?.all = true
             log("desk: on every desktop (\(centered ? "stage 3–4" : flight != nil ? "flight" : "overlay"))")
