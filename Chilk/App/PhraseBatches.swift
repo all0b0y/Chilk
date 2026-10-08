@@ -19,7 +19,7 @@ final class PhraseBatches {
 
     init(brain: Brain) {
         self.brain = brain
-        Lines.batch = saved
+        Lines.batch = saved.flatMap { $0.day == PhraseBatch.dayKey(Date()) ? $0 : nil }   // review 9e: not yesterday's
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshIfNeeded() }
         }
@@ -32,14 +32,18 @@ final class PhraseBatches {
 
     /// The switch changed: off drops today's batch from speech at once; on brings it back (or asks for one).
     func switchChanged() {
-        Lines.batch = enabled() ? saved : nil
+        Lines.batch = enabled() ? saved.flatMap { $0.day == PhraseBatch.dayKey(Date()) ? $0 : nil } : nil
         log("phrases \(enabled() ? "on" : "off")")
         refreshIfNeeded()
     }
 
     func refreshIfNeeded(now: Date = Date()) {
         let today = PhraseBatch.dayKey(now)
-        guard enabled(), Lines.batch?.day != today, !running, !busy(), brain.state == .ready else { return }
+        // Review 9e: yesterday's batch does not speak today (offline, the library does); a batch from before 9e (no
+        // wishes, no reactions) is asked again.
+        if let b = Lines.batch, b.day != today { Lines.batch = nil; log("phrases: yesterday's batch dropped") }
+        let old = Lines.batch.map { $0.wishes.isEmpty && $0.reactions.isEmpty } ?? false
+        guard enabled(), Lines.batch?.day != today || old, !running, !busy(), brain.state == .ready else { return }
         if attempts.day != today { attempts = (today, 0) }
         guard attempts.count < 3 else { return }                          // a bad day costs at most 3 turns
         attempts.count += 1
@@ -93,7 +97,7 @@ final class PhraseBatches {
         без погоды и без покупок.
         shush: 3 фразы, которыми Чилк сворачивает баскетбол, когда у пользователя начался созвон: шёпотом, с юмором, \
         «меня тут нет» (например «Кольцо унёс, не палимся»); можно один эмодзи 🤫.
-        Каждая фраза — одна строка до 90 знаков, на «ты», без эмодзи (кроме shush), кавычек и ссылок. Фразы lines покажутся в \
+        Каждая фраза — одна строка до 90 знаков, на «ты», без эмодзи (кроме shush), кавычек и ссылок. Фразы lines (кроме sleep) покажутся в \
         любое время дня: не упоминай утро, день, вечер или ночь. Не про внешность, вес и \
         здоровье, без стыжения и токсичной продуктивности. Не повторяй: «Тук-тук, это вода», «Прогулка сама себя \
         не прогуляет», «Ноутбук тоже хочет спать».

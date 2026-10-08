@@ -392,10 +392,10 @@ extension PlanLines {
     /// The day's Codex batch (9e, decision 32), else a hand-written stock (decision 15 «без сети — ручной запас»).
     @MainActor static func wish() -> String {
         if let line = Lines.fromBatch("wishes", Lines.batch?.wishes) { return line }
-        return [String(localized: "Пусть день будет лёгким ☀️"), String(localized: "Хорошего дня!"), String(localized: "Ты справишься 💪"),
+        return Lines.pick("lib.wishes", [String(localized: "Пусть день будет лёгким ☀️"), String(localized: "Хорошего дня!"), String(localized: "Ты справишься 💪"),
          String(localized: "Не забывай про воду 💧"), String(localized: "Пусть всё получится!"),
          String(localized: "Шаг за шагом — и всё успеем."), String(localized: "Улыбнись — день только начался 🙂"),
-         String(localized: "Я рядом, если что.")].randomElement()!
+         String(localized: "Я рядом, если что.")])
     }
 
     /// Decision 17: «4 из 5 — красота!» — the batch's reaction for the outcome (9e) after the count, else the hand-written stock.
@@ -419,6 +419,6 @@ extension PlanLines {
         case .none: [String(localized: "Бывает. Новый день — новые силы"), String(localized: "Ничего, перенесём — получится"),
                      String(localized: "Отдохни, потом наверстаем")]
         }
-        return pool.randomElement()!
+        return Lines.pick("lib.reaction.\(outcome.rawValue)", pool)
     }
 }

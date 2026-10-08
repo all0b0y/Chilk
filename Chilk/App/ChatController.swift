@@ -82,8 +82,9 @@ final class ChatController: NSObject, NSWindowDelegate {
     var playEmote: (Emotion, Bool) -> Void = { _, _ in }
 
     var canEmote: Bool {
-        guard posing, thinking, !sim.isTalking, case .think = sim.act else { return false }
-        return true
+        guard posing, thinking, !sim.isTalking else { return false }
+        if let act = sim.act, case .think = act { return true }
+        return sim.act == nil                 // review 9e: the 60-s thinking pose may be over on a long turn
     }
 
     init(store: ChatStore, brain: Brain, conversation: Conversation, ears: Ears, sim: CharacterSim) {

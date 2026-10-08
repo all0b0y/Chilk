@@ -174,7 +174,8 @@ final class Conversation {
     var voiceBusy: Bool { phase == .listening || phase == .thinking || phase == .answering }
 
     /// Slice 6c: Codex may show an emotion now — he is thinking and no tool question is on screen.
-    var canEmote: Bool { phase == .thinking && question == nil && !closing }
+    /// 9e: the answer's emotion arrives when the answer is complete — the words may already be showing (review 9e).
+    var canEmote: Bool { (phase == .thinking || phase == .answering) && question == nil && !closing }
 
     /// The user started typing while he waited for a spoken follow-up: the wait closes quietly, the text goes to
     /// the same thread («Решено по умолчанию»).

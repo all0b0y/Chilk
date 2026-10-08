@@ -6,15 +6,9 @@ import ChilkCore
 // Slice 6c (decisions 11–12): `chilk_emote` — Chilk's own reaction, at Codex's discretion.
 
 struct EmoteToolTests {
-    @Test func theToolIsAlwaysThereWhateverIsSwitchedOff() {
-        var off = ToolSwitches()
-        for a in ChilkAbility.allCases { off.set(a, on: false) }
-        #expect(ChilkToolCatalog.tools(for: off).contains { $0.name == "chilk_emote" })
-        let tool = ChilkToolCatalog.tools.first { $0.name == "chilk_emote" }!
-        // Only the six emotions: needs and states (tired, eye bags, hops, lying, sleep) are not offered.
-        let names = tool.inputSchema["properties"]?["emotion"]?["enum"]
-        #expect(names == .array(Emotion.allCases.map { .string($0.rawValue) }))
-        #expect(tool.description.contains("never in the user"))
+    /// Slice 9e (decision 33): the emotion is a field of every answer now — the tool is gone from the catalog.
+    @Test func theToolIsGoneTheAnswerFieldReplacesIt() {
+        #expect(!ChilkToolCatalog.tools.contains { $0.name == "chilk_emote" })
     }
 
     @Test func parsingTakesOneOfTheSixAndStrong() throws {

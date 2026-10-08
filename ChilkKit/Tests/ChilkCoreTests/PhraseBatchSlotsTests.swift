@@ -35,6 +35,9 @@ struct PhraseBatchSlotsTests {
         var round = Set<String>()
         for _ in 0..<3 { round.insert(bag.next("water.polite", from: pool)!) }
         #expect(round == Set(pool))
+        var nextRound = Set<String>()
+        for _ in 0..<3 { nextRound.insert(bag.next("water.polite", from: pool)!) }
+        #expect(nextRound == Set(pool))                                // the next round goes through the whole set again
         let lastOfRound = bag.next("x", from: ["only"])
         #expect(lastOfRound == "only")
         // across rounds the last line is not the first of the next one

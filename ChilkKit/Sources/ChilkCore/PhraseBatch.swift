@@ -124,7 +124,9 @@ public struct PhraseBatch: Codable, Equatable, Sendable {
         batch.wishes = tidy(root["wishes"])
         let reactions = root["reactions"] as? [String: Any] ?? [:]
         for outcome in Outcome.allCases {
-            let clean = tidy(reactions[outcome.rawValue])
+            var clean = tidy(reactions[outcome.rawValue])
+            // «4 из 5 — красота!»: after the count — no numbers of its own, a small letter (review 9e).
+            if outcome != .none { clean = clean.filter { !$0.contains(where: \.isNumber) }.map(lowercasedFirst) }
             if !clean.isEmpty { batch.reactions[outcome] = clean }
         }
         return batch.lines.isEmpty && batch.ideas.isEmpty ? nil : batch

@@ -24,9 +24,15 @@ extension Lines {
     @MainActor static func ask(_ n: Need, stage: Int, again: Bool) -> String {
         if n == .sleep { return sleepAsk(stage: stage, again: again) }
         // Slice 9e (decision 32): with the day's batch the request speaks only from it; the library is the fallback.
-        if let line = fromBatch(n, PhraseBatch.step(stage: stage, again: again)) { return line }
-        if again { return againLines[n]!.randomElement()! }
-        return (stage >= 2 ? insist[n]! : polite[n]!).randomElement()!
+        let step = PhraseBatch.step(stage: stage, again: again)
+        if let line = fromBatch(n, step) { return line }
+        if again { return pick("lib.\(n.rawValue).again", againLines[n]!) }
+        return pick("lib.\(n.rawValue).\(stage >= 2 ? "insist" : "polite")", stage >= 2 ? insist[n]! : polite[n]!)
+    }
+
+    /// The library's line for a slot — no repeats before its round is over either (decision 32, review 9e).
+    @MainActor static func pick(_ slot: String, _ pool: [String]) -> String {
+        bag.next(slot, from: pool) ?? pool.randomElement() ?? ""
     }
 
     /// Each slot of the batch without repeats until its whole set has been said (decision 32).
@@ -34,22 +40,23 @@ extension Lines {
 
     /// The batch's line for this need and step (nil: no batch, or nothing in that slot).
     @MainActor static func fromBatch(_ n: Need, _ step: PhraseBatch.Step) -> String? {
-        guard let pool = batch?.lines[n]?[step], !pool.isEmpty else { return nil }
+        // A slot the batch left with one line would repeat it all day: the library then (review 9e).
+        guard let pool = batch?.lines[n]?[step], pool.count >= 2 else { return nil }
         return bag.next("\(n.rawValue).\(step.rawValue)", from: pool)
     }
 
     /// A batch slot that is not per need (warning, no games, wishes, reactions).
     @MainActor static func fromBatch(_ slot: String, _ pool: [String]?) -> String? {
-        guard let pool, !pool.isEmpty else { return nil }
+        guard let pool, pool.count >= 2 else { return nil }
         return bag.next(slot, from: pool)
     }
 
     @MainActor static func sleepWarningLine() -> String {
-        fromBatch("sleepWarning", batch?.sleepWarning) ?? sleepWarning.randomElement()!
+        fromBatch("sleepWarning", batch?.sleepWarning) ?? pick("lib.sleepWarning", sleepWarning)
     }
 
     @MainActor static func noGamesLine() -> String {
-        fromBatch("noGames", batch?.noGames) ?? noGamesAtNight.randomElement()!
+        fromBatch("noGames", batch?.noGames) ?? pick("lib.noGames", noGamesAtNight)
     }
 
     static func button(_ r: Reaction, for n: Need) -> String {
@@ -157,13 +164,13 @@ extension Lines {
 
     /// Decision 21: at bedtime «Пора спать, {имя}»; then softer-cheekier; back at night — «Эй, ты же спать ушёл».
     @MainActor static func sleepAsk(stage: Int, again: Bool) -> String {
-        if again { return fromBatch(.sleep, .again) ?? sleepAgain.randomElement()! }
+        if again { return fromBatch(.sleep, .again) ?? pick("lib.sleep.again", sleepAgain) }
         if stage <= 1 {
             let name = userName()
             return name.isEmpty ? String(localized: "Пора спать 🌙") : String(localized: "Пора спать, \(name) 🌙")
         }
-        if stage >= 3 { return fromBatch(.sleep, .stage3) ?? sleepDisturb.randomElement()! }
-        return fromBatch(.sleep, .insist) ?? sleepInsist.randomElement()!
+        if stage >= 3 { return fromBatch(.sleep, .stage3) ?? pick("lib.sleep.stage3", sleepDisturb) }
+        return fromBatch(.sleep, .insist) ?? pick("lib.sleep.insist", sleepInsist)
     }
 
     static let sleepInsist: [String] = [
@@ -240,7 +247,7 @@ extension Lines {
         case .sleep: sleepDisturb
         case .water, .eyes: [String(localized: "Ну правда, пора")]
         }
-        return lines.randomElement()!
+        return pick("lib.\(n.rawValue).stage3", lines)
     }
 
     /// Stage 4: the pause is up; the countdown and the emergency exit are under him.
