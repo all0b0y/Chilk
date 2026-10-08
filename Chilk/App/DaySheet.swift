@@ -346,7 +346,8 @@ final class DaySheet: NSObject, NSWindowDelegate {
             WindowPolicy.opened()
             onOpen()
         }
-        log("plan sheet opened for \(PlanDay.iso(model.day, calendar: .current))\(review ? " (review)" : "")")
+        log("plan sheet opened for \(PlanDay.iso(model.day, calendar: .current))\(review ? " (review)" : "") at "
+            + "x \(Int(window?.frame.minX ?? 0))–\(Int(window?.frame.maxX ?? 0)), Chilk's zone \(Int(chilkFrame().frame.minX))–\(Int(chilkFrame().frame.maxX))")
         reload()
     }
 

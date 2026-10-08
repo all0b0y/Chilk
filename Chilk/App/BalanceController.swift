@@ -580,6 +580,7 @@ final class BalanceController {
     private func showLurking(_ event: BalanceEvent, hide: HideController) {
         guard case .ask(let n, let stage, let buttons, let again) = event else { return }
         cancelIntro()
+        sim.wakeUp()                                                  // a dozing hidden Chilk looks out awake
         hide.hold(why: "\(n.rawValue), stage \(stage), bubble")
         showAsk(n, stage: stage, buttons: buttons, again: again)
         sim.standOut = .lurk
