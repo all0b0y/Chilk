@@ -57,15 +57,22 @@ struct ActionCardTests {
     /// Slice 10, decision 10 (Б4): the user's own words of 2026-10-08 were corrections and the card came back twice.
     @Test func aYesIsHeardByItsStemNotOnlyByExactWords() {
         for yes in ["Да пиши", "Запиши пожалуйста я разрешаю записать", "запиши", "записать", "сохрани", "добавь",
-                    "поставь", "удали", "отправляй", "можно", "валяй", "да, запиши это", "напиши её", "давай записывай",
+                    "поставь", "отправляй", "можно", "валяй", "да, запиши это", "напиши её", "давай записывай",
                     "да, сохрани заметку", "разрешаю", "вперёд", "да, создавай", "отметь", "сделай"] {
             #expect(CardAnswer.parse(yes) == .yes, "\(yes)")
         }
         for other in ["да, но в 16", "запиши в 16", "добавь ещё хлеб", "напиши лучше «купить молоко»", "запиши?",
-                      "можно в пятницу", "пиши в заметку про работу", "не записывай", "запиши потом"] {
+                      "можно в пятницу", "пиши в заметку про работу", "не записывай", "запиши потом",
+                      // review 10: past tense, other forms and look-alikes are not an assent
+                      "уже записал", "сохранил", "я сделаю", "пишут", "ставка", "да, удалось", "напиши Пишкину", "удали"] {
             #expect(CardAnswer.parse(other) != .yes, "\(other)")
         }
-        #expect(CardAnswer.parse("не записывай") == .no)
+        for no in ["не записывай", "не сохраняй", "не пиши", "нет, не добавляй"] { #expect(CardAnswer.parse(no) == .no, "\(no)") }
+        // «удали» says yes only to a card that deletes.
+        #expect(CardAnswer.parse("удали", deleting: true) == .yes)
+        #expect(CardAnswer.parse("да, удали её", deleting: true) == .yes)
+        #expect(ActionCard(kind: .noteDelete(id: "1", title: "Покупки")).deletes)
+        #expect(!ActionCard(kind: .note(title: "Покупки", text: "сыр")).deletes)
     }
 
     @Test func aClockTimerCardSaysTheLengthAndWhenItRings() {

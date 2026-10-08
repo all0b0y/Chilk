@@ -418,6 +418,8 @@ final class Actions {
         default: .reminders
         }
         guard switches().isOn(ability) else {
+            // Slice 10 (review): a plan card refused here still ends — Codex hears that nothing was written.
+            if case .plan(_, let items, _) = card.kind { planner?.committed(card, written: [], failed: items.map(\.title)) }
             return (false, String(localized: "Не сделал: это выключено в «Инструментах»"))
         }
         let result: CodexToolResult

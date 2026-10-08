@@ -62,4 +62,18 @@ struct SliceTenPlanTests {
         #expect(PlanOutcome.declined(day: at(9, 0), now: at(8, 18), calendar: cal)
                 == "карточку плана на пятницу, 9 октября (2026-10-09) пользователь отклонил — ничего не записано, черновика больше нет")
     }
+
+    /// Review 10: a model turn in flight sends the list from before the user's ✕ — the edit wins.
+    @Test func aTurnInFlightCannotUndoTheUsersEdit() {
+        var e = PlanEdits()
+        e.record(PlanItem(title: "продуктовый менеджмент"), nil)
+        e.record(PlanItem(title: "созвон", time: PlanTime("11:00")), PlanItem(title: "созвон", time: PlanTime("12:00")))
+        let model = [PlanItem(title: "ЕЭС"), PlanItem(title: "Продуктовый  менеджмент"),
+                     PlanItem(title: "созвон", time: PlanTime("11:00")), PlanItem(title: "молоко")]
+        #expect(e.applied(to: model) == [PlanItem(title: "ЕЭС"), PlanItem(title: "созвон", time: PlanTime("12:00")),
+                                         PlanItem(title: "молоко")])
+        var all = PlanEdits()
+        all.append(e)
+        #expect(all == e && all.removed == ["продуктовый менеджмент"])
+    }
 }

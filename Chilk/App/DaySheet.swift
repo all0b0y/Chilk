@@ -54,7 +54,7 @@ final class DaySheetModel {
     var unwritten: [Unwritten] = []
     var canRecord = false
     var unwrittenEditing: Int?
-    var editUnwritten: (Int, PlanItem?) -> Void = { _, _ in }
+    var editUnwritten: (Unwritten, PlanItem?) -> Void = { _, _ in }
     var record: () -> Void = {}
 
     func beginUnwrittenEdit(_ u: Unwritten) {
@@ -73,8 +73,8 @@ final class DaySheetModel {
         unwrittenEditing = nil
         let time = editTimed ? PlanTime(of: editTime, calendar: .current) : nil
         // An untouched guessed time keeps its «· день?» mark (as «Изменить» did in 9b).
-        let old = unwritten.first { $0.index == i }?.item
-        editUnwritten(i, PlanItem(title: t, time: time, guessed: old?.guessed == true && old?.time == time))
+        guard let u = unwritten.first(where: { $0.index == i }) else { return }
+        editUnwritten(u, PlanItem(title: t, time: time, guessed: u.item.guessed && u.item.time == time))
     }
 
     static func unwritten(_ items: [PlanItem]) -> [Unwritten] {
@@ -200,7 +200,7 @@ struct DaySheetView: View {
                         Text(u.item.title).foregroundStyle(.secondary).lineLimit(1)
                             .onTapGesture(count: 2) { model.beginUnwrittenEdit(u) }
                         Spacer(minLength: 8)
-                        Button { model.editUnwritten(u.index, nil) } label: { Image(systemName: "xmark") }
+                        Button { model.editUnwritten(u, nil) } label: { Image(systemName: "xmark") }
                             .buttonStyle(.borderless).foregroundStyle(.tertiary).help(String(localized: "Убрать"))
                     }
                     .padding(.vertical, 5)
@@ -271,7 +271,7 @@ final class DaySheet: NSObject, NSWindowDelegate {
     var onReviewed: (_ day: Date, _ done: Int, _ total: Int, _ failed: Int) -> Void = { _, _, _, _ in }
     /// Slice 10: what is not written yet for a day (the planner), its edit (nil — ✕) and «Записать».
     var unwritten: (Date) -> (items: [PlanItem], canRecord: Bool)? = { _ in nil }
-    var editUnwritten: (Date, Int, PlanItem?) -> Void = { _, _, _ in }
+    var editUnwritten: (Date, Int, PlanItem, PlanItem?) -> Void = { _, _, _, _ in }
     var recordUnwritten: (Date) -> Void = { _ in }
     /// The review's done states as Reminders had them: only what changed is written.
     private var original: [String: Bool] = [:]
@@ -288,10 +288,10 @@ final class DaySheet: NSObject, NSWindowDelegate {
         model.delete = { [weak self] row in self?.delete(row) }
         model.add = { [weak self] in self?.add() }
         model.finishReview = { [weak self] in self?.finishReview() }
-        model.editUnwritten = { [weak self] i, item in
+        model.editUnwritten = { [weak self] u, item in
             guard let self else { return }
             self.log("plan sheet: unwritten \(item == nil ? "removed" : "edited")")
-            self.editUnwritten(self.model.day, i, item)
+            self.editUnwritten(self.model.day, u.index, u.item, item)
         }
         model.record = { [weak self] in
             guard let self else { return }
@@ -398,7 +398,10 @@ final class DaySheet: NSObject, NSWindowDelegate {
         let u = unwritten(model.day)
         let rows = DaySheetModel.unwritten(u?.items ?? [])
         if model.unwritten != rows {
-            if let i = model.unwrittenEditing, !rows.contains(where: { $0.index == i }) { model.unwrittenEditing = nil }
+            // The thing being edited moved or changed under the editor (the model's turn): close it, nothing is written.
+            if let i = model.unwrittenEditing, model.unwritten.first(where: { $0.index == i }) != rows.first(where: { $0.index == i }) {
+                model.unwrittenEditing = nil
+            }
             model.unwritten = rows
         }
         model.canRecord = u?.canRecord ?? false
@@ -527,9 +530,13 @@ final class DaySheet: NSObject, NSWindowDelegate {
         switch parts.first {
         case "x":
             if let n = parts.count > 1 ? Int(parts[1]) : nil, model.unwritten.indices.contains(n) {
-                model.editUnwritten(model.unwritten[n].index, nil)
+                model.editUnwritten(model.unwritten[n], nil)
             } else { log("demo: no unwritten thing \(op)") }
         case "record": model.record()
+        case "add":                                                      // «+»: a direct write, as a click
+            model.beginAdd()
+            model.addTitle = parts.count > 1 ? parts[1] : ""
+            model.add()
         case "snap":
             if let dir, parts.count > 1 { snapshot(to: URL(fileURLWithPath: dir).appending(path: parts[1] + ".png")) }
         default: log("demo: unknown sheet step \(op)")

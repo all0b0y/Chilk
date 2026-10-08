@@ -44,6 +44,14 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
     /// Decision 8: «завтра» said after midnight — the date is a guess.
     public var guessedDay: Bool
 
+    /// Slice 10: a card that deletes something («удали» answers it with yes).
+    public var deletes: Bool {
+        switch kind {
+        case .reminderDelete, .eventDelete, .noteDelete: true
+        default: false
+        }
+    }
+
     public init(id: UUID = UUID(), kind: Kind, guessedPart: Bool = false, guessedDay: Bool = false) {
         self.id = id
         self.kind = kind
@@ -345,21 +353,26 @@ public enum CardAnswer: Equatable, Sendable {
     private static let neutral: Set<String> = ["чилк", "чилка", "эй", "пожалуйста", "спасибо", "ну", "а", "так",
                                                "вот", "всё", "все", "уж"]
 
-    /// Slice 10, decision 10: the forms of an assent verb — «запиши», «записать», «пиши», «сохрани», «поставь»… — by the
-    /// word's start (a verb said in any form is still the user's own «да» to what the card shows).
+    /// Slice 10, decision 10: an assent verb in any imperative or the infinitive — «запиши», «записать», «пиши», «сохрани»,
+    /// «поставь», «записывай»… — by its stem plus such an ending («пишут», «ставка», «записал», «удалось» are not assent).
+    /// «удал-» says yes only to a card that deletes.
     private static let yesStems: [String] = ["пиш", "напиш", "запиш", "допиш", "запис", "сохран", "добав", "став",
-                                             "постав", "отправ", "удал", "перенес", "перенос", "отмеч", "отмет",
-                                             "сдела", "созда", "разреш"]
-    private static let yesExtra: Set<String> = ["можно", "валяй", "вперед", "запускай", "погнали", "пойдет"]
+                                             "постав", "отправ", "перенес", "перенос", "отмеч", "отмет", "сдела", "созда"]
+    private static let deleteStems: [String] = ["удал"]
+    private static let endings: [String] = ["и", "ите", "й", "йте", "ть", "ь", "ьте"]
+    private static let yesExtra: Set<String> = ["можно", "валяй", "вперед", "разрешаю", "разрешаем", "погнали"]
     /// Slice 10: the words that only point at the card («запиши её», «да, сохрани заметку»).
-    private static let pointers: Set<String> = ["я", "это", "ее", "его", "их", "мне", "заметку", "напоминание", "дело",
-                                                "дела", "план", "событие", "таймер", "тогда", "уже", "просто"]
+    private static let pointers: Set<String> = ["я", "это", "ее", "его", "их", "заметку", "напоминание", "дело", "дела",
+                                                "план", "событие", "таймер"]
 
-    static func isYes(_ word: String) -> Bool {
-        yesWords.contains(word) || yesExtra.contains(word) || yesStems.contains { word.hasPrefix($0) }
+    static func isYes(_ word: String, deleting: Bool = false) -> Bool {
+        if yesWords.contains(word) || yesExtra.contains(word) { return true }
+        guard endings.contains(where: { word.hasSuffix($0) }) else { return false }
+        return (deleting ? yesStems + deleteStems : yesStems).contains { word.hasPrefix($0) }
     }
 
-    public static func parse(_ text: String) -> CardAnswer {
+    /// `deleting`: the card on screen deletes something («удали» then says yes).
+    public static func parse(_ text: String, deleting: Bool = false) -> CardAnswer {
         // A question is not an answer («точно?», «да?»): the model explains, the card stays.
         if text.contains("?") { return .correction(text) }
         let words = text.lowercased().replacingOccurrences(of: "ё", with: "е")
@@ -367,7 +380,7 @@ public enum CardAnswer: Equatable, Sendable {
         let meaningful = words.filter { !neutral.contains($0) && !pointers.contains($0) }
         guard !meaningful.isEmpty else { return .correction(text) }
         if isNo(meaningful) { return .no }
-        return meaningful.allSatisfy(isYes) ? .yes : .correction(text)
+        return meaningful.allSatisfy { isYes($0, deleting: deleting) } ? .yes : .correction(text)
     }
 
     /// Every word says «no»: a «нет» word, or «не» followed by «надо / нужно / ставь…».
@@ -375,7 +388,10 @@ public enum CardAnswer: Equatable, Sendable {
         var i = 0
         while i < words.count {
             if noWords.contains(words[i]) { i += 1; continue }
-            if words[i] == "не", i + 1 < words.count, afterNot.contains(words[i + 1]) { i += 2; continue }
+            // «не надо», «не ставь», and (slice 10) «не сохраняй», «не пиши» — «не» before an assent verb.
+            if words[i] == "не", i + 1 < words.count, afterNot.contains(words[i + 1]) || isYes(words[i + 1], deleting: true) {
+                i += 2; continue
+            }
             return false
         }
         return true

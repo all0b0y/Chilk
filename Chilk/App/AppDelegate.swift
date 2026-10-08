@@ -359,12 +359,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sheet.onWrite = { [weak board, weak planner] in board?.refresh(); planner?.refreshAlready() }
         // Slice 10 (decisions 1–6): «Ещё не записано» — the planner's draft or plan card, edited and written from the sheet.
         sheet.unwritten = { [weak planner] day in planner?.unwritten(for: day) }
-        sheet.editUnwritten = { [weak planner] day, i, item in planner?.editUnwritten(day: day, index: i, to: item) }
+        sheet.editUnwritten = { [weak planner] day, i, old, item in planner?.editUnwritten(day: day, index: i, expected: old, to: item) }
         sheet.recordUnwritten = { [weak planner] day in planner?.recordUnwritten(day: day) }
         planner.onChange = { [weak sheet] in if sheet?.isOpen == true { sheet?.refreshUnwritten() } }
         let cardsChanged = cards.onChange
         cards.onChange = { [weak sheet] in cardsChanged(); if sheet?.isOpen == true { sheet?.refreshUnwritten() } }
         cards.onDeclined = { [weak planner] card in planner?.declined(card) }
+        // Decision 6: «Записать» of a plan collected in the chat — its result is a line in that chat too.
+        cards.onSheetResult = { [weak planner, weak chat] line in
+            if planner?.channel == .chat, !line.isEmpty { chat?.postLocal(line) }
+        }
         cards.openPlanSheet = { [weak sheet] day in sheet?.open(day: day) }
         sheet.onTick = { [weak edge, weak cards] last in
             // He reacts only when he is free at the edge (no bubble, no conversation, no card).
@@ -450,9 +454,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sheet.onReviewed = { [weak notices] day, done, total, failed in
             notices?.reviewed(day: day, done: done, total: total, failed: failed)
         }
-        cards.onCommitted = { [weak notices, weak edge, weak conversation] card, source, ok in
+        cards.onCommitted = { [weak notices, weak self] card, source, ok in
             // Slice 10 (decision 6): «Записать» in the sheet — he is glad at the edge (when no conversation holds him).
-            if ok, source == .sheet, case .plan = card.kind, conversation?.isActive != true { edge?.sim.perform(.cheer) }
+            if ok, source == .sheet, case .plan = card.kind { self?.cheerWhenFree() }
             guard ok, case .reminder(_, let due) = card.kind else { return }
             notices?.reminderWritten(due: due, viaChat: source == .chat)
         }
@@ -649,6 +653,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             chat.runDemo(raw.components(separatedBy: "||"),
                          snapshot: env["CHILK_DEMO_CHAT_SNAPSHOT"].map { URL(fileURLWithPath: $0) })
+        }
+    }
+
+    /// Slice 10 (decision 6): he is glad about «Записать» — once the stage is free (a voice plan's conversation still
+    /// listening, a notice), at most 30 s later.
+    private func cheerWhenFree(tries: Int = 60) {
+        guard let edge, let cards else { return }
+        if cards.stageFree() && !(conversation?.isActive ?? false) && !edge.sim.isTalking {
+            edge.sim.perform(.cheer)
+            balance?.log("plan: cheer for «Записать»")
+            return
+        }
+        guard tries > 0 else { balance?.log("plan: no cheer — the stage stayed busy"); return }
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated { self?.cheerWhenFree(tries: tries - 1) }
         }
     }
 

@@ -52,6 +52,7 @@ final class Planner {
         if now().timeIntervalSince(touched) > Self.lapse {
             draft = nil
             log("plan: the draft lapsed")
+            DispatchQueue.main.async { [weak self] in self?.onChange() }     // the sheet drops its «Ещё не записано»
             return false
         }
         return true
@@ -84,13 +85,17 @@ final class Planner {
     /// or right after the offer — the offer.
     func context() -> String? {
         var parts = notes
+        let hadOutcome = !notes.isEmpty
         notes = []
         if let e = sheetNote.text {
             parts.append("пользователь сам поправил черновик в «Листе дня»: \(e). Черновик ниже — уже с этим; убранное не возвращай")
             sheetNote = PlanEdits()
         }
         if let current = collectingContext() { parts.append(current) }
-        if !parts.isEmpty { log("plan: turn context — " + parts.joined(separator: " | ")) }
+        // Counts only: the things' titles are the user's own words (review 10).
+        if !parts.isEmpty {
+            log("plan: turn context — outcome \(hadOutcome), draft \(draft?.items.count ?? 0), already \(draft?.already.count ?? 0)")
+        }
         return parts.isEmpty ? nil : parts.joined(separator: ". ")
     }
 
@@ -135,9 +140,10 @@ final class Planner {
         }
         var current: PlanDraft
         if collecting, let d = draft, cal.isDate(d.day, inSameDayAs: day) {
-            current = d
             // Decision 8: what reached Reminders meanwhile («+» in the sheet, the iPhone) is «уже в плане» now.
-            if let items = try? await reminders.day(day) { current.refresh(already: items.map(\.title)) }
+            let fresh = try? await reminders.day(day)
+            current = draft.flatMap { cal.isDate($0.day, inSameDayAs: day) ? $0 : nil } ?? d   // the user may have edited meanwhile
+            if let fresh { current.refresh(already: fresh.map(\.title)) }
         } else {
             let already: [String]
             do { already = try await reminders.day(day).map(\.title) } catch ReminderAccessError.denied {
@@ -155,7 +161,9 @@ final class Planner {
         // A night hour only when said so — for what is new in this turn (things kept from earlier turns keep their hour).
         let words = lastWords()
         let kept = Set(current.items.map { $0.title + "|" + ($0.time?.text ?? "") })
-        let items = items.map { kept.contains($0.title + "|" + ($0.time?.text ?? "")) ? $0 : $0.dayHour(words: words) }
+        var items = items.map { kept.contains($0.title + "|" + ($0.time?.text ?? "")) ? $0 : $0.dayHour(words: words) }
+        // Review 10: this turn was asked before the user's latest edits in the sheet — those edits win.
+        items = sheetNote.applied(to: items)
         // «всё» often comes with an empty list (the model sent it already): finish keeps the draft as collected.
         if !(action == .finish && items.isEmpty) { current.update(items) }
         draft = current
@@ -186,6 +194,15 @@ final class Planner {
         if let p = pending, Calendar.current.isDate(p.day, inSameDayAs: d.day),
            cards.queue.cards.contains(where: { $0.id == p.id }) { edits.append(p.edits) }
         draftEdits = PlanEdits()
+        // Review 10: a plan card of this day is still waiting — the new list takes its place (one card per day).
+        if let p = pending, Calendar.current.isDate(p.day, inSameDayAs: d.day), cards.queue.cards.contains(where: { $0.id == p.id }) {
+            let replacement = ActionCard(id: p.id, kind: card.kind)
+            pending = (p.id, d.day, edits)
+            cards.replace(p.id, with: replacement, how: "plan \(reason)")
+            log("plan: card replaced (\(reason)), \(d.items.count) item(s)")
+            return .ok(["awaiting_confirmation": true, "card": .string(replacement.summary()),
+                        "note": "Nothing is created yet. The user confirms the plan card with Да, changes it, or says Нет."])
+        }
         pending = (card.id, d.day, edits)
         cards.propose(card)
         log("plan: card proposed (\(reason)), \(d.items.count) item(s)")
@@ -202,7 +219,11 @@ final class Planner {
     /// «Записать» can write it now (a card first in the queue and not expired, or a draft with things in it).
     func unwritten(for day: Date) -> (items: [PlanItem], canRecord: Bool)? {
         let cal = Calendar.current
-        if collecting, let d = draft, cal.isDate(d.day, inSameDayAs: day) { return (d.items, !d.items.isEmpty) }
+        if collecting, let d = draft, cal.isDate(d.day, inSameDayAs: day) {
+            // «Записать» writes at once only if its card would be first (review 10): another card waiting — not now.
+            let first = cards?.current == nil || (pending.map { cards?.current?.id == $0.id } ?? false)
+            return (d.items, !d.items.isEmpty && first)
+        }
         guard let p = pending, cal.isDate(p.day, inSameDayAs: day), let card = pendingCard(),
               case .plan(_, let items, _) = card.kind else { return nil }
         return (items, cards?.current?.id == p.id && !card.expired(now: now()))
@@ -214,9 +235,11 @@ final class Planner {
     }
 
     /// Decision 3: ✕ (nil) or a double-click edit in the sheet — of the draft being collected, or of the waiting card.
-    func editUnwritten(day: Date, index: Int, to item: PlanItem?) {
+    /// `expected` — the thing the sheet showed at `index` (review 10: the model may have changed the list meanwhile).
+    func editUnwritten(day: Date, index: Int, expected: PlanItem, to item: PlanItem?) {
         let cal = Calendar.current
         if collecting, var d = draft, cal.isDate(d.day, inSameDayAs: day) {
+            guard d.items.indices.contains(index), d.items[index] == expected else { log("plan: a sheet edit of a thing that moved"); onChange(); return }
             guard let old = d.edit(index, to: item) else { return }
             draft = d
             draftEdits.record(old, item)
@@ -227,7 +250,8 @@ final class Planner {
             return
         }
         guard var p = pending, cal.isDate(p.day, inSameDayAs: day), let card = pendingCard(),
-              case .plan(let planDay, var items, let already) = card.kind, items.indices.contains(index) else { return }
+              case .plan(let planDay, var items, let already) = card.kind, items.indices.contains(index), items[index] == expected
+        else { log("plan: a sheet edit of a thing that moved"); onChange(); return }
         let old = items[index]
         if let item { items[index] = item } else { items.remove(at: index) }
         p.edits.record(old, item)
@@ -272,6 +296,7 @@ final class Planner {
 
     /// Decision 8: «уже в плане» of the draft being collected, from Reminders now.
     func refreshAlready() {
+        refreshPendingCard()
         guard collecting, let day = draft?.day else { return }
         Task {
             guard let items = try? await reminders.day(day), var d = draft, d.day == day else { return }
@@ -279,6 +304,24 @@ final class Planner {
             d.refresh(already: items.map(\.title))
             draft = d
             if d.items.count != before { log("plan: \(before - d.items.count) draft thing(s) already in Reminders") }
+            onChange()
+        }
+    }
+
+    /// Decision 8 for a waiting card (review 10): a thing written meanwhile («+», the iPhone) leaves the card, so «Да» does
+    /// not write it twice; nothing left — the card goes.
+    private func refreshPendingCard() {
+        guard let p = pending, let card = pendingCard(), case .plan(let day, let items, _) = card.kind else { return }
+        Task {
+            guard let fresh = try? await reminders.day(day), pending?.id == p.id, let now = pendingCard(),
+                  case .plan(_, let current, _) = now.kind, current == items else { return }
+            let titles = fresh.map(\.title)
+            var d = PlanDraft(day: day, already: titles)
+            d.update(current)
+            guard d.items.count != current.count else { return }
+            log("plan: \(current.count - d.items.count) card thing(s) already in Reminders")
+            if d.items.isEmpty { cards?.decline(p.id, source: .sheet) }
+            else { cards?.replace(p.id, with: ActionCard(id: p.id, kind: .plan(day: day, items: d.items, already: titles)), how: "already") }
             onChange()
         }
     }

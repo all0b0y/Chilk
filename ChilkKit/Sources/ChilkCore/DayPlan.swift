@@ -226,21 +226,39 @@ public extension PlanItem {
 /// The user's edits of a draft or a plan card in «Лист дня» — the model sends the whole list again on its next turn, so it
 /// must know what the user took out or changed, or the old list comes back (Б2).
 public struct PlanEdits: Equatable, Sendable {
-    public private(set) var removed: [String] = []
-    public private(set) var changed: [String] = []
+    public struct Change: Equatable, Sendable {
+        public let old: PlanItem
+        public let new: PlanItem
+    }
+    public private(set) var removedItems: [PlanItem] = []
+    public private(set) var changes: [Change] = []
     public init() {}
 
-    public var isEmpty: Bool { removed.isEmpty && changed.isEmpty }
+    public var removed: [String] { removedItems.map(\.label) }
+    public var changed: [String] { changes.map { $0.old.label + " → " + $0.new.label } }
+    public var isEmpty: Bool { removedItems.isEmpty && changes.isEmpty }
 
     /// A card replaced by a voice correction keeps the edits made on the one before it.
     public mutating func append(_ other: PlanEdits) {
-        removed += other.removed
-        changed += other.changed
+        removedItems += other.removedItems
+        changes += other.changes
     }
 
     public mutating func record(_ old: PlanItem, _ new: PlanItem?) {
-        guard let new else { removed.append(old.label); return }
-        if new.label != old.label { changed.append(old.label + " → " + new.label) }
+        guard let new else { removedItems.append(old); return }
+        if new.label != old.label { changes.append(Change(old: old, new: new)) }
+    }
+
+    /// Review 10: a model turn already in flight sends the list it had before the user's edit — the edit wins: a removed
+    /// thing stays out, a changed one keeps the user's version.
+    public func applied(to list: [PlanItem]) -> [PlanItem] {
+        let gone = Set(removedItems.map { PlanDraft.key($0.title) })
+        return list.compactMap { item in
+            if let c = changes.last(where: { PlanDraft.key($0.old.title) == PlanDraft.key(item.title) && $0.old.time == item.time }) {
+                return c.new
+            }
+            return gone.contains(PlanDraft.key(item.title)) ? nil : item
+        }
     }
 
     /// «убрано пользователем — A, B; изменено пользователем — X → Y» (nil: nothing).

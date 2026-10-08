@@ -478,7 +478,7 @@ final class ChatController: NSObject, NSWindowDelegate {
             guard let self, let cards = self.cards, let shown = self.model.card else { return }
             if title == CardDesk.edit {
                 guard let card = cards.current, card.id == shown.id else { return }
-                // Slice 9b: a plan is a list — its own panel beside Chilk, not the inline fields.
+                // Slice 10: a plan is edited in «Лист дня» (its «Ещё не записано»), not in the inline fields.
                 if case .plan = card.kind { cards.openEditor() } else { self.model.cardEdit = CardEditModel(card) }
                 return
             }

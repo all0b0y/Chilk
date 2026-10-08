@@ -61,6 +61,8 @@ final class CardDesk {
     var onDeclined: (ActionCard) -> Void = { _ in }
     /// Slice 10 (decision 4): «Изменить» on a plan card opens «Лист дня» on the plan's day — the draft is edited there.
     var openPlanSheet: (Date) -> Void = { _ in }
+    /// Slice 10 (decision 6): the result line of «Записать» in the sheet (a chat plan shows it in the chat too).
+    var onSheetResult: (String) -> Void = { _ in }
     /// The result line of a card answered by voice still waits for a free stage.
     var resultPending: Bool { pendingResult != nil }
     /// The card left a conversation's bubble (answered elsewhere): the conversation stops routing its buttons.
@@ -240,7 +242,7 @@ final class CardDesk {
     /// `context()`.
     func answer(_ words: String, source: Source) -> Spoken {
         guard let card = current else { return .correction }
-        switch CardAnswer.parse(words) {
+        switch CardAnswer.parse(words, deleting: card.deletes) {
         case .yes:
             guard !card.expired(now: Date()) else { return .expired(String(localized: "Это время уже прошло — скажи другое")) }
             confirm(source: source)
@@ -264,7 +266,13 @@ final class CardDesk {
     /// Slice 10: every thing of a plan card removed in the sheet — the same «Нет».
     func decline(_ id: UUID, source: Source) {
         guard current?.id == id else {
-            if let card = queue.cards.first(where: { $0.id == id }) { _ = queue.settle(id); onDeclined(card); onChange() }
+            if let card = queue.cards.first(where: { $0.id == id }) {
+                _ = queue.settle(id)
+                bornInVoice.remove(card.id)
+                log("card answered: no (\(source.rawValue), not first)")
+                onDeclined(card)
+                onChange()
+            }
             return
         }
         decline(source: source)
@@ -278,6 +286,7 @@ final class CardDesk {
             log("card committed: ok=\(result.ok)")
             onResult(card.id, result.line, result.ok)
             onCommitted(card, source, result.ok)
+            if source == .sheet { onSheetResult(result.line) }
             guard source != .chat else { return }
             // At the edge the card's own bubble becomes the result; by voice it waits until the stage is free.
             if source == .edge || source == .panel || source == .sheet, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }
@@ -289,7 +298,10 @@ final class CardDesk {
         guard let card = current else { return }
         settle(card, how: "no (\(source.rawValue))")
         onDeclined(card)
-        if source == .edge || source == .panel || source == .sheet { sim.say(String(localized: "Ладно, ничего не делаю"), duration: 2.5) }
+        // From the sheet the block simply goes; the line only when the stage is his (review 10).
+        if source == .edge || source == .panel || (source == .sheet && stageFree()) {
+            sim.say(String(localized: "Ладно, ничего не делаю"), duration: 2.5)
+        }
         // By voice the conversation says it as it closes.
     }
 
