@@ -77,7 +77,8 @@ struct ToolsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             switchRow(String(localized: "Уши: слышит «Чилк»"), isOn: Binding(get: { model.earsOn }, set: { model.toggleEars($0) }))
-            ForEach([ChilkAbility.webSearch, .timers, .reminders], id: \.self) { a in abilityToggle(a) }
+            // Slice 8d: Clock timers and Chilk's own messages are separate switches (8d-3: the Clock one was missing here).
+            ForEach([ChilkAbility.webSearch, .clock, .timers, .reminders], id: \.self) { a in abilityToggle(a) }
             abilityToggle(.files)
             abilityToggle(.obsidian)
             abilityToggle(.phrases)
