@@ -18,8 +18,8 @@ extension Lines {
         }
     }
 
-    /// Slice 9c: the user's name for «Пора спать, {имя}» (empty — without it).
-    @MainActor static var userName = ""
+    /// Slice 9c: the user's name for «Пора спать, {имя}» (empty — without it); read when the line is made.
+    @MainActor static var userName: () -> String = { "" }
 
     @MainActor static func ask(_ n: Need, stage: Int, again: Bool) -> String {
         if n == .sleep { return sleepAsk(stage: stage, again: again) }
@@ -135,7 +135,8 @@ extension Lines {
     @MainActor static func sleepAsk(stage: Int, again: Bool) -> String {
         if again { return sleepAgain.randomElement()! }
         if stage <= 1 {
-            return userName.isEmpty ? String(localized: "Пора спать 🌙") : String(localized: "Пора спать, \(userName) 🌙")
+            let name = userName()
+            return name.isEmpty ? String(localized: "Пора спать 🌙") : String(localized: "Пора спать, \(name) 🌙")
         }
         return (stage >= 3 ? sleepDisturb : sleepInsist).randomElement()!
     }

@@ -1084,6 +1084,13 @@ public final class BalanceEngine {
         state.episode = nil
     }
 
+    /// Testing: tonight's bedtime at `date` («Сон» must be on); the warning, if it falls within the hour, comes at once.
+    public func setBedtimeForTesting(_ date: Date) {
+        let minute = calendar.component(.hour, from: date) * 60 + calendar.component(.minute, from: date)
+        state.tonight = TonightBedtime(day: dayKey(state.lastNow ?? date), minutes: minute)
+        state.day.sleepWarned = false
+    }
+
     /// «Проверка ▸ Лежит» (slice 6b): every body need that is on becomes empty.
     public func makeSlumped() {
         for n in Need.body where !config.needsOff.contains(n) {
@@ -1249,7 +1256,7 @@ public final class BalanceEngine {
         // Decision 22: the night is over — «Сон» counts at 05:00, in the day it belongs to, whatever happened in it.
         if state.episode?.need == .sleep { credit(.sleep, byRest: true, into: &out) }
         state.needs[.sleep] = NeedTrack(threshold: 0)
-        state.tonight = nil
+        if state.tonight?.day != key { state.tonight = nil }      // a shift made for the new day stays
         if !state.day.key.isEmpty {
             state.history.append(state.day)
             if state.history.count > 35 { state.history.removeFirst(state.history.count - 35) }

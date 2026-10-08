@@ -14,11 +14,14 @@ final class PlanNotices {
     private enum Notice: Equatable {
         case morning(text: String, review: Date?)
         case evening(day: Date, text: String)
+        /// Slice 9c (decisions 17, 20): an hour before bedtime; `review` — today's plan to sum up with it.
+        case bedtime(at: Date, text: String, review: Date?)
 
         var id: String {
             switch self {
             case .morning: "plan-morning"
             case .evening(let day, _): "plan-evening-\(Int(day.timeIntervalSince1970))"
+            case .bedtime(let at, _, _): "sleep-warning-\(Int(at.timeIntervalSince1970))"
             }
         }
     }
@@ -49,6 +52,8 @@ final class PlanNotices {
     /// «Напоминания Apple» on in «Инструменты» (decision 18).
     var enabled: () -> Bool = { true }
     var collecting: () -> Bool = { false }
+    /// Slice 9c: «Сон» on — the evening review comes with its warning, not with «Конец дня» (decision 17).
+    var sleepOn: () -> Bool = { false }
     var openSheet: (_ day: Date, _ review: Bool) -> Void = { _, _ in }
     /// The offer at the edge: he asks with the buttons and (ears on) listens a while for a spoken answer.
     var offerAtEdge: (_ line: String, _ buttons: [String]) -> Void = { _, _ in }
@@ -105,6 +110,12 @@ final class PlanNotices {
                 sim.say(r.line, duration: 5)
             }
         }
+        // Decision 20: bedtime came while the warning waited (or showed) — it is not needed any more.
+        if case .bedtime(let bed, _, _)? = showing, now() >= bed {
+            _ = display.clicked()
+            finish(how: "bedtime")
+        }
+        queue.removeAll { if case .bedtime(let bed, _, _) = $0, $0 != showing, now() >= bed { true } else { false } }
         if showing != nil, conversationActive() {
             display.interrupted()                       // he talks now; the notice comes back afterwards, unseen
             showing = nil
@@ -126,14 +137,14 @@ final class PlanNotices {
 
     private func text(_ n: Notice) -> String {
         switch n {
-        case .morning(let t, _), .evening(_, let t): t
+        case .morning(let t, _), .evening(_, let t), .bedtime(_, let t, _): t
         }
     }
 
     private func present(_ n: Notice) {
         showing = n
         let buttons: [String] = switch n {
-        case .morning(_, let review): review == nil ? [] : [PlanLines.sumUp]
+        case .morning(_, let review), .bedtime(_, _, let review): review == nil ? [] : [PlanLines.sumUp]
         case .evening: [PlanLines.sumUp]
         }
         sim.call(line: text(n))
@@ -151,6 +162,7 @@ final class PlanNotices {
         switch n {
         case .morning: book.morningShown = iso(PlanNotice.chilkDay(now(), calendar: .current))
         case .evening(let day, _): book.eveningOffered = iso(day)
+        case .bedtime(_, _, let review): if let review { book.eveningOffered = iso(review) }
         }
         save()
         log("plan notice seen: \(n.id) (\(how))")
@@ -165,6 +177,7 @@ final class PlanNotices {
         switch n {
         case .morning: openSheet(Calendar.current.startOfDay(for: now()), false)
         case .evening(let day, _): openSheet(day, true)
+        case .bedtime(_, _, let review): if let review { openSheet(review, true) }
         }
         return true
     }
@@ -175,7 +188,7 @@ final class PlanNotices {
             _ = display.clicked()
             finish(how: "button")
             switch n {
-            case .morning(_, let review): if let review { openSheet(review, true) }
+            case .morning(_, let review), .bedtime(_, _, let review): if let review { openSheet(review, true) }
             case .evening(let day, _): openSheet(day, true)
             }
             return true
@@ -232,6 +245,7 @@ final class PlanNotices {
     func endOfDayFired() {
         let cal = Calendar.current
         let day = PlanNotice.chilkDay(now(), calendar: cal)          // after midnight it is still the evening before
+        guard !sleepOn() else { return }                            // decision 17: with «Сон» — with its warning
         guard enabled(), board.canRead, !checkingEvening, book.eveningOffered != iso(day), !book.reviewed.contains(iso(day)),
               !queue.contains(where: { if case .evening = $0 { true } else { false } }) else { return }
         checkingEvening = true
@@ -244,6 +258,21 @@ final class PlanNotices {
             let done = items.filter(\.done).count
             queue.append(.evening(day: day, text: PlanLines.evening(done: done, total: items.count)))
             log("plan: evening review waits (\(done) of \(items.count) done)")
+        }
+    }
+
+    /// Slice 9c (decisions 17, 20): an hour before bedtime — «Через час спать — закругляйся с делами»; with things planned
+    /// today and the day not summed up — «Через час спать. Подведём день?» + «Подвести». The timer's rule; gone at bedtime.
+    func bedtimeSoon(at bedtime: Date) {
+        let day = PlanNotice.chilkDay(now(), calendar: .current)
+        let ask = enabled() && board.canRead && book.eveningOffered != iso(day) && !book.reviewed.contains(iso(day))
+        Task {
+            var review: Date?
+            if ask, let items = try? await reminders.day(day), !items.isEmpty { review = day }
+            queue.removeAll { if case .bedtime = $0, $0 != showing { true } else { false } }
+            let text = review == nil ? Lines.sleepWarning.randomElement()! : PlanLines.sleepReview
+            queue.append(.bedtime(at: bedtime, text: text, review: review))
+            log("sleep: the warning waits\(review == nil ? "" : " with the evening review")")
         }
     }
 
@@ -327,6 +356,7 @@ extension PlanLines {
     static var letsDo: String { String(localized: "Давай") }
     static var noNeed: String { String(localized: "Не надо") }
     static var declined: String { String(localized: "Хорошо, не буду") }
+    static var sleepReview: String { String(localized: "Через час спать. Подведём день?") }
     static var reviewFailed: String { String(localized: "Не всё записалось в Напоминания — загляни туда") }
 
     static func planning(_ day: Date) -> String {

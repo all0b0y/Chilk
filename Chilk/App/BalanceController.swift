@@ -330,6 +330,16 @@ final class BalanceController {
     /// Slice 9c (decision 20): an hour before bedtime — shown by the timer's rule (it waits while he is busy).
     var onBedtimeSoon: (Date) -> Void = { _ in }
 
+    /// Acceptance only: «Сон» on, tonight's bedtime in `seconds` (the warning comes at once — it is within the hour).
+    func demoBedtime(in seconds: TimeInterval) {
+        var care = engine.state.care
+        care.sleepOn = true
+        _ = try? engine.setCare(care)
+        engine.setBedtimeForTesting(Date().addingTimeInterval(seconds))
+        save()
+        log("demo: sleep on, bedtime at \(Self.clock(Date().addingTimeInterval(seconds)))")
+    }
+
     private func apply(_ events: [BalanceEvent]) {
         for case .ask(let n, let stage, _, _) in events where n == .endOfDay && stage >= 1 { onEndOfDay() }
         for case .bedtimeSoon(let at) in events { onBedtimeSoon(at) }
