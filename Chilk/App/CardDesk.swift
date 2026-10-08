@@ -170,6 +170,10 @@ final class CardDesk {
     /// [контекст] for a correction turn: what the card on screen says.
     func context() -> String? {
         guard let card = current else { return nil }
+        if case .plan = card.kind {
+            return "на экране карточка плана: \(card.summary()). Если пользователь её поправляет — вызови chilk_plan с action "
+                + "finish, тем же днём и ВСЕМ исправленным списком (новая карточка заменит эту); если просит другое — делай другое"
+        }
         return "на экране карточка подтверждения: \(card.summary()). Если пользователь её поправляет — вызови тот же "
             + "инструмент заново с исправленными значениями (новая карточка заменит эту); если просит другое — делай другое"
     }
@@ -398,11 +402,20 @@ final class CardEditPanel {
     func show(_ card: ActionCard, beside chilk: NSRect, onLeftEdge: Bool, done: @escaping (ActionCard?) -> Void) {
         close()
         self.done = done
-        let model = CardEditModel(card)
-        let view = CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
-                                cancel: { [weak self] in self?.finish(nil) })
-        let size = NSSize(width: 360, height: model.isNote ? 330 : model.hasText ? 250 : model.hasDate && model.hasMinutes ? 230
+        let content: NSViewController
+        let size: NSSize
+        if let plan = PlanEditModel(card) {
+            // Slice 9b: a plan is a list — the thing, its time on or off, ✕, and a bare «+».
+            content = NSHostingController(rootView: PlanEditView(model: plan, save: { [weak self] in self?.finish(plan.edited()) },
+                                                                 cancel: { [weak self] in self?.finish(nil) }))
+            size = NSSize(width: 440, height: min(560, 110 + 34 * CGFloat(max(3, plan.rows.count + 1))))
+        } else {
+            let model = CardEditModel(card)
+            content = NSHostingController(rootView: CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
+                                                                 cancel: { [weak self] in self?.finish(nil) }))
+            size = NSSize(width: 360, height: model.isNote ? 330 : model.hasText ? 250 : model.hasDate && model.hasMinutes ? 230
                           : (model.hasDate || model.hasMinutes ? 190 : 150))
+        }
         let screen = NSScreen.screens.first { $0.frame.intersects(chilk) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? chilk
         var x = onLeftEdge ? chilk.maxX - 30 : chilk.minX - size.width + 30
         x = min(max(x, screen.minX + 12), screen.maxX - size.width - 12)
@@ -413,7 +426,7 @@ final class CardEditPanel {
         w.level = .floating
         w.isReleasedWhenClosed = false
         w.hidesOnDeactivate = false
-        w.contentViewController = NSHostingController(rootView: view)
+        w.contentViewController = content
         w.setContentSize(size)
         closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w,
                                                                queue: .main) { [weak self, weak w] _ in

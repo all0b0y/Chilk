@@ -183,6 +183,8 @@ final class Actions {
             result = remember(call)
         } else if call.name == "chilk_emote" {
             result = emote(call)
+        } else if call.name == "chilk_plan" {
+            result = await plan(call)
         } else if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
         } else if ChilkReminderExecutor.handles(call.name) {
@@ -200,6 +202,16 @@ final class Actions {
         balance?.log("tool \(call.name) success=\(result.success)"
                      + (result.success ? "" : " \(result.value["error"]?.string ?? "")"))
         return result
+    }
+
+    /// Slice 9b: the day plan being collected (set by the app).
+    var planner: Planner?
+
+    private func plan(_ call: CodexToolCall) async -> CodexToolResult {
+        guard case .plan(let action, let day, let items)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
+        else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
+        guard let planner else { return .failure("plan_unavailable: nothing was planned") }
+        return await planner.handle(action, day: day, items: items, channel: ClockCheck.turnChannel == .chat ? .chat : .voice)
     }
 
     // MARK: Confirmation cards (slice 8c, decisions 3–8)

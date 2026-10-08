@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var game: GameController?
     /// Slice 8c: confirmation cards.
     private var cards: CardDesk?
+    private var planner: Planner?
     /// Slice 8d: timers in Apple's Clock.
     private var clock: ClockTimers?
     /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
@@ -98,9 +99,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         warmups.log = { [weak balance] in balance?.log($0) }
         balance.warmups = warmups
         let profile = self.profile
-        conversation.context = { [weak balance, weak hide] in
-            Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name,
-                          balance: balance?.engine.brief(), hidden: hide?.isHidden ?? false)
+        conversation.context = { [weak balance, weak hide, weak self] in
+            let base = Lines.context(sittingMinutes: balance?.sittingMinutes ?? 0, name: profile.profile.name,
+                                     balance: balance?.engine.brief(), hidden: hide?.isHidden ?? false)
+            // Slice 9b: while a plan is collected, the turn knows its day and draft.
+            guard let note = self?.planner?.context() else { return base }
+            return VoiceContext.adding(note, to: base)
         }
         conversation.onEnd = { [weak balance, weak ears, weak hide] in hide?.applyPending(); balance?.resume(); ears?.resume() }
         conversation.refusal = { [weak balance] in balance?.refusal() }        // «лежит» (6b)
@@ -301,6 +305,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         conversation.cards = cards
         chat.cards = cards
         self.cards = cards
+        // Slice 9b: the day plan — collected by voice or in the chat, one card for the whole plan.
+        let planner = Planner(reminders: actions.reminders)
+        planner.cards = cards
+        planner.log = { [weak balance] in balance?.log($0) }
+        planner.lastWords = { ClockCheck.lastWords() }
+        actions.planner = planner
+        conversation.planCollecting = { [weak planner] in planner?.collecting(in: .voice) ?? false }
+        conversation.planSilence = { [weak planner] in planner?.silenceFinish() ?? false }
+        chat.planCollecting = { [weak planner] in planner?.collecting(in: .chat) ?? false }
+        chat.planSilence = { [weak planner] in planner?.silenceFinish() ?? false }
+        self.planner = planner
         let chatFree = chat.chilkFree
         chat.chilkFree = { [weak cards] in !(cards?.ownsStage ?? false) && chatFree() }
         let trayFree = tray.isFree

@@ -27,6 +27,15 @@ enum ClockCheck {
         return VoiceContext.adding(hint, to: context)
     }
 
+    /// Slice 9b: the channel whose turn is running (a tool call belongs to it); the latest one when none or both run.
+    static var turnChannel: Channel {
+        if inFlight.count == 1, let c = inFlight.first { return c }
+        return last.max { $0.value.at < $1.value.at }?.key ?? .voice
+    }
+
+    /// The user's words of that turn (the plan's night «завтра» rule).
+    static func lastWords() -> String { last[turnChannel]?.text ?? "" }
+
     /// The channel's Codex turn is over (answered or failed).
     static func turnEnded(_ channel: Channel) { inFlight.remove(channel) }
 

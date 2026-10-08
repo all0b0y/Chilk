@@ -159,7 +159,10 @@ public struct ChatLog: Codable, Equatable, Sendable {
     private mutating func append(question: String, answer: String, via: ChatTurn.Via, chips: [ChatChip], to id: UUID,
                                  at: Date) {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        sessions[index].turns.append(ChatTurn(role: .user, via: via, text: Self.clean(question), at: at))
+        // Slice 9b: Chilk's own line with no question before it («Это всё?» while a plan is collected).
+        if !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            sessions[index].turns.append(ChatTurn(role: .user, via: via, text: Self.clean(question), at: at))
+        }
         sessions[index].turns.append(ChatTurn(role: .chilk, via: via, text: answer.trimmingCharacters(in: .whitespacesAndNewlines),
                                               at: at, chips: chips))
         sessions[index].lastActive = at

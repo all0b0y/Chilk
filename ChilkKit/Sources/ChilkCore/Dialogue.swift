@@ -73,6 +73,8 @@ public enum Dialogue {
     /// Slice 9, decision 8 (was: `followUpWindow(.question, 0)` ≈ 12 s — gone before the card was read): after a
     /// confirmation card appears he listens for «да / нет / поправка» without his name this long.
     public static let cardAnswerWindow: TimeInterval = 60
+    /// Slice 9b (decision 11): planning — 20 s of silence asks «Это всё?», 20 s more shows the plan's card.
+    public static let planSilence: TimeInterval = 20
 
     /// Time to read a reply before he goes back to the edge.
     public static func readingTime(_ replyLength: Int) -> TimeInterval { 2.5 + Double(replyLength) / 14 }

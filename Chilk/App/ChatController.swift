@@ -108,6 +108,45 @@ final class ChatController: NSObject, NSWindowDelegate {
     /// A typed turn ended: a break asked for in it starts now (like after a conversation).
     var onTurnEnd: () -> Void = {}
 
+    /// Slice 9b (decision 11): a plan collected in the chat — 20 s without typing asks «Это всё?», 20 s more shows its
+    /// card. Typing (a non-empty field) holds the count.
+    var planCollecting: () -> Bool = { false }
+    var planSilence: () -> Bool = { false }
+    private var planTimer: Timer?
+    private var planAsked = false
+    private var planQuietSince = Date()
+
+    private func armPlan() {
+        planTimer?.invalidate()
+        planTimer = nil
+        planAsked = false
+        planQuietSince = Date()
+        guard planCollecting() else { return }
+        planTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.planTick() }
+        }
+    }
+
+    private func planTick() {
+        guard planCollecting() else { planTimer?.invalidate(); planTimer = nil; return }
+        if model.pending != nil || !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { planQuietSince = Date(); return }
+        guard Date().timeIntervalSince(planQuietSince) >= Dialogue.planSilence else { return }
+        planQuietSince = Date()
+        if !planAsked {
+            planAsked = true
+            let id = store.recordLocal(question: "", answer: PlanLines.allDone, via: .text,
+                                       continuing: model.selected.flatMap { store.log.session($0)?.id })
+            lastLiveChat = id
+            model.selected = id
+            log("chat: plan silence — «это всё?»")
+        } else {
+            planTimer?.invalidate()
+            planTimer = nil
+            planAsked = false
+            log(planSilence() ? "chat: plan card after silence" : "chat: plan silence, nothing to show")
+        }
+    }
+
     /// A voice turn: kept as text in the chat of its thread (decision 10, 13).
     func recordVoice(question: String, answer: String, thread: String) {
         let previous = lastLiveChat
@@ -211,6 +250,7 @@ final class ChatController: NSObject, NSWindowDelegate {
                 model.pending = nil
                 model.selected = id
                 log("chat: answered «\(answer)»")
+                armPlan()
                 if let q = takeEmote() {
                     // 6c (revised at acceptance): the answer in a bubble at the edge first — it explains the
                     // reaction — then the emotion 0.2 s after the words are all there; the bubble stays meanwhile.
@@ -419,7 +459,9 @@ final class ChatController: NSObject, NSWindowDelegate {
         model.cardButton = { [weak self] title in
             guard let self, let cards = self.cards, let shown = self.model.card else { return }
             if title == CardDesk.edit {
-                if let card = cards.current, card.id == shown.id { self.model.cardEdit = CardEditModel(card) }
+                guard let card = cards.current, card.id == shown.id else { return }
+                // Slice 9b: a plan is a list — its own panel beside Chilk, not the inline fields.
+                if case .plan = card.kind { cards.openEditor() } else { self.model.cardEdit = CardEditModel(card) }
                 return
             }
             cards.pressedFromChat(title, card: shown.id)        // a double click cannot answer the next card

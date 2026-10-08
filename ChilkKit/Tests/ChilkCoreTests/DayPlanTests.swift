@@ -122,6 +122,14 @@ struct DayPlanTests {
         #expect(card.summary(calendar: cal).hasPrefix("day plan for 2026-10-09 (пятница, 9 октября): 11:00 «созвон»; 15:00 «маме» (guessed time); no time «купить хлеб»"))
     }
 
+    @Test func chilksOwnLineNeedsNoQuestionBeforeIt() {
+        var log = ChatLog()
+        let id = log.recordLocal(question: "", answer: "Это всё?", via: .text, continuing: nil, at: at(9, 12))
+        #expect(log.session(id)?.turns.map(\.text) == ["Это всё?"])
+        _ = log.recordLocal(question: "ещё молоко", answer: "Ага", via: .text, continuing: id, at: at(9, 12, 1))
+        #expect(log.session(id)?.turns.count == 3)
+    }
+
     @Test func aLongPlanShowsEightTimesOnTheCard() {
         let items = (0..<11).map { PlanItem(title: "дело \($0)", time: PlanTime(hour: 8 + $0, minute: 0)) }
         let lines = ActionCard(kind: .plan(day: day(10), items: items, already: [])).lines(now: at(9, 12), calendar: cal)

@@ -24,6 +24,11 @@ final class Conversation {
     var log: (String) -> Void = { _ in }
     /// Slice 8c: confirmation cards — a «да / нет» to the card is answered here, without Codex.
     weak var cards: CardDesk?
+    /// Slice 9b (decision 11): a plan is being collected by voice — he listens without the name all the time; 20 s of
+    /// silence asks «Это всё?», 20 s more shows the plan's card.
+    var planCollecting: () -> Bool = { false }
+    var planSilence: () -> Bool = { false }
+    private var askedAllDone = false
     /// The card is in this conversation's bubble (its buttons go to the desk).
     private var cardInBubble = false
     /// The card was on screen when he was called: «да / нет» may answer it (a hidden card is not answered blind).
@@ -424,7 +429,7 @@ final class Conversation {
             }
             switch detector.verdict(at: now) {
             case .keepListening: break
-            case .nothingHeard where window != nil: perform(.leaveQuietly)
+            case .nothingHeard where window != nil: if !planSilenceStep() { perform(.leaveQuietly) }
             case .nothingHeard: stopEars(); leave(saying: Lines.didntHear, after: 3)
             case .done, .tooLong: finishListening()
             }
@@ -480,8 +485,10 @@ final class Conversation {
             if let demo = ProcessInfo.processInfo.environment["CHILK_DEMO_HEARD"], !demo.isEmpty { question = demo }
             log("heard «\(question)»")
             guard !question.isEmpty else {
+                if wasFollowUp, planSilenceStep() { return }   // slice 9b: planning — «Это всё?», then the card
                 return wasFollowUp ? leave(saying: nil, after: 0.2) : leave(saying: Lines.didntHear, after: 3)
             }
+            askedAllDone = false
             // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
             if let cards, cards.hasCard, cardInBubble || cardSeen {
                 let line: String?
@@ -536,6 +543,8 @@ final class Conversation {
                 }
                 if cardInBubble {
                     listen(window: Dialogue.cardAnswerWindow)   // «да» by voice (slice 9, decision 8: a minute)
+                } else if planCollecting() {
+                    listen(window: Dialogue.planSilence)        // slice 9b: planning — no name needed for the next thing
                 } else if !suppressFollowUps, let window = Dialogue.followUpWindow(mode: reply.mode, replyLength: text.count) {
                     listen(window: window)
                 } else {
@@ -548,6 +557,29 @@ final class Conversation {
                 leave(saying: Lines.brainFailed, after: 3.5)
             }
         }
+    }
+
+    /// Slice 9b (decision 11): a silent follow-up while a plan is collected — the first asks «Это всё?», the second shows
+    /// the plan's card and waits a minute for «да». `false` — not planning, or nothing to show (the caller leaves).
+    private func planSilenceStep() -> Bool {
+        guard planCollecting() else { askedAllDone = false; return false }
+        stopEars()
+        sim.stopAct()
+        if !askedAllDone {
+            askedAllDone = true
+            log("plan: silence — «это всё?»")
+            showReply(PlanLines.allDone)
+            listen(window: Dialogue.planSilence)
+            return true
+        }
+        askedAllDone = false
+        guard planSilence(), let cards, cards.hasCard else { return false }
+        cardInBubble = true
+        cardSeen = true
+        longAnswer = nil
+        cards.showInConversation()
+        listen(window: Dialogue.cardAnswerWindow)
+        return true
     }
 
     private func stopEars() {
