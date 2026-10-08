@@ -44,6 +44,45 @@ final class DaySheetModel {
                                                                                : String(localized: "→ Завтра")
     }
 
+    /// Slice 10 (decisions 1, 3, 6): «Ещё не записано · после «Да»» — the draft being collected or the plan card waiting for
+    /// «Да». `index` — the thing's place in the draft / on the card (the block shows timed things first).
+    struct Unwritten: Identifiable, Equatable {
+        let index: Int
+        let item: PlanItem
+        var id: Int { index }
+    }
+    var unwritten: [Unwritten] = []
+    var canRecord = false
+    var unwrittenEditing: Int?
+    var editUnwritten: (Int, PlanItem?) -> Void = { _, _ in }
+    var record: () -> Void = {}
+
+    func beginUnwrittenEdit(_ u: Unwritten) {
+        editing = nil
+        adding = false
+        unwrittenEditing = u.index
+        editTitle = u.item.title
+        editTimed = u.item.time != nil
+        editTime = (u.item.time ?? PlanTime(hour: 9, minute: 0)!).date(on: day, calendar: .current)
+    }
+
+    func saveUnwrittenEdit() {
+        guard let i = unwrittenEditing else { return }
+        let t = String(editTitle.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+        guard !t.isEmpty else { return }
+        unwrittenEditing = nil
+        let time = editTimed ? PlanTime(of: editTime, calendar: .current) : nil
+        // An untouched guessed time keeps its «· день?» mark (as «Изменить» did in 9b).
+        let old = unwritten.first { $0.index == i }?.item
+        editUnwritten(i, PlanItem(title: t, time: time, guessed: old?.guessed == true && old?.time == time))
+    }
+
+    static func unwritten(_ items: [PlanItem]) -> [Unwritten] {
+        let all = items.enumerated().map { Unwritten(index: $0.offset, item: $0.element) }
+        return all.filter { $0.item.time != nil }.sorted { ($0.item.time!, $0.index) < ($1.item.time!, $1.index) }
+            + all.filter { $0.item.time == nil }
+    }
+
     var toggle: (Row) -> Void = { _ in }
     var saveEdit: () -> Void = {}
     var delete: (Row) -> Void = { _ in }
@@ -56,6 +95,7 @@ final class DaySheetModel {
     }
 
     func beginEdit(_ row: Row) {
+        unwrittenEditing = nil
         editing = row.id
         editTitle = row.title
         editTimed = row.time != nil
@@ -112,7 +152,7 @@ struct DaySheetView: View {
             if model.noAccess {
                 Label(String(localized: "Нет доступа к «Напоминаниям» — разреши в Настройках"), systemImage: "lock")
                     .foregroundStyle(.secondary)
-            } else if model.rows.isEmpty && !model.adding {
+            } else if model.rows.isEmpty && !model.adding && model.unwritten.isEmpty {
                 Text(String(localized: "На этот день ничего нет")).foregroundStyle(.secondary)
             }
             ScrollView {
@@ -126,6 +166,7 @@ struct DaySheetView: View {
                         editor(title: $model.addTitle, timed: $model.addTimed, time: $model.addTime, save: model.add,
                                cancel: { model.adding = false })
                     }
+                    if !model.reviewing && !model.unwritten.isEmpty { unwrittenBlock }
                 }
             }
             if model.reviewing {
@@ -141,6 +182,37 @@ struct DaySheetView: View {
         }
         .padding(20)
         .frame(minWidth: 340, minHeight: 320, alignment: .topLeading)
+    }
+
+    /// Slice 10: what Chilk has not written yet — paler, no ticks; ✕ and a double click edit it; «Записать» = «Да».
+    private var unwrittenBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Divider().padding(.vertical, 6)
+            Text(String(localized: "Ещё не записано · после «Да»")).font(.subheadline).foregroundStyle(.secondary)
+            ForEach(model.unwritten) { u in
+                if model.unwrittenEditing == u.index {
+                    editor(title: $model.editTitle, timed: $model.editTimed, time: $model.editTime,
+                           save: model.saveUnwrittenEdit, cancel: { model.unwrittenEditing = nil })
+                } else {
+                    HStack(spacing: 10) {
+                        Image(systemName: "circle.dashed").foregroundStyle(.tertiary).frame(width: 20, height: 20)
+                        if let t = u.item.time { Text(t.text).monospacedDigit().foregroundStyle(.tertiary) }
+                        Text(u.item.title).foregroundStyle(.secondary).lineLimit(1)
+                            .onTapGesture(count: 2) { model.beginUnwrittenEdit(u) }
+                        Spacer(minLength: 8)
+                        Button { model.editUnwritten(u.index, nil) } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.borderless).foregroundStyle(.tertiary).help(String(localized: "Убрать"))
+                    }
+                    .padding(.vertical, 5)
+                }
+            }
+            HStack {
+                Spacer()
+                Button(String(localized: "Записать")) { model.record() }
+                    .buttonStyle(.borderedProminent).disabled(!model.canRecord || model.noAccess)
+            }
+            .padding(.top, 4)
+        }
     }
 
     private func line(_ row: DaySheetModel.Row) -> some View {
@@ -197,6 +269,10 @@ final class DaySheet: NSObject, NSWindowDelegate {
     var onClose: () -> Void = {}
     /// «Готово» in the review: the day, how many were done, how many there were, how many writes Reminders refused.
     var onReviewed: (_ day: Date, _ done: Int, _ total: Int, _ failed: Int) -> Void = { _, _, _, _ in }
+    /// Slice 10: what is not written yet for a day (the planner), its edit (nil — ✕) and «Записать».
+    var unwritten: (Date) -> (items: [PlanItem], canRecord: Bool)? = { _ in nil }
+    var editUnwritten: (Date, Int, PlanItem?) -> Void = { _, _, _ in }
+    var recordUnwritten: (Date) -> Void = { _ in }
     /// The review's done states as Reminders had them: only what changed is written.
     private var original: [String: Bool] = [:]
     /// Counted with `WindowPolicy` from open to close: a minimised sheet is still open (`isVisible` is false for it).
@@ -212,6 +288,16 @@ final class DaySheet: NSObject, NSWindowDelegate {
         model.delete = { [weak self] row in self?.delete(row) }
         model.add = { [weak self] in self?.add() }
         model.finishReview = { [weak self] in self?.finishReview() }
+        model.editUnwritten = { [weak self] i, item in
+            guard let self else { return }
+            self.log("plan sheet: unwritten \(item == nil ? "removed" : "edited")")
+            self.editUnwritten(self.model.day, i, item)
+        }
+        model.record = { [weak self] in
+            guard let self else { return }
+            self.log("plan sheet: «Записать»")
+            self.recordUnwritten(self.model.day)
+        }
         // Decision 16 (review 9b): edits in Reminders (Mac, iPhone) reach the open sheet of any day, not only today's.
         observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if self?.isOpen == true { self?.reload() } }
@@ -222,8 +308,17 @@ final class DaySheet: NSObject, NSWindowDelegate {
     var shownDay: Date { model.day }
 
     func open(day: Date, review: Bool = false) {
-        model.day = Calendar.current.startOfDay(for: day)
+        let d = Calendar.current.startOfDay(for: day)
+        // Slice 10: the same day asked again (after «Да», «Изменить») — the open sheet stays where the user put it.
+        if counted, model.day == d, !review, !model.reviewing, window?.isMiniaturized == false {
+            window?.makeKeyAndOrderFront(nil)
+            log("plan sheet shown again for \(PlanDay.iso(d, calendar: .current))")
+            reload()
+            return
+        }
+        model.day = d
         model.editing = nil
+        model.unwrittenEditing = nil
         model.adding = false
         model.reviewing = review
         model.choices = [:]
@@ -278,6 +373,7 @@ final class DaySheet: NSObject, NSWindowDelegate {
 
     /// Re-read the day (after Chilk's writes, and on every change in Reminders while it is open).
     func reload() {
+        refreshUnwritten()
         if model.reviewing, !original.isEmpty { return }      // the review keeps its own ticks until «Готово»
         let day = model.day
         Task {
@@ -295,6 +391,17 @@ final class DaySheet: NSObject, NSWindowDelegate {
                 log("plan sheet: Reminders not readable — \(error)")       // what is shown stays
             }
         }
+    }
+
+    /// Slice 10: the «Ещё не записано» block from the planner (the draft or the waiting card changed).
+    func refreshUnwritten() {
+        let u = unwritten(model.day)
+        let rows = DaySheetModel.unwritten(u?.items ?? [])
+        if model.unwritten != rows {
+            if let i = model.unwrittenEditing, !rows.contains(where: { $0.index == i }) { model.unwrittenEditing = nil }
+            model.unwritten = rows
+        }
+        model.canRecord = u?.canRecord ?? false
     }
 
     private func toggle(_ row: DaySheetModel.Row) {

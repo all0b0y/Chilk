@@ -205,9 +205,7 @@ final class Actions {
             result = await plan(call)
         } else if call.name == "chilk_plan_show" {
             if case .planShow(let day)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments) {
-                let d = day ?? Calendar.current.startOfDay(for: Date())
-                showPlan(d)
-                result = .ok(["shown": true, "day_text": .string(PlanDay.title(d, now: Date(), calendar: .current))])
+                result = await showPlanResult(day ?? Calendar.current.startOfDay(for: Date()))
             } else { result = .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         } else if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
@@ -239,6 +237,26 @@ final class Actions {
         else { return .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         guard let planner else { return .failure("plan_unavailable: nothing was planned") }
         return await planner.handle(action, day: day, items: items, channel: ClockCheck.turnChannel == .chat ? .chat : .voice)
+    }
+
+    /// Slice 10 (decision 1, Б3): «покажи план» — the sheet opens, and Codex hears what is in it: what is in Reminders and
+    /// what is not written yet (the draft or the card waiting for «Да»), so it does not count from memory.
+    private func showPlanResult(_ day: Date) async -> CodexToolResult {
+        showPlan(day)
+        let cal = Calendar.current
+        var out: [String: JSON] = ["shown": true, "day_text": .string(PlanDay.title(day, now: Date(), calendar: cal))]
+        if let items = try? await reminders.day(day) {
+            out["in_plan"] = .array(items.map { r in
+                let time = r.timed ? r.due.map { PlanTime(of: $0, calendar: cal).text + " " } ?? "" : ""
+                return .string(time + r.title + (r.done ? " (сделано)" : ""))
+            })
+        }
+        if let draft = planner?.unwritten(for: day), !draft.items.isEmpty {
+            out["not_written_yet"] = .array(draft.items.map { .string($0.label) })
+        }
+        out["note"] = .string("Say it in one short phrase with both counts if there is a draft («В плане 1, в черновике ещё 3 — "
+            + "запишу после «да»»); not_written_yet is shown in the sheet as «Ещё не записано» and is not in Reminders yet.")
+        return .ok(.object(out))
     }
 
     // MARK: Confirmation cards (slice 8c, decisions 3–8)
@@ -418,6 +436,13 @@ final class Actions {
                 if !r.success { failed.append(entry.title); failure = r }
             }
             let written = entries.count - failed.count
+            // Slice 10 (decision 2): Codex hears on its next turn what was written and what the user removed.
+            var left = failed
+            let writtenTitles = entries.map(\.title).filter { t in
+                if let i = left.firstIndex(of: t) { left.remove(at: i); return false }
+                return true
+            }
+            planner?.committed(card, written: writtenTitles, failed: failed)
             let dayText = PlanDay.title(day, now: started, calendar: .current, accusative: true)
             let things = RussianPlural.form(written, String(localized: "дело"), String(localized: "дела"), String(localized: "дел"))
             if written > 0 { onPlanWritten(day) }

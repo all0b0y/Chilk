@@ -356,7 +356,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let sheet = DaySheet(reminders: actions.reminders)
         sheet.chilkFrame = conversation.chilkFrame
         sheet.log = { [weak balance] in balance?.log($0) }
-        sheet.onWrite = { [weak board] in board?.refresh() }
+        sheet.onWrite = { [weak board, weak planner] in board?.refresh(); planner?.refreshAlready() }
+        // Slice 10 (decisions 1–6): «Ещё не записано» — the planner's draft or plan card, edited and written from the sheet.
+        sheet.unwritten = { [weak planner] day in planner?.unwritten(for: day) }
+        sheet.editUnwritten = { [weak planner] day, i, item in planner?.editUnwritten(day: day, index: i, to: item) }
+        sheet.recordUnwritten = { [weak planner] day in planner?.recordUnwritten(day: day) }
+        planner.onChange = { [weak sheet] in if sheet?.isOpen == true { sheet?.refreshUnwritten() } }
+        let cardsChanged = cards.onChange
+        cards.onChange = { [weak sheet] in cardsChanged(); if sheet?.isOpen == true { sheet?.refreshUnwritten() } }
+        cards.onDeclined = { [weak planner] card in planner?.declined(card) }
+        cards.openPlanSheet = { [weak sheet] day in sheet?.open(day: day) }
         sheet.onTick = { [weak edge, weak cards] last in
             // He reacts only when he is free at the edge (no bubble, no conversation, no card).
             guard let edge, cards?.stageFree() == true else { return }
@@ -441,7 +450,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sheet.onReviewed = { [weak notices] day, done, total, failed in
             notices?.reviewed(day: day, done: done, total: total, failed: failed)
         }
-        cards.onCommitted = { [weak notices] card, source, ok in
+        cards.onCommitted = { [weak notices, weak edge, weak conversation] card, source, ok in
+            // Slice 10 (decision 6): «Записать» in the sheet — he is glad at the edge (when no conversation holds him).
+            if ok, source == .sheet, case .plan = card.kind, conversation?.isActive != true { edge?.sim.perform(.cheer) }
             guard ok, case .reminder(_, let due) = card.kind else { return }
             notices?.reminderWritten(due: due, viaChat: source == .chat)
         }

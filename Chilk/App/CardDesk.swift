@@ -10,7 +10,7 @@ import SwiftUI
 /// Every button press names the card it was shown for: a stale bubble never answers the next card.
 @MainActor
 final class CardDesk {
-    enum Source: String { case edge, voice, chat, panel }
+    enum Source: String { case edge, voice, chat, panel, sheet }
 
     private let sim: CharacterSim
     private(set) var queue = CardQueue()
@@ -57,6 +57,10 @@ final class CardDesk {
     var onResult: (UUID, String, Bool) -> Void = { _, _, _ in }
     /// Slice 9b (decision 13): a card was confirmed and written — which one, where it was answered, whether it worked.
     var onCommitted: (ActionCard, Source, Bool) -> Void = { _, _, _ in }
+    /// Slice 10 (decision 2): «Нет» on a card (the planner tells Codex on the next turn).
+    var onDeclined: (ActionCard) -> Void = { _ in }
+    /// Slice 10 (decision 4): «Изменить» on a plan card opens «Лист дня» on the plan's day — the draft is edited there.
+    var openPlanSheet: (Date) -> Void = { _ in }
     /// The result line of a card answered by voice still waits for a free stage.
     var resultPending: Bool { pendingResult != nil }
     /// The card left a conversation's bubble (answered elsewhere): the conversation stops routing its buttons.
@@ -251,6 +255,21 @@ final class CardDesk {
         }
     }
 
+    /// Slice 10 (decision 6): «Записать» in «Лист дня» — the same «Да», for the card it was drawn for (first in the queue).
+    func confirm(_ id: UUID, source: Source) {
+        guard current?.id == id else { log("card: «Записать» for a card that is not first"); return }
+        confirm(source: source)
+    }
+
+    /// Slice 10: every thing of a plan card removed in the sheet — the same «Нет».
+    func decline(_ id: UUID, source: Source) {
+        guard current?.id == id else {
+            if let card = queue.cards.first(where: { $0.id == id }) { _ = queue.settle(id); onDeclined(card); onChange() }
+            return
+        }
+        decline(source: source)
+    }
+
     private func confirm(source: Source) {
         guard let card = current, !card.expired(now: Date()) else { return }
         settle(card, how: "yes (\(source.rawValue))")             // before the await: one card is written once
@@ -261,7 +280,7 @@ final class CardDesk {
             onCommitted(card, source, result.ok)
             guard source != .chat else { return }
             // At the edge the card's own bubble becomes the result; by voice it waits until the stage is free.
-            if source == .edge || source == .panel, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }
+            if source == .edge || source == .panel || source == .sheet, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }
             else { pendingResult = (result.line, Date().addingTimeInterval(15)) }
         }
     }
@@ -269,7 +288,8 @@ final class CardDesk {
     private func decline(source: Source) {
         guard let card = current else { return }
         settle(card, how: "no (\(source.rawValue))")
-        if source == .edge || source == .panel { sim.say(String(localized: "Ладно, ничего не делаю"), duration: 2.5) }
+        onDeclined(card)
+        if source == .edge || source == .panel || source == .sheet { sim.say(String(localized: "Ладно, ничего не делаю"), duration: 2.5) }
         // By voice the conversation says it as it closes.
     }
 
@@ -296,6 +316,12 @@ final class CardDesk {
 
     func openEditor() {
         guard let card = current, card.editable else { return }
+        // Slice 10 (decisions 3, 4; Б1): a plan is edited in «Лист дня», in its «Ещё не записано» — no panel over the sheet.
+        if case .plan(let day, _, _) = card.kind {
+            log("card: plan edit → the day sheet")
+            openPlanSheet(day)
+            return
+        }
         let place = chilkFrame()
         log("card: edit panel opened")
         panel.show(card, beside: place.frame, onLeftEdge: place.onLeftEdge) { [weak self] edited in
@@ -409,12 +435,8 @@ final class CardEditPanel {
         self.done = done
         let content: NSViewController
         let size: NSSize
-        if let plan = PlanEditModel(card) {
-            // Slice 9b: a plan is a list — the thing, its time on or off, ✕, and a bare «+».
-            content = NSHostingController(rootView: PlanEditView(model: plan, save: { [weak self] in self?.finish(plan.edited()) },
-                                                                 cancel: { [weak self] in self?.finish(nil) }))
-            size = NSSize(width: 440, height: min(560, 110 + 34 * CGFloat(max(3, plan.rows.count + 1))))
-        } else {
+        // Slice 10 (decision 4): a plan card never comes here — it is edited in «Лист дня».
+        do {
             let model = CardEditModel(card)
             content = NSHostingController(rootView: CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
                                                                  cancel: { [weak self] in self?.finish(nil) }))
@@ -518,7 +540,7 @@ final class CardEditModel {
         case .noteDelete(_, let t):
             title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
         case .plan(let d, let items, _):
-            // Slice 9b: a plan is edited as a list (`PlanEditModel`); this one-item model is never shown for it.
+            // Slice 10: a plan is edited in «Лист дня»; this one-item model is never shown for it.
             title = items.first?.title ?? ""; date = d; text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
         }
         hasMinutes = length != nil

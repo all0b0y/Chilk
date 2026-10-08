@@ -232,6 +232,12 @@ public struct PlanEdits: Equatable, Sendable {
 
     public var isEmpty: Bool { removed.isEmpty && changed.isEmpty }
 
+    /// A card replaced by a voice correction keeps the edits made on the one before it.
+    public mutating func append(_ other: PlanEdits) {
+        removed += other.removed
+        changed += other.changed
+    }
+
     public mutating func record(_ old: PlanItem, _ new: PlanItem?) {
         guard let new else { removed.append(old.label); return }
         if new.label != old.label { changed.append(old.label + " → " + new.label) }
