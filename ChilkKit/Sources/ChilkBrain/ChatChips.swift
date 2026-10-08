@@ -22,6 +22,9 @@ public enum ChatChips {
         case .reminder(let title, let at):
             chip.subject = clean(title)
             chip.at = at
+        case .event(let title, let at, _, _):
+            chip.subject = clean(title)
+            chip.at = at
         case .readFile(_, let path):
             chip.subject = path.split(separator: "/").last.map(String.init)
         case .requestFolder(let path, _):
@@ -72,6 +75,7 @@ public enum ChatChips {
         case "chilk_cancel_timer": .cancelTimer
         case "chilk_clock_open": .openClock
         case "chilk_reminder": .reminder
+        case "chilk_event": .event
         case "chilk_find_files": .findFiles
         case "chilk_read_file": .readFile
         case "chilk_request_folder": .requestFolder

@@ -125,6 +125,7 @@ extension Lines {
         case .microphone: String(localized: "Микрофон")
         case .speech: String(localized: "Распознавание речи")
         case .reminders: String(localized: "Напоминания")
+        case .calendar: String(localized: "Календарь")
         }
     }
     static func permissionState(_ s: Permissions.State) -> String {

@@ -18,6 +18,11 @@ public final class QueueEventStore: EKEventStore {
     public override func requestFullAccessToReminders(completion: @escaping EKEventStoreRequestAccessCompletionHandler) {
         queue.async { completion(true, nil) }
     }
+
+    /// Slice 8e: the Calendar access prompt, answered the same way.
+    public override func requestFullAccessToEvents(completion: @escaping EKEventStoreRequestAccessCompletionHandler) {
+        queue.async { completion(true, nil) }
+    }
 }
 
 /// An `EKReminder` allocated without EventKit's initialiser (no store, no account).

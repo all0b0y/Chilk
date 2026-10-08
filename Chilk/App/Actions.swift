@@ -19,6 +19,10 @@ final class Actions {
     let files: Files
     private let reminders = ChilkReminderExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil
                                                   ? FakeReminders() : EventKitReminders())
+    /// Slice 8e: Chilk's own «Чилк» calendar (CHILK_FAKE_CALENDAR=1 | seed: a fake in the state dir for acceptance runs).
+    private let calendar = ChilkCalendarExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] != nil
+                                                 ? FakeCalendar(seed: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] == "seed")
+                                                 : EventKitCalendar())
     private weak var balance: BalanceController?
     private let sim: CharacterSim
     private var timer: Timer?
@@ -169,7 +173,8 @@ final class Actions {
             result = clock == nil ? .failure("clock_unavailable") : .ok([
                 "opened": "Clock",
                 "note": "Chilk cannot cancel, pause or resume Clock timers himself (macOS); the user does it in Clock."])
-        } else if ChilkReminderExecutor.proposes(call.name) || call.name == "chilk_schedule" || call.name == "chilk_timer" {
+        } else if ChilkReminderExecutor.proposes(call.name) || ChilkCalendarExecutor.proposes(call.name)
+                    || call.name == "chilk_schedule" || call.name == "chilk_timer" {
             result = await propose(call)                        // 8c: a card first; «Да» writes it
         } else if call.name == "chilk_remember" {
             result = remember(call)
@@ -179,6 +184,8 @@ final class Actions {
             result = await files.execute(call)
         } else if ChilkReminderExecutor.handles(call.name) {
             result = await reminders.execute(name: call.name, arguments: call.arguments)
+        } else if ChilkCalendarExecutor.handles(call.name) {
+            result = await calendar.execute(name: call.name, arguments: call.arguments)
         } else if let executor {
             result = executor.execute(name: call.name, arguments: call.arguments)
         } else {
@@ -197,7 +204,8 @@ final class Actions {
     /// Slice 8d: Clock timers through the shortcut «Чилк».
     var clock: ClockTimers?
 
-    /// `chilk_reminder` / `chilk_schedule` / `chilk_reminder_change` → a card built from the values that would be
+    /// `chilk_reminder` / `chilk_schedule` / `chilk_reminder_change` / `chilk_timer` / `chilk_event` / `chilk_event_change`
+    /// → a card built from the values that would be
     /// written. Nothing is written here.
     private func propose(_ call: CodexToolCall) async -> CodexToolResult {
         guard let cards else { return .failure("cards_unavailable: nothing was done") }
@@ -217,6 +225,9 @@ final class Actions {
         }
         let kind: ActionCard.Kind
         var date: Date?
+        // Slice 8e: an all-day event has no part of day to guess (only «завтра» after midnight can be a guess).
+        var wholeDay = false
+        let passed = CodexToolResult.failure("time_passed: that time has already passed; ask the user for a future time")
         switch action {
         case .reminder(let title, let said):
             let at = daytime(said)
@@ -255,11 +266,55 @@ final class Actions {
             }
         case .timer(let seconds, let title):
             kind = .timer(title: title.trimmingCharacters(in: .whitespacesAndNewlines), seconds: seconds)
+        case .event(let title, let said, let minutes, let allDay):
+            if allDay {
+                let slot = ActionCard.allDaySlot(movedTo: said, start: said, end: said)
+                guard slot.start >= Calendar.current.startOfDay(for: now) else { return passed }
+                kind = .event(title: title, start: slot.start, end: slot.end, allDay: true)
+                date = slot.start
+                wholeDay = true
+            } else {
+                let at = daytime(said)
+                guard future(at) else { return passed }
+                kind = .event(title: title, start: at, end: at.addingTimeInterval(Double(minutes) * 60), allDay: false)
+                date = at
+            }
+        case .eventChange(let id, let change):
+            // Only an event of the «Чилк» calendar (the store checks it), never a repeating one.
+            let found: EventInfo
+            do { found = try await calendar.lookup(id: id) } catch { return .failure(ChilkCalendarExecutor.failure(error)) }
+            guard !found.recurring else { return .failure(ChilkCalendarExecutor.failure(CalendarAccessError.recurring)) }
+            // A move keeps the length unless a new one is said; a whole day moves by whole days. Only a new start must lie
+            // ahead: lengthening an event that is on now is fine.
+            func moved(_ d: Date, _ minutes: Int?) -> (start: Date, end: Date)? {
+                if found.allDay {
+                    let slot = ActionCard.allDaySlot(movedTo: d, start: found.start, end: found.end)
+                    return slot.start == found.start || slot.start >= Calendar.current.startOfDay(for: now) ? slot : nil
+                }
+                let start = daytime(d)
+                guard start == found.start || future(start) else { return nil }
+                return (start, start.addingTimeInterval(minutes.map { Double($0) * 60 } ?? found.end.timeIntervalSince(found.start)))
+            }
+            wholeDay = found.allDay
+            switch change {
+            case .move(let d, let m), .moveRename(let d, let m, _):
+                guard let slot = moved(d, m) else { return passed }
+                var title = found.title
+                if case .moveRename(_, _, let t) = change { title = t }
+                kind = .eventChange(id: id, oldTitle: found.title, oldStart: found.start, oldEnd: found.end, allDay: found.allDay,
+                                    title: title, start: slot.start, end: slot.end)
+                if slot.start != found.start { date = slot.start }
+            case .rename(let t):
+                kind = .eventChange(id: id, oldTitle: found.title, oldStart: found.start, oldEnd: found.end, allDay: found.allDay,
+                                    title: t, start: found.start, end: found.end)
+            case .delete:
+                kind = .eventDelete(id: id, title: found.title, start: found.start, end: found.end, allDay: found.allDay)
+            }
         default:
             return .failure("Unsupported action")
         }
         let guess = date.map { ClockCheck.guess(for: $0) } ?? (part: false, day: false)
-        let card = ActionCard(kind: kind, guessedPart: guess.part, guessedDay: guess.day)
+        let card = ActionCard(kind: kind, guessedPart: guess.part && !wholeDay, guessedDay: guess.day)
         cards.propose(card)
         return .ok(["awaiting_confirmation": true, "card": .string(card.summary()),
                     "note": "Nothing is done yet. The user confirms the card with Да, changes it, or says Нет."])
@@ -273,6 +328,7 @@ final class Actions {
         let ability: ChilkAbility = switch card.kind {
         case .message: .timers
         case .timer: .clock
+        case .event, .eventChange, .eventDelete: .calendar
         default: .reminders
         }
         guard switches().isOn(ability) else {
@@ -324,6 +380,20 @@ final class Actions {
                 result = .failure("clock_failed")
                 line = String(localized: "Не получилось — «Часы» не ответили")
             }
+        case .event(let title, let start, let end, let allDay):
+            tool = "card_event"
+            result = await calendar.create(title: title, start: start, end: end, allDay: allDay)
+            line = String(localized: "Готово: «\(title)» — \(card.spanText(start: start, end: end, allDay: allDay, now: started))")
+        case .eventChange(let id, let old, let oldStart, let oldEnd, _, let title, let start, let end):
+            tool = "card_event_change"
+            // Only what the card changes: a rename keeps the slot as it is.
+            result = await calendar.change(id: id, title: title == old ? nil : title, start: start != oldStart ? start : nil,
+                                           end: end != oldEnd ? end : nil)
+            line = String(localized: "Готово: «\(title)» изменено")
+        case .eventDelete(let id, let title, _, _, _):
+            tool = "card_event_delete"
+            result = await calendar.delete(id: id)
+            line = String(localized: "Готово: «\(title)» удалено")
         }
         journal.write(ToolJournal.line(at: started, tool: tool,
                                        outcome: result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")),
@@ -332,8 +402,19 @@ final class Actions {
         if result.success { return (true, line) }
         if case .timer = card.kind { return (false, line) }
         let code = ToolJournal.code(of: result.value["error"]?.string ?? "")
-        return (false, code == "no_access" ? String(localized: "Не получилось: нет доступа к «Напоминаниям» — разреши в Настройках")
-                                           : String(localized: "Не получилось — ничего не изменилось"))
+        switch card.kind {
+        case .event, .eventChange, .eventDelete:
+            switch code {
+            case "no_access": return (false, String(localized: "Не получилось: нет доступа к «Календарю» — разреши в Настройках"))
+            case "recurring_event":
+                return (false, String(localized: "Не получилось: это повторяющееся событие — поменяй его в «Календаре»"))
+            case "not_found": return (false, String(localized: "Не получилось: этого события уже нет в календаре «Чилк»"))
+            default: return (false, String(localized: "Не получилось — ничего не изменилось"))
+            }
+        default:
+            return (false, code == "no_access" ? String(localized: "Не получилось: нет доступа к «Напоминаниям» — разреши в Настройках")
+                                               : String(localized: "Не получилось — ничего не изменилось"))
+        }
     }
 
     /// A click on Chilk while a due bubble is up closes it (`false` = not about a timer).

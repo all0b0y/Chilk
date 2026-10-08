@@ -26,6 +26,10 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 all0b0y</string>
 	<key>NSMicrophoneUsageDescription</key>

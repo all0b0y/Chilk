@@ -17,6 +17,15 @@ public enum ReminderChange: Equatable, Sendable {
     case delete
 }
 
+/// Slice 8e (decision 7): what `chilk_event_change` proposes for one of the «Чилк» calendar's events. `minutes`: the
+/// new length (nil keeps the event's own).
+public enum EventChange: Equatable, Sendable {
+    case move(Date, minutes: Int?)
+    case rename(String)
+    case moveRename(Date, minutes: Int?, String)
+    case delete
+}
+
 /// Breaks the user asks for by voice (decisions 2026-10-05); they start when the conversation closes.
 public enum ChilkBreak: Equatable, Sendable {
     case eyeGym, warmup, walk
@@ -41,6 +50,12 @@ public enum ChilkAction: Equatable, Sendable {
     case reminders
     /// Slice 8c (decision 7): one of Chilk's own reminders, by its id from `chilk_reminders`.
     case reminderChange(id: String, change: ReminderChange)
+    /// Slice 8e (decisions 3–7, 11): an event for Chilk's own «Чилк» calendar — proposed on a card, written on «Да».
+    /// `minutes`: its length (ignored for a whole day).
+    case event(title: String, at: Date, minutes: Int, allDay: Bool)
+    /// The «Чилк» calendar's events overlapping `from` … `to` (read without a card).
+    case events(from: Date, to: Date)
+    case eventChange(id: String, change: EventChange)
     case mode(BalanceMode)
     case takeBreak(ChilkBreak)
     /// Slice 5b, decision 17: one short fact for Chilk's memory; `asked` = the user asked («запомни…»).
@@ -95,6 +110,16 @@ public enum ChilkToolCatalog {
                  ["id": ["type": "string", "minLength": 1, "maxLength": 256],
                   "action": ["type": "string", "enum": ["move", "rename", "move_rename", "done", "delete"]],
                   "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120]]),
+            tool("chilk_event", "Propose an event in Chilk's own «Чилк» calendar in Apple Calendar (syncs to iPhone): a meeting, a class, an appointment — something that takes a time slot — or anything the user asks to put «в календарь». A thing to do at a time («напомни позвонить») is chilk_reminder; a countdown from now is chilk_timer. at: the start, ISO-8601; without a timezone it is the user's local time. minutes: the length, 1–1439 (60 when the user did not say). all_day=true: the whole day of at's date (a day off, a trip day); then minutes is 0. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows a confirmation card built from these values and creates the event only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
+                 ["title": ["type": "string", "minLength": 1, "maxLength": 120], "at": ["type": "string", "maxLength": 64],
+                  "minutes": ["type": "integer", "minimum": 0, "maximum": 1439], "all_day": ["type": "boolean"]]),
+            tool("chilk_events", "List the events of Chilk's own «Чилк» calendar that overlap from … to (ISO-8601, at most 366 days apart; up to 50, by start): id, title, start, end, allDay, recurring. Chilk sees ONLY this calendar: never the user's other calendars or their schedule — say so when asked about the whole schedule.",
+                 ["from": ["type": "string", "maxLength": 64], "to": ["type": "string", "maxLength": 64]]),
+            tool("chilk_event_change", "Propose a change to ONE event of Chilk's own «Чилк» calendar, by its exact id from chilk_events, only on the user's request: action move (the new start in at; minutes = the new length, 0 keeps it), rename (the new title), move_rename (both), delete. Unused fields: empty string or 0. Nothing changes yet: the app shows a confirmation card and applies it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm. Refused: not_found (no such event in the «Чилк» calendar — list them again), recurring_event (a repeating event: Chilk changes only single events; the user changes it in Calendar).",
+                 ["id": ["type": "string", "minLength": 1, "maxLength": 256],
+                  "action": ["type": "string", "enum": ["move", "rename", "move_rename", "delete"]],
+                  "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120],
+                  "minutes": ["type": "integer", "minimum": 0, "maximum": 1439]]),
             tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
                  ["mode": ["type": "string", "enum": ["strict", "soft", "silent"]]]),
             tool("chilk_eye_gym", "Only when the user asks: eye gymnastics with Chilk — he flies a figure-eight to follow, then «look into the distance» for 20 s. Starts after your short reply, when the conversation closes.", [:]),
@@ -172,6 +197,7 @@ public enum ChilkToolCatalog {
         case "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
         case "chilk_timer", "chilk_clock_open": .clock
         case "chilk_reminder", "chilk_reminders", "chilk_reminder_change": .reminders
+        case "chilk_event", "chilk_events", "chilk_event_change": .calendar
         default: nil
         }
     }
@@ -184,6 +210,21 @@ public enum ChilkToolCatalog {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && title.count <= limit
         && !title.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
     }
+
+    /// A JSON number that is a whole number (the schema's «integer»).
+    static func wholeNumber(_ value: JSON?) -> Int? {
+        guard case .number(let n)? = value, n.isFinite, n.rounded(.towardZero) == n, abs(n) < 1e9 else { return nil }
+        return Int(n)
+    }
+
+    /// Slice 8e: a timed event lasts 1 min … 23 h 59 min; a whole day ignores the length (0 by the schema's wording).
+    static func validEventLength(_ minutes: Int, allDay: Bool) -> Bool {
+        allDay ? (0...1439).contains(minutes) : (1...1439).contains(minutes)
+    }
+
+    /// Slice 8e: `chilk_events` reads at most a year at once (EventKit itself stops at four).
+    static let eventRangeLimit: TimeInterval = 366 * 86400
+    static func validEventRange(from: Date, to: Date) -> Bool { to > from && to.timeIntervalSince(from) <= eventRangeLimit }
 
     /// An ISO-8601 timestamp («2026-10-06T09:00:00+03:00»). Slice 8c: without a timezone it is the user's local
     /// time (the card shows what it became, so a wrong reading is caught before anything is written).
@@ -287,6 +328,36 @@ public enum ChilkToolCatalog {
             case "move_rename": return .reminderChange(id: id, change: .moveRename(try due(), try name()))
             case "done": return .reminderChange(id: id, change: .done)
             case "delete": return .reminderChange(id: id, change: .delete)
+            default: throw ToolError.invalidArguments
+            }
+        case "chilk_event":
+            guard Set(fields.keys) == ["title", "at", "minutes", "all_day"], let title = fields["title"]?.string,
+                  validTitle(title, limit: 120), let text = fields["at"]?.string, let at = timestamp(text),
+                  let minutes = wholeNumber(fields["minutes"]), let allDay = fields["all_day"]?.bool,
+                  validEventLength(minutes, allDay: allDay) else { throw ToolError.invalidArguments }
+            return .event(title: title.trimmingCharacters(in: .whitespacesAndNewlines), at: at, minutes: minutes, allDay: allDay)
+        case "chilk_events":
+            guard Set(fields.keys) == ["from", "to"], let a = fields["from"]?.string, let from = timestamp(a),
+                  let b = fields["to"]?.string, let to = timestamp(b), validEventRange(from: from, to: to)
+            else { throw ToolError.invalidArguments }
+            return .events(from: from, to: to)
+        case "chilk_event_change":
+            guard Set(fields.keys) == ["id", "action", "at", "title", "minutes"], let id = fields["id"]?.string,
+                  !id.isEmpty, id.count <= 256, let action = fields["action"]?.string, let at = fields["at"]?.string,
+                  let title = fields["title"]?.string, let minutes = wholeNumber(fields["minutes"]), (0...1439).contains(minutes)
+            else { throw ToolError.invalidArguments }
+            let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let length = minutes == 0 ? nil : minutes
+            func start() throws -> Date { guard let d = timestamp(at) else { throw ToolError.invalidArguments }; return d }
+            func name() throws -> String {
+                guard validTitle(cleanTitle, limit: 120) else { throw ToolError.invalidArguments }
+                return cleanTitle
+            }
+            switch action {
+            case "move": return .eventChange(id: id, change: .move(try start(), minutes: length))
+            case "rename": return .eventChange(id: id, change: .rename(try name()))
+            case "move_rename": return .eventChange(id: id, change: .moveRename(try start(), minutes: length, try name()))
+            case "delete": return .eventChange(id: id, change: .delete)
             default: throw ToolError.invalidArguments
             }
         case "chilk_remember":

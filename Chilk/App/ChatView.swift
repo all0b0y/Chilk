@@ -268,10 +268,11 @@ struct CardEditFields: View {
                 TextField(String(localized: "Что сказать"), text: $model.text, axis: .vertical).lineLimit(2...4)
             }
             if model.hasDate {
-                DatePicker(String(localized: "Когда"), selection: $model.date, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                DatePicker(String(localized: "Когда"), selection: $model.date, in: model.earliest...,
+                           displayedComponents: model.dateOnly ? [.date] : [.date, .hourAndMinute])
                     .environment(\.locale, Locale(identifier: "ru_RU"))
             }
-            if model.hasMinutes { MinutesField(text: $model.minutesText) }
+            if model.hasMinutes { MinutesField(text: $model.minutesText, label: model.minutesLabel) }
         }
         .frame(maxWidth: 360)
     }

@@ -64,6 +64,8 @@ public enum ChilkAbility: String, CaseIterable, Codable, Sendable {
     case webSearch, timers, reminders, files, obsidian, phrases
     /// Slice 8d: timers in Apple's Clock app (`timers` = Chilk's own scheduled messages).
     case clock
+    /// Slice 8e: events in Chilk's own «Чилк» calendar (Apple Calendar).
+    case calendar
 }
 
 /// Everything is on until the user switches it off. Unknown or missing entries in an older file mean «on».

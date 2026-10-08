@@ -47,6 +47,8 @@ targets:
         NSSpeechRecognitionUsageDescription: "Чилк распознаёт речь прямо на этом Mac, чтобы понять твою просьбу."
         NSRemindersFullAccessUsageDescription: "Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его."
         NSRemindersUsageDescription: "Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его."
+        NSCalendarsFullAccessUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
+        NSCalendarsUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.all0b0y.chilk

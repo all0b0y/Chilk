@@ -96,6 +96,14 @@ final class CardDesk {
              (.reminderDelete(let i1, _, _), .reminderChange(let i2, _, _, _, _)): i1 == i2
         case (.reminder, .message), (.message, .reminder): a.when == b.when
         case (.timer, .timer): true                       // «нет, на 10 минут» / «назови его чай»
+        // Slice 8e: «нет, в календарь» turns a reminder card into an event card (and back) — the same title or time.
+        case (.event(let t1, let s1, _, _), .event(let t2, let s2, _, _)): t1 == t2 || s1 == s2
+        case (.reminder(let t1, let d1), .event(let t2, let d2, _, _)), (.event(let t1, let d1, _, _), .reminder(let t2, let d2)):
+            t1 == t2 || d1 == d2
+        case (.eventChange(let i1, _, _, _, _, _, _, _), .eventChange(let i2, _, _, _, _, _, _, _)),
+             (.eventChange(let i1, _, _, _, _, _, _, _), .eventDelete(let i2, _, _, _, _)),
+             (.eventDelete(let i1, _, _, _, _), .eventChange(let i2, _, _, _, _, _, _, _)),
+             (.eventDelete(let i1, _, _, _, _), .eventDelete(let i2, _, _, _, _)): i1 == i2
         default: false
         }
     }
@@ -363,7 +371,8 @@ final class CardEditPanel {
         let model = CardEditModel(card)
         let view = CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
                                 cancel: { [weak self] in self?.finish(nil) })
-        let size = NSSize(width: 360, height: model.hasText ? 250 : (model.hasDate || model.hasMinutes ? 190 : 150))
+        let size = NSSize(width: 360, height: model.hasText ? 250 : model.hasDate && model.hasMinutes ? 230
+                          : (model.hasDate || model.hasMinutes ? 190 : 150))
         let screen = NSScreen.screens.first { $0.frame.intersects(chilk) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? chilk
         var x = onLeftEdge ? chilk.maxX - 30 : chilk.minX - size.width + 30
         x = min(max(x, screen.minX + 12), screen.maxX - size.width - 12)
@@ -418,44 +427,78 @@ final class CardEditModel {
     var text: String
     let hasText: Bool
     let hasDate: Bool
-    /// Slice 8d: a Clock timer has minutes instead of a date (decision 5: «у таймера — минуты»). Kept as typed text: a
-    /// macOS number field commits only on Return, so «Готово» clicked right after typing would save the old value.
+    /// Slice 8e: an all-day event — the date only.
+    let dateOnly: Bool
+    /// Slice 8d: a Clock timer has minutes instead of a date (decision 5: «у таймера — минуты»); slice 8e: an event with a
+    /// time has its length. Kept as typed text: a macOS number field commits only on Return, so «Готово» clicked right
+    /// after typing would save the old value.
     var minutesText = ""
     var minutes: Int? { Int(minutesText.trimmingCharacters(in: .whitespaces)) }
     private var startMinutes = 0
     let hasMinutes: Bool
-    /// The date the card started with: a rename of a reminder keeps its time unless the user moves it.
+    /// The date the card started with: a rename keeps the time unless the user moves it.
     private let startDate: Date?
 
     init(_ card: ActionCard) {
         original = card
+        var length: TimeInterval?
         switch card.kind {
-        case .reminder(let t, let d): title = t; date = d; text = ""; hasText = false; hasDate = true; startDate = d
-        case .message(let t, let m, let d): title = t; date = d; text = m; hasText = true; hasDate = true; startDate = d
+        case .reminder(let t, let d):
+            title = t; date = d; text = ""; hasText = false; hasDate = true; startDate = d; dateOnly = false
+        case .message(let t, let m, let d):
+            title = t; date = d; text = m; hasText = true; hasDate = true; startDate = d; dateOnly = false
         case .reminderChange(_, let old, _, let t, let d):
             // A reminder without a time gets no date field (renaming must not give it one).
             title = t.isEmpty ? old : t; date = d ?? Date().addingTimeInterval(3600); text = ""; hasText = false
-            hasDate = d != nil; startDate = d
+            hasDate = d != nil; startDate = d; dateOnly = false
         case .reminderComplete(_, let t, let d), .reminderDelete(_, let t, let d):
-            title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false; startDate = d
+            title = t; date = d ?? Date(); text = ""; hasText = false; hasDate = false; startDate = d; dateOnly = false
         case .timer(let t, let seconds):
-            title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil
-            let m = min(1439, max(1, (seconds + 30) / 60))
+            title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
+            length = TimeInterval(seconds)
+        case .event(let t, let s, let e, let allDay), .eventChange(_, _, _, _, let allDay, let t, let s, let e):
+            title = t; date = s; text = ""; hasText = false; hasDate = true; startDate = s; dateOnly = allDay
+            if !allDay { length = e.timeIntervalSince(s) }
+        case .eventDelete(_, let t, let s, _, _):
+            title = t; date = s; text = ""; hasText = false; hasDate = false; startDate = s; dateOnly = false
+        }
+        hasMinutes = length != nil
+        if let length {
+            let m = min(1439, max(1, Int((length / 60).rounded())))
             startMinutes = m
             minutesText = String(m)
         }
-        if case .timer = card.kind { hasMinutes = true } else { hasMinutes = false }
     }
 
     var dateTouched: Bool { startDate.map { abs($0.timeIntervalSince(date)) >= 30 } ?? false }
 
+    /// «Минуты» for a Clock timer, «Длительность, мин» for an event.
+    var minutesLabel: String {
+        if case .timer = original.kind { return String(localized: "Минуты") }
+        return String(localized: "Длительность, мин")
+    }
+
+    /// The earliest day or moment the picker offers: today for an all-day event, now otherwise.
+    var earliest: Date { dateOnly ? Calendar.current.startOfDay(for: Date()) : Date() }
+
     var valid: Bool {
         !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            && (!hasDate || date > Date() || (isChange && !dateTouched))
+            && (!hasDate || dateValid)
             && (!hasMinutes || minutes.map { (1...1439).contains($0) } == true)
     }
 
-    private var isChange: Bool { if case .reminderChange = original.kind { true } else { false } }
+    /// A change may keep a past time it does not move; anything new lies ahead (an all-day event: from today).
+    private var dateValid: Bool {
+        if isChange && !dateTouched { return true }
+        return dateOnly ? date >= earliest : date > Date()
+    }
+
+    private var isChange: Bool {
+        switch original.kind {
+        case .reminderChange, .eventChange: true
+        default: false
+        }
+    }
 
     /// The edited card: a new id (a new card), no guess marks — the user set the time himself.
     func edited() -> ActionCard {
@@ -470,9 +513,25 @@ final class CardEditModel {
             // Untouched minutes keep the exact seconds («через 90 секунд» stays 90 s).
             let m = minutes ?? startMinutes
             kind = .timer(title: t, seconds: m == startMinutes ? seconds : m * 60)
+        case .event(_, let start, let end, let allDay):
+            let span = slot(start: start, end: end, allDay: allDay)
+            kind = .event(title: t, start: span.start, end: span.end, allDay: allDay)
+        case .eventChange(let id, let old, let oldStart, let oldEnd, let allDay, _, let start, let end):
+            let span = slot(start: start, end: end, allDay: allDay)
+            kind = .eventChange(id: id, oldTitle: old, oldStart: oldStart, oldEnd: oldEnd, allDay: allDay, title: t,
+                                start: span.start, end: span.end)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)
+    }
+
+    /// Slice 8e: an untouched date keeps the exact start and untouched minutes the exact length; a whole day moves by
+    /// whole days.
+    private func slot(start: Date, end: Date, allDay: Bool) -> (start: Date, end: Date) {
+        guard !allDay else { return dateTouched ? ActionCard.allDaySlot(movedTo: date, start: start, end: end) : (start, end) }
+        let s = dateTouched ? date : start
+        let m = minutes ?? startMinutes
+        return (s, s.addingTimeInterval(m != startMinutes ? TimeInterval(m * 60) : end.timeIntervalSince(start)))
     }
 }
 
@@ -488,11 +547,11 @@ struct CardEditView: View {
                 TextField(String(localized: "Что сказать"), text: $model.text, axis: .vertical).lineLimit(2...4)
             }
             if model.hasDate {
-                DatePicker(String(localized: "Когда"), selection: $model.date, in: Date()...,
-                           displayedComponents: [.date, .hourAndMinute])
+                DatePicker(String(localized: "Когда"), selection: $model.date, in: model.earliest...,
+                           displayedComponents: model.dateOnly ? [.date] : [.date, .hourAndMinute])
                     .environment(\.locale, Locale(identifier: "ru_RU"))
             }
-            if model.hasMinutes { MinutesField(text: $model.minutesText) }
+            if model.hasMinutes { MinutesField(text: $model.minutesText, label: model.minutesLabel) }
             HStack {
                 Spacer()
                 Button(String(localized: "Отмена"), action: cancel).keyboardShortcut(.cancelAction)
@@ -505,9 +564,11 @@ struct CardEditView: View {
     }
 }
 
-/// «Минуты: [ 25 ] ±» — a Clock timer (1 min … 23 h 59 min); a wrong number turns the field red and «Готово» off.
+/// «Минуты: [ 25 ] ±» — a Clock timer or an event's length (1 min … 23 h 59 min); a wrong number turns the field red and
+/// «Готово» off.
 struct MinutesField: View {
     @Binding var text: String
+    var label = String(localized: "Минуты")
 
     private var value: Int? { Int(text.trimmingCharacters(in: .whitespaces)) }
     private var stepped: Binding<Int> {
@@ -516,7 +577,7 @@ struct MinutesField: View {
 
     var body: some View {
         HStack {
-            Text(String(localized: "Минуты"))
+            Text(label)
             Spacer()
             TextField("", text: $text).frame(width: 64).multilineTextAlignment(.trailing)
                 .foregroundStyle(value.map { (1...1439).contains($0) } == true ? Color.primary : Color.red)

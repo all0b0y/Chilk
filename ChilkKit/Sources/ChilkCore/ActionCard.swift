@@ -17,6 +17,13 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         /// Slice 8d (decision 9): a timer in Apple's Clock app, counted from «Да». Clock's timer has no name: Chilk says
         /// the title when it is set.
         case timer(title: String, seconds: Int)
+        /// Slice 8e (decisions 3–7, 11): an event in Chilk's own «Чилк» calendar. `end` is exclusive; an all-day event
+        /// covers the days from `start` up to `end`.
+        case event(title: String, start: Date, end: Date, allDay: Bool)
+        /// One of Chilk's events, moved and/or renamed (`title` / `start` / `end` = the new values).
+        case eventChange(id: String, oldTitle: String, oldStart: Date, oldEnd: Date, allDay: Bool, title: String,
+                         start: Date, end: Date)
+        case eventDelete(id: String, title: String, start: Date, end: Date, allDay: Bool)
     }
 
     public let id: UUID
@@ -33,24 +40,33 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         self.guessedDay = guessedDay
     }
 
-    /// The time the card sets (nil: it sets none — completing / deleting).
+    /// The time the card sets (nil: it sets none — completing / deleting, a rename, a change of the end only).
     public var when: Date? {
         switch kind {
         case .reminder(_, let due): due
         case .message(_, _, let at): at
         case .reminderChange(_, _, let oldDue, _, let due): due != oldDue ? due : nil
-        case .reminderComplete, .reminderDelete, .timer: nil
+        case .event(_, let start, _, _): start
+        case .eventChange(_, _, let oldStart, _, _, _, let start, _): start != oldStart ? start : nil
+        case .reminderComplete, .reminderDelete, .timer, .eventDelete: nil
         }
     }
 
-    /// A time that has already passed cannot be confirmed («Да» is not offered).
-    public func expired(now: Date) -> Bool { (when.map { $0 <= now }) ?? false }
+    /// A time that has already passed cannot be confirmed («Да» is not offered). An all-day event lasts its whole day.
+    public func expired(now: Date, calendar: Calendar = .current) -> Bool {
+        func dayOver(_ day: Date) -> Bool { calendar.startOfDay(for: now) > calendar.startOfDay(for: day) }
+        switch kind {
+        case .event(_, let start, _, true): return dayOver(start)
+        case .eventChange(_, _, let oldStart, _, true, _, let start, _): return start != oldStart && dayOver(start)
+        default: return (when.map { $0 <= now }) ?? false
+        }
+    }
 
     /// Can be edited in the «Изменить» panel (decision 5): title and date/time; completing or deleting cannot.
     public var editable: Bool {
         switch kind {
-        case .reminder, .message, .reminderChange, .timer: true
-        case .reminderComplete, .reminderDelete: false
+        case .reminder, .message, .reminderChange, .timer, .event, .eventChange: true
+        case .reminderComplete, .reminderDelete, .eventDelete: false
         }
     }
 
@@ -59,6 +75,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         let fmt = CardFormat(calendar: calendar, now: now)
         func when(_ d: Date) -> String { fmt.when(d, guessedPart: guessedPart, guessedDay: guessedDay) }
         let place = "«Напоминания» → «Чилк»"
+        let calendarPlace = "«Календарь» → «Чилк»"
         var out: [String]
         switch kind {
         case .reminder(let title, let due):
@@ -83,8 +100,22 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
             // Counted from «Да»: the ring time shown is «if you say yes now».
             out = ["⏱ Таймер: \(title)", Self.duration(seconds) + " — до " + fmt.time(now.addingTimeInterval(Double(seconds))),
                    "«Часы»"]
+        case .event(let title, let start, let end, let allDay):
+            out = ["📅 Событие: \(title)", fmt.span(start, end, allDay: allDay, guessedPart: guessedPart, guessedDay: guessedDay),
+                   calendarPlace]
+        case .eventChange(_, let oldTitle, let oldStart, let oldEnd, let allDay, let title, let start, let end):
+            out = ["✏️ Изменить событие «\(oldTitle)»"]
+            if title != oldTitle { out.append("Название: \(title)") }
+            if start != oldStart || end != oldEnd {
+                out.append("Было: " + fmt.span(oldStart, oldEnd, allDay: allDay, guessedPart: false, guessedDay: false))
+                out.append("Станет: " + fmt.span(start, end, allDay: allDay, guessedPart: guessedPart, guessedDay: guessedDay))
+            }
+            out.append(calendarPlace)
+        case .eventDelete(_, let title, let start, let end, let allDay):
+            out = ["🗑 Удалить событие: \(title)", fmt.span(start, end, allDay: allDay, guessedPart: false, guessedDay: false),
+                   calendarPlace]
         }
-        if expired(now: now) { out.append("Время уже прошло — измени его") }
+        if expired(now: now, calendar: calendar) { out.append("Время уже прошло — измени его") }
         return out
     }
 
@@ -93,10 +124,27 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         CardFormat(calendar: calendar, now: now).when(d, guessedPart: false, guessedDay: false)
     }
 
+    /// An event's slot without the guess marks (the result line after «Да»): «Пт, 9 окт., 15:00–16:00»,
+    /// «Сб, 10 окт. · весь день».
+    public func spanText(start: Date, end: Date, allDay: Bool, now: Date, calendar: Calendar = .current) -> String {
+        CardFormat(calendar: calendar, now: now).span(start, end, allDay: allDay, guessedPart: false, guessedDay: false)
+    }
+
+    /// Slice 8e: an all-day slot moved to `day` — as many whole days as `start` … `end` covered (`end` exclusive, or
+    /// EventKit's 23:59:59 of the last day); the new `end` is exclusive.
+    public static func allDaySlot(movedTo day: Date, start: Date, end: Date, calendar: Calendar = .current) -> (start: Date, end: Date) {
+        let s = calendar.startOfDay(for: day)
+        let days = max(1, calendar.dateComponents([.day], from: calendar.startOfDay(for: start), to: end.addingTimeInterval(1)).day ?? 1)
+        return (s, calendar.date(byAdding: .day, value: days, to: s) ?? s.addingTimeInterval(Double(days) * 86400))
+    }
+
     /// For the model (English, like other tool results): what the card shows.
     public func summary(calendar: Calendar = .current) -> String {
         let f = ISO8601DateFormatter()
         f.timeZone = calendar.timeZone
+        let day = ISO8601DateFormatter()
+        day.timeZone = calendar.timeZone
+        day.formatOptions = [.withFullDate]
         switch kind {
         case .reminder(let title, let due): return "new reminder «\(title)» at \(f.string(from: due))"
         case .message(_, let text, let at): return "Chilk says «\(text)» at \(f.string(from: at))"
@@ -105,6 +153,13 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .reminderComplete(_, let title, _): return "mark reminder «\(title)» done"
         case .reminderDelete(_, let title, _): return "delete reminder «\(title)»"
         case .timer(let title, let seconds): return "Clock timer «\(title)» for \(seconds) s"
+        case .event(let title, let start, let end, let allDay):
+            return allDay ? "new all-day calendar event «\(title)» on \(day.string(from: start))"
+                          : "new calendar event «\(title)» \(f.string(from: start)) – \(f.string(from: end))"
+        case .eventChange(_, let oldTitle, _, _, let allDay, let title, let start, let end):
+            return "change calendar event «\(oldTitle)» → «\(title)» "
+                + (allDay ? "on \(day.string(from: start))" : "\(f.string(from: start)) – \(f.string(from: end))")
+        case .eventDelete(_, let title, _, _, _): return "delete calendar event «\(title)»"
         }
     }
 
@@ -127,37 +182,56 @@ struct CardFormat {
     let calendar: Calendar
     let now: Date
 
-    /// «23:52», «01:10 завтра», further — «Пт, 9 окт., 10:00».
-    func time(_ d: Date) -> String {
+    private func formatter(_ format: String) -> DateFormatter {
         let f = DateFormatter()
         f.locale = Locale(identifier: "ru_RU")
         f.calendar = calendar
         f.timeZone = calendar.timeZone
-        f.dateFormat = "HH:mm"
-        if calendar.isDate(d, inSameDayAs: now) { return f.string(from: d) }
+        f.dateFormat = format
+        return f
+    }
+
+    private func hm(_ d: Date) -> String { formatter("HH:mm").string(from: d) }
+
+    /// «Пт, 9 окт.», «Сегодня (Ср, 7 окт.)», «Завтра (Чт, 8 окт.)»; another year — «Пт, 9 окт. 2027».
+    private func day(_ d: Date) -> String {
+        var date = formatter(calendar.isDate(d, equalTo: now, toGranularity: .year) ? "EEEEEE, d MMM" : "EEEEEE, d MMM yyyy")
+            .string(from: d)
+        date = date.prefix(1).uppercased() + date.dropFirst()
+        if calendar.isDate(d, inSameDayAs: now) { return "Сегодня (\(date))" }
+        if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(d, inSameDayAs: t) { return "Завтра (\(date))" }
+        return date
+    }
+
+    /// «23:52», «01:10 завтра», further — «Пт, 9 окт., 10:00».
+    func time(_ d: Date) -> String {
+        if calendar.isDate(d, inSameDayAs: now) { return hm(d) }
         if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(d, inSameDayAs: t) {
-            return f.string(from: d) + " завтра"
+            return hm(d) + " завтра"
         }
         return when(d, guessedPart: false, guessedDay: false)
     }
 
     func when(_ d: Date, guessedPart: Bool, guessedDay: Bool) -> String {
-        let time = DateFormatter()
-        time.locale = Locale(identifier: "ru_RU")
-        time.calendar = calendar
-        time.timeZone = calendar.timeZone
-        time.dateFormat = "HH:mm"
-        let day = DateFormatter()
-        day.locale = Locale(identifier: "ru_RU")
-        day.calendar = calendar
-        day.timeZone = calendar.timeZone
-        day.dateFormat = calendar.isDate(d, equalTo: now, toGranularity: .year) ? "EEEEEE, d MMM" : "EEEEEE, d MMM yyyy"
-        var date = day.string(from: d)
-        date = date.prefix(1).uppercased() + date.dropFirst()
-        if calendar.isDate(d, inSameDayAs: now) { date = "Сегодня (\(date))" }
-        else if let t = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(d, inSameDayAs: t) { date = "Завтра (\(date))" }
-        var text = (guessedDay ? date + "?" : date) + ", " + time.string(from: d)
+        var text = day(d) + (guessedDay ? "?" : "") + ", " + hm(d)
         if guessedPart { text += " · " + Self.part(calendar.component(.hour, from: d)) + "?" }
+        return text
+    }
+
+    /// Slice 8e: an event's slot — «Пт, 9 окт., 15:00–16:00», over midnight «Пт, 9 окт., 23:00 – Сб, 10 окт., 01:00»,
+    /// all day «Сб, 10 окт. · весь день» (several days: «Сб, 10 окт. – Пн, 12 окт. · весь день»). `end` is exclusive.
+    func span(_ start: Date, _ end: Date, allDay: Bool, guessedPart: Bool, guessedDay: Bool) -> String {
+        let mark = guessedDay ? "?" : ""
+        if allDay {
+            let last = end > start ? end.addingTimeInterval(-1) : start
+            let days = calendar.isDate(last, inSameDayAs: start) ? day(start) + mark : day(start) + mark + " – " + day(last)
+            return days + " · весь день"
+        }
+        let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: start))
+        var text = day(start) + mark + ", " + hm(start)
+        if calendar.isDate(end, inSameDayAs: start) || end == midnight { text += "–" + hm(end) }
+        else { text += " – " + day(end) + ", " + hm(end) }
+        if guessedPart { text += " · " + Self.part(calendar.component(.hour, from: start)) + "?" }
         return text
     }
 

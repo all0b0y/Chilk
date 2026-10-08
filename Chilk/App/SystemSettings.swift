@@ -45,7 +45,7 @@ enum LoginItem {
 @MainActor
 enum Permissions {
     enum Kind: String, CaseIterable, Identifiable {
-        case microphone, speech, reminders
+        case microphone, speech, reminders, calendar
         var id: String { rawValue }
     }
 
@@ -71,6 +71,13 @@ enum Permissions {
             case .notDetermined: .notAsked
             default: .denied
             }
+        case .calendar:
+            // Write-only access cannot read even Chilk's own events: only full access counts.
+            switch EKEventStore.authorizationStatus(for: .event) {
+            case .fullAccess: .granted
+            case .notDetermined: .notAsked
+            default: .denied
+            }
         }
     }
 
@@ -79,6 +86,7 @@ enum Permissions {
         case .microphone: "Privacy_Microphone"
         case .speech: "Privacy_SpeechRecognition"
         case .reminders: "Privacy_Reminders"
+        case .calendar: "Privacy_Calendars"
         }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)

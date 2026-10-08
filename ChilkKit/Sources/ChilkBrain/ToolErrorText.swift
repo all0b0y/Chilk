@@ -13,12 +13,43 @@ extension ChilkToolCatalog {
             return "invalid_arguments: \(extra) — not a field of \(name); its fields: \(names.isEmpty ? "none" : names.joined(separator: ", "))"
         }
         if let missing = names.first(where: { fields[$0] == nil }) { return "invalid_arguments: \(missing) — missing" }
+        if let problem = actionProblem(name, fields) { return problem }
         for key in names {
             if let schema = props[key], let value = fields[key], let problem = problem(name, key, value, schema) {
                 return "invalid_arguments: \(key) — \(problem)"
             }
         }
+        if let problem = crossFieldProblem(name, fields) { return problem }
         return "invalid_arguments: a value is malformed or out of range"
+    }
+
+    /// The change tools leave unused fields empty: a field the action needs must not be.
+    private static func actionProblem(_ tool: String, _ fields: [String: JSON]) -> String? {
+        guard tool == "chilk_reminder_change" || tool == "chilk_event_change", let action = fields["action"]?.string else { return nil }
+        if ["move", "move_rename"].contains(action), fields["at"]?.string?.isEmpty == true {
+            return "invalid_arguments: at — \(action) needs the new time, e.g. 2026-10-09T10:00:00+03:00"
+        }
+        if ["rename", "move_rename"].contains(action),
+           fields["title"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true {
+            return "invalid_arguments: title — \(action) needs the new title"
+        }
+        return nil
+    }
+
+    /// Slice 8e: rules that tie two fields together.
+    private static func crossFieldProblem(_ tool: String, _ fields: [String: JSON]) -> String? {
+        switch tool {
+        case "chilk_event":
+            guard let minutes = wholeNumber(fields["minutes"]), let allDay = fields["all_day"]?.bool,
+                  !validEventLength(minutes, allDay: allDay) else { return nil }
+            return "invalid_arguments: minutes — the length, 1–1439 for an event with a time (0 only with all_day=true)"
+        case "chilk_events":
+            guard let a = fields["from"]?.string, let from = timestamp(a), let b = fields["to"]?.string, let to = timestamp(b),
+                  !validEventRange(from: from, to: to) else { return nil }
+            return "invalid_arguments: to — must be later than from, at most 366 days after it"
+        default:
+            return nil
+        }
     }
 
     private static func problem(_ tool: String, _ key: String, _ value: JSON, _ schema: JSON) -> String? {
@@ -29,11 +60,15 @@ extension ChilkToolCatalog {
         switch type {
         case "string":
             guard let text = value.string else { return "must be a string" }
+            let changeTool = tool == "chilk_reminder_change" || tool == "chilk_event_change"
             if key == "at" {
-                if tool == "chilk_reminder_change", text.isEmpty { return nil }
+                if changeTool, text.isEmpty { return nil }
                 return timestamp(text) == nil ? "needs an ISO-8601 time, e.g. 2026-10-09T10:00:00+03:00 (without an offset it is local time)" : nil
             }
-            if tool == "chilk_reminder_change", key == "title", text.isEmpty { return nil }
+            if tool == "chilk_events", key == "from" || key == "to" {
+                return timestamp(text) == nil ? "needs an ISO-8601 time, e.g. 2026-10-09T00:00:00+03:00 (without an offset it is local time)" : nil
+            }
+            if changeTool, key == "title", text.isEmpty { return nil }
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "must not be empty" }
             if text.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
                 return "must be one line without control characters"
