@@ -649,7 +649,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let emotionsMenu = NSMenu()
         for (title, key) in [(String(localized: "Смеётся"), "laugh"), (String(localized: "Смеётся до упаду"), "laughStrong"),
                              (String(localized: "Клоун"), "clown"), (String(localized: "Обиделся"), "offended"),
-                             (String(localized: "Голова кругом"), "dizzy"), (String(localized: "Грустит"), "sad")] {
+                             (String(localized: "Голова кругом"), "dizzy"), (String(localized: "Грустит"), "sad"),
+                             (String(localized: "Удивление"), "surprised"), (String(localized: "Смущение"), "shy")] {   // 9
             let i = item(title, #selector(emoteNow(_:)))
             i.representedObject = key
             emotionsMenu.addItem(i)

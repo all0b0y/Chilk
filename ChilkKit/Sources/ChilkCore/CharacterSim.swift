@@ -34,6 +34,11 @@ public struct Mood: Sendable, Equatable {
     public var petted = false
     /// One eye shut for a moment when the petting ends.
     public var winking = false
+    // Slice 9 (decision 34)
+    /// «Удивление»: round eyes ⊙ ⊙, a little «о» mouth.
+    public var surprised = false
+    /// «Смущение»: closed eyes looking down (‿ ‿) behind his mittens, a small smile.
+    public var shy = false
     public init() {}
 }
 
@@ -144,6 +149,13 @@ public enum Act: Sendable, Equatable {
     case clap
     /// Slice 7b (decision 28, a draw): «пять!» — one arm up towards the screen, the palm open, a little hop.
     case highFive
+    // Slice 9 (decision 34): two more emotions Codex asks for.
+    /// «Удивление»: one sharp startled jump straight up, stretched tall, arms flung stiffly out and down, round eyes,
+    /// a «!» over his head, leaning back; then two blinks. Not the hop antic's bob, not the cheer's jumps.
+    case startle
+    /// «Смущение»: hides his eyes behind his mittens, peeks once through them, the blush glows with «///», sways
+    /// bashfully, no jumps. Not the joy of cheering, not the ^ ^ of petting.
+    case bashful
 
     public var duration: Double {
         switch self {
@@ -167,6 +179,8 @@ public enum Act: Sendable, Equatable {
         case .shoot: 1.15
         case .clap: 1.9
         case .highFive: 1.8
+        case .startle: 2.4
+        case .bashful: 2.8
         }
     }
 
@@ -178,7 +192,7 @@ public enum Act: Sendable, Equatable {
     /// An emotion (slice 6c): he comes out to show it; petting and antics wait.
     public var isEmotion: Bool {
         switch self {
-        case .cheer, .laugh, .clown, .sulk, .spin, .mope, .shrug, .clap, .highFive: true
+        case .cheer, .laugh, .clown, .sulk, .spin, .mope, .shrug, .clap, .highFive, .startle, .bashful: true
         default: false
         }
     }
@@ -199,8 +213,10 @@ public struct Hand: Sendable, Equatable {
     /// `true`: a short arm growing out from behind the body (its base at x, y; `angle` 0 = straight up), not a
     /// floating mitten — raised arms must read as arms, not as ears or balls.
     public var arm: Bool
-    public init(x: Double, y: Double, angle: Double, arm: Bool = false) {
-        self.x = x; self.y = y; self.angle = angle; self.arm = arm
+    /// Slice 9: `true` — a bigger paw with finger bumps (`angle` 0 = fingers up), held against his face when shy.
+    public var paw: Bool
+    public init(x: Double, y: Double, angle: Double, arm: Bool = false, paw: Bool = false) {
+        self.x = x; self.y = y; self.angle = angle; self.arm = arm; self.paw = paw
     }
 }
 
@@ -265,6 +281,12 @@ public struct CharacterPose: Sendable, Equatable {
     public var puffOrigin: CGPoint = .zero
     /// Slice 6e: 0…1 — the window is flying him to another monitor (no floor under him: the shadow fades).
     public var airborne: Double = 0
+    // Slice 9 (decision 34)
+    /// Seconds since the «!» of surprise popped up over his head (nil = none).
+    public var exclaimAge: Double?
+    /// The shy blush with its «///» (0…1, opacity) and how far the screen-side mitten moved off the eye (0…1: he peeks).
+    public var blushShy: Double = 0
+    public var shyPeek: Double = 0
     public var mood = Mood()
     /// Seconds since he was called (happy ^ ^ eyes right after).
     public var calledAge: Double = 99
@@ -398,6 +420,8 @@ public final class CharacterSim {
     private var puffPending = false
     private var puffAt: Double?
     private var puffOriginPoint = CGPoint.zero
+    // Slice 9: when the startled jump took off (nil until he is out); the «!», the arms and the round eyes count from it.
+    private var startleJumpStart: Double?
 
     public static let calledDuration = 4.4
     public static let dizzyDuration = 2.6
@@ -432,6 +456,14 @@ public final class CharacterSim {
     public static let danceBow = 1.4
     /// Diving behind the edge: slowly, then a dash (ease-in), leaning in so the sprout goes last.
     public static let diveDuration = 0.8
+    /// Slice 9: how long the eyes stay round after the startled jump, and how long the «!» stays over his head.
+    nonisolated public static let startleWide = 1.27
+    nonisolated public static let exclaimLife = 1.5
+    /// The startled jump (with its «!» and the arms) comes once he is out from behind the edge, not half hidden: when
+    /// he is within `startleOutSlack` points of the peek position (or farther out), at the latest `startleJumpDeadline`
+    /// seconds into the act (~0.3 s from the dock and from behind the edge alike: the spring's pace grows with the way).
+    nonisolated public static let startleOutSlack = 4.0
+    nonisolated public static let startleJumpDeadline = 0.5
 
     public init(metrics: Metrics = .standard, rng: any RandomSource = SystemRandom()) {
         self.metrics = metrics
@@ -501,6 +533,8 @@ public final class CharacterSim {
             m.sulking = a == .sulk && k >= 0.7
             m.shrugging = a == .shrug && k < 1.4
             if a == .clap || a == .highFive { m.cheering = k < a.duration - 0.2 }     // 7b: the happy ^ ^ face
+            m.surprised = startleEyesWide                                            // 9: ⊙ ⊙
+            m.shy = a == .bashful && k < a.duration - 0.2
         }
         if currentAntic == .catchSpeck, time < anticUntil {
             let k = time - anticStart
@@ -761,6 +795,8 @@ public final class CharacterSim {
         case .offended: .sulk
         case .dizzy: .spin
         case .sad: .mope
+        case .surprised: .startle
+        case .shy: .bashful
         }
     }
 
@@ -786,6 +822,7 @@ public final class CharacterSim {
         hopX = nil
         hopTilt = 0
         if jump?.toX != nil { jump = nil; jumpY = 0 }          // a hop across lands where it is, not mid-air later
+        startleJumpStart = nil
     }
 
     /// Starts an antic now (the tray's «Проверка ▸ Выходка», tests). Not while asleep, carried or in an act.
@@ -1062,6 +1099,33 @@ public final class CharacterSim {
             beat(0.45) { squash.impulse(4); hop.impulse(-120); leaf.impulse(5) }
             lookX.target = -0.7
             lookY.target = -0.3
+        case .startle:
+            // Slice 9 (decision 34): ONE sharp jump straight up, quick and stretched tall (the hop antic only bobs, the
+            // cheer jumps three times with its arms up), the sprout jolts, eyes wide at the user; then two blinks.
+            // The jump (with its «!» and the arms) waits until he is out from behind the edge — started from the popover
+            // (.away) or from hiding (.lurk) he first comes out — but no longer than `startleJumpDeadline`.
+            if startleJumpStart == nil,
+               x.value <= metrics.peekX + Self.startleOutSlack || k >= Self.startleJumpDeadline {
+                startleJumpStart = t
+                startJump(height: 30, duration: 0.3); squash.impulse(-7); leaf.impulse(-10)
+            }
+            if startleEyesWide {
+                eyeScale.target = 1.22
+                lookX.target = -0.3
+                lookY.target = -0.12
+                blinkStart = nil                                               // the eyes stay wide open
+                blinkAt = max(blinkAt, t + 0.3)
+            }
+            beat((startleJumpStart ?? .infinity) + Self.startleWide - actStart) { blinkStart = t; doubleBlink = true }   // «ой»
+            tilt.target += 0.15 * Self.envelope(k, length: a.duration, rise: 0.12, fall: 0.7)   // leans back
+        case .bashful:
+            // «Смущение»: shrinks a little, hides his eyes behind the mittens, peeks once, sways from side to side.
+            beat(0) { squash.impulse(2.5); leaf.impulse(3) }
+            let env = Self.envelope(k, length: a.duration, rise: 0.35, fall: 0.45)
+            tilt.target += sin(k * .pi * 2 / 1.25) * 0.1 * env
+            let peek = Self.shyPeek(k)
+            lookX.target = -0.15 - 0.4 * peek                                  // peeking: at the user
+            lookY.target = 0.45 - 0.35 * peek                                  // otherwise down
         case .dance(let s):
             let beat = Self.danceBeat, bowAt = s - Self.danceBow
             if k < bowAt {
@@ -1087,6 +1151,18 @@ public final class CharacterSim {
     static func ease(_ u: Double) -> Double {
         let c = min(1, max(0, u))
         return c * c * (3 - 2 * c)
+    }
+
+    /// Slice 9: the eyes are round from the start of the startle until `startleWide` s after its jump.
+    private var startleEyesWide: Bool {
+        guard act == .startle else { return false }
+        guard let j = startleJumpStart else { return true }
+        return time - j < Self.startleWide
+    }
+
+    /// «Смущение»: the screen-side mitten slides off the eye and back (0…1) — he peeks once.
+    static func shyPeek(_ k: Double) -> Double {
+        envelope(k - 1.15, length: 0.65, rise: 0.15, fall: 0.15)
     }
 
     /// On his back while laughing hard (6c): over in 0.35 s, ~1.9 s down, up in 0.5 s. Towards the edge (+).
@@ -1237,6 +1313,30 @@ public final class CharacterSim {
             return [Hand(x: -0.84, y: 0.02 - 0.1 * u, angle: -0.35 - 0.7 * u, arm: true),
                     Hand(x: 0.84, y: 0.02 - 0.1 * u, angle: 0.35 + 0.7 * u, arm: true)]            // ¯\_(ツ)_/¯
         }
+        if act == .startle {
+            // 9: the arms fly out stiffly and down from behind the body and tremble a little, then hang down again.
+            guard let j = startleJumpStart else { return [] }
+            let k = t - j
+            let u = Self.ease(k / 0.08) * (1 - Self.ease((k - 1.05) / 0.3))
+            guard u > 0.15 else { return [] }
+            let shake = sin(k * 46) * 0.06 * (1 - Self.ease((k - 0.3) / 0.6))
+            let a = 2.75 - 0.6 * u
+            return [Hand(x: -0.86, y: 0.08, angle: -a + shake, arm: true), Hand(x: 0.86, y: 0.08, angle: a - shake, arm: true)]
+        }
+        if act == .bashful {
+            // 9: both mittens up over the eyes (from his sides); the screen-side one slides off once — he peeks.
+            let k = t - actStart
+            let up = Self.ease(k / 0.3) * (1 - Self.ease((k - 2.2) / 0.3))
+            guard up > 0.02 else { return [] }
+            let peek = Self.shyPeek(k)
+            let eyeX = lookX.value * 0.14, eyeY = -0.06 + lookY.value * 0.12      // where the renderer puts the eyes
+            return [-1.0, 1.0].map { s in
+                let side = Hand(x: s * 1.0, y: 0.45, angle: s * 0.9, paw: true)
+                var face = Hand(x: s * 0.33 + eyeX, y: eyeY + 0.06, angle: s * 0.18, paw: true)
+                if s < 0 { face.x -= 0.3 * peek; face.y += 0.36 * peek; face.angle -= 0.4 * peek }
+                return Self.mixHand(side, face, up)
+            }
+        }
         if act == .cheer, t - actStart < 1.7 {
             let w = sin((t - actStart) * 16) * 0.16                    // both arms up, waving
             return [Hand(x: -0.8, y: -0.28, angle: -0.95 + w, arm: true), Hand(x: 0.8, y: -0.28, angle: 0.95 - w, arm: true)]   // ＼(^o^)／
@@ -1273,6 +1373,11 @@ public final class CharacterSim {
             return [Hand(x: stem.x + rub * 0.07, y: stem.y, angle: stem.angle + rub * 0.15)]
         }
         return [mix(stem, side, min(1, (k - 1.45) / 0.35))]
+    }
+
+    /// A hand on its way from `a` to `b` (`u` is already eased).
+    private static func mixHand(_ a: Hand, _ b: Hand, _ u: Double) -> Hand {
+        Hand(x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, angle: a.angle + (b.angle - a.angle) * u, arm: b.arm, paw: b.paw)
     }
 
     /// The eyes mirror follows `eyeStrain` slowly up and quickly down (the rest's double blink — `eyesRested`).
@@ -1543,6 +1648,16 @@ public final class CharacterSim {
             case .mope:
                 p.scaleY *= 0.96
                 p.scaleX *= 1.03
+            case .startle:
+                if let j = startleJumpStart, t - j < Self.exclaimLife { p.exclaimAge = t - j }
+                if startleEyesWide {
+                    p.eyeOpen = 1                                         // wide open, no blink
+                    p.scaleX *= 0.97                                      // tense
+                }
+            case .bashful:
+                p.blushShy = Self.envelope(k, length: a.duration, rise: 0.3, fall: 0.5)
+                p.shyPeek = Self.shyPeek(k)
+                p.scaleY *= 0.965                                         // shrinks into himself
             default:
                 break
             }

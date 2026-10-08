@@ -72,6 +72,15 @@ public enum Part: Hashable, Sendable {
     case sunglasses(lw: Double)
     /// A little lamp standing on the floor beside him and its warm circle of light (origin = its foot).
     case lamp(lw: Double)
+    // Slice 9 (decision 34)
+    /// «Удивление»: a round eye ⊙ — white with a dark pupil and an outline (not the usual dark oval).
+    case eyeRound(lw: Double)
+    /// «Смущение»: the glowing blush with three «///» strokes over it.
+    case blushShy
+    /// «Удивление»: a bold «!» over his head, centred on its origin (baseline), with a white sticker outline.
+    case exclaim
+    /// «Смущение»: a paw with three finger bumps on top (fingers up), big enough to hide an eye.
+    case paw(lw: Double)
 
     public static let waveFrames = 24
     public static let confettiPieces = 8
@@ -114,26 +123,28 @@ public enum Slot {
     public static let leaf = 15         // +0, +1
     public static let blush = 17        // +0, +1
     public static let blushHot = 19     // +0, +1 — petted (6c)
-    public static let eyeBag = 21       // +0, +1 — under the eyes
-    public static let eye = 23          // +0, +1
-    public static let tear = 25         // +0…+5 — 3 per eye (6c)
-    public static let mouth = 31
-    public static let sunglasses = 32   // (6f) over the eyes
-    public static let clownNose = 33    // (6c)
-    public static let hand = 34         // +0, +1 — a mitten in front of the body
-    public static let mug = 36
-    public static let ball = 37         // (7b) the basketball in his hands, in front of him
-    public static let lamp = 38         // (6f) its warm light falls on him
-    public static let speck = 39
-    public static let confetti = 40     // +0…+7
-    public static let z = 48            // +0…+2
-    public static let ha = 51           // +0…+5 — «ХА» (6c)
-    public static let puff = 57         // +0…+4 — «пф!» (6d)
-    public static let bubbleBox = 62
-    public static let bubbleTail = 63
-    public static let bubbleStroke = 64
-    public static let button = 65       // +index
-    public static let word = 77         // +index
+    public static let blushShy = 21     // +0, +1 — «смущение» with its «///» (9)
+    public static let eyeBag = 23       // +0, +1 — under the eyes
+    public static let eye = 25          // +0, +1
+    public static let tear = 27         // +0…+5 — 3 per eye (6c)
+    public static let mouth = 33
+    public static let sunglasses = 34   // (6f) over the eyes
+    public static let clownNose = 35    // (6c)
+    public static let hand = 36         // +0, +1 — a mitten in front of the body (over the eyes when shy, 9)
+    public static let mug = 38
+    public static let ball = 39         // (7b) the basketball in his hands, in front of him
+    public static let lamp = 40         // (6f) its warm light falls on him
+    public static let speck = 41
+    public static let confetti = 42     // +0…+7
+    public static let z = 50            // +0…+2
+    public static let ha = 53           // +0…+5 — «ХА» (6c)
+    public static let exclaim = 59      // «!» of surprise (9)
+    public static let puff = 60         // +0…+4 — «пф!» (6d)
+    public static let bubbleBox = 65
+    public static let bubbleTail = 66
+    public static let bubbleStroke = 67
+    public static let button = 68       // +index
+    public static let word = 80         // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)
@@ -243,6 +254,17 @@ extension Part {
             return box(-30, -9, 60, 17, margin: 2 + 1.5 * lw)
         case .lamp:
             return box(-84, -136, 168, 146, margin: 2)       // the foot's die-cut border reaches below the floor line
+        case .eyeRound(let lw):
+            let r = Props.roundEye
+            return box(-r, -r, r * 2, r * 2, margin: 2.6 * lw / 2 + 1.5)
+        case .blushShy:
+            return box(-11, -7, 22, 14, margin: 1.5)
+        case .exclaim:
+            let (w, ascent, descent) = TextKit.exclaimMetrics           // asked every frame: measured once
+            return box(-w / 2, -ascent, w, ascent + descent, margin: 4)
+        case .paw(let lw):
+            let r = Props.pawPath.boundingBoxOfPath
+            return box(r.minX, r.minY, r.width, r.height, margin: max(4.5, 2.8 * lw) + 1.5)
         }
     }
 
@@ -655,6 +677,58 @@ extension Part {
             ctx.setFillColor(RGBA.hex(0xFFF1C2).cgColor)    // the bulb glowing under the shade
             ctx.fillEllipse(in: CGRect(x: -6, y: -47, width: 12, height: 7))
             Props.sticker(ctx, shade, fill: Props.lampShade, outline: outline, lw: 2.6 * lw)
+
+        case .eyeRound(let lw):                             // ⊙: white, an outline, a dark pupil with a glint
+            let r = Props.roundEye
+            let eye = CGPath(ellipseIn: CGRect(x: -r, y: -r, width: r * 2, height: r * 2), transform: nil)
+            Props.sticker(ctx, eye, fill: RGBA.white.cgColor, outline: outline, lw: 2.6 * lw, border: false)
+            let pr = r * 0.46
+            ctx.setFillColor(outline)
+            ctx.fillEllipse(in: CGRect(x: -pr, y: -pr, width: pr * 2, height: pr * 2))
+            ctx.setFillColor(RGBA.white.cgColor)
+            ctx.fillEllipse(in: CGRect(x: -pr * 0.55 - 1.1, y: -pr * 0.55 - 1.1, width: 2.2, height: 2.2))
+
+        case .blushShy:                                     // a bright blush with «///» over it
+            ctx.setFillColor(Props.blushHot)
+            ctx.fillEllipse(in: CGRect(x: -11, y: -7, width: 22, height: 14))
+            ctx.setStrokeColor(Props.blushLines)
+            ctx.setLineWidth(1.8)
+            ctx.setLineCap(.round)
+            for i in -1...1 {
+                let x = Double(i) * 5.2
+                ctx.move(to: CGPoint(x: x - 2, y: 3.6))
+                ctx.addLine(to: CGPoint(x: x + 2, y: -3.6))
+            }
+            ctx.strokePath()
+
+        case .paw(let lw):                                  // fingers up: one outline around palm and bumps, two gaps
+            let paw = Props.pawPath
+            ctx.addPath(paw)
+            ctx.setStrokeColor(RGBA.white.cgColor)
+            ctx.setLineWidth(9)
+            ctx.strokePath()                                // sticker die-cut border
+            ctx.addPath(paw)
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(5.2 * lw)
+            ctx.strokePath()                                // doubled: the fill below covers the inner half
+            ctx.addPath(paw)
+            ctx.setFillColor(p.body.cgColor)
+            ctx.fillPath()
+            ctx.setStrokeColor(outline)
+            ctx.setLineWidth(1.6 * lw)
+            for x in [-3.0, 3.0] {                          // between the fingers
+                ctx.move(to: CGPoint(x: x, y: -3.2))
+                ctx.addLine(to: CGPoint(x: x, y: 0.6))
+            }
+            ctx.strokePath()
+
+        case .exclaim:                                      // a bold «!» with a white sticker outline, centred
+            let w = TextKit.exclaimMetrics.0
+            ctx.saveGState()
+            ctx.translateBy(x: -w / 2, y: 0)
+            TextKit.drawStroke("!", font: TextKit.exclaimFont, color: RGBA.white.cgColor, width: 6, in: ctx)
+            TextKit.draw("!", font: TextKit.exclaimFont, color: Props.exclaimOrange, in: ctx)
+            ctx.restoreGState()
         }
     }
 }
@@ -685,6 +759,22 @@ enum Props {
     static let tearBlue = RGBA.hex(0x7CC8F2).cgColor
     static let noseRed = RGBA.hex(0xF0404A).cgColor
     static let blushHot = RGBA.hex(0xFF6F8E, alpha: 0.85).cgColor
+    // Slice 9
+    /// The «///» strokes of the shy blush, a deeper pink.
+    static let blushLines = RGBA.hex(0xD9365C).cgColor
+    /// The «!» of surprise: a warm orange, readable on light and dark wallpapers with its white outline.
+    static let exclaimOrange = RGBA.hex(0xF26A2E).cgColor
+    /// Radius of the round eye of surprise (the usual eye is 11.5 × 18 points).
+    static let roundEye = 8.4
+    /// The shy paw: a palm with three finger bumps on top (fingers up, −y); ~18 × 19 points around the origin.
+    nonisolated(unsafe) static let pawPath: CGPath = {      // immutable once built
+        let p = CGMutablePath()
+        p.addRoundedRect(in: CGRect(x: -8.5, y: -4, width: 17, height: 14), cornerWidth: 7, cornerHeight: 6.5)
+        for (x, y, r) in [(-5.8, -4.6, 3.3), (0.0, -6.2, 3.5), (5.8, -4.6, 3.3)] {
+            p.addEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
+        }
+        return p
+    }()
     /// «пф!» puffs: alternating bigger and smaller.
     static func puffRadius(_ i: Int) -> Double { i % 2 == 0 ? 9 : 6.5 }
     /// Top to bottom on each side: red, orange, green, blue — the 🤡 tufts in Chilk's palette.
@@ -740,6 +830,9 @@ enum TextKit {
     nonisolated(unsafe) static let zFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 15, nil)!
     nonisolated(unsafe) static let buttonFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 12, nil)!
     nonisolated(unsafe) static let haFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 20, nil)!
+    nonisolated(unsafe) static let exclaimFont = CTFontCreateUIFontForLanguage(.emphasizedSystem, 38, nil)!
+    /// The «!» is one constant glyph: its (advance width, ascent, descent), measured once, not with a CTLine per frame.
+    static let exclaimMetrics: (Double, Double, Double) = metrics("!", font: exclaimFont)
 
     static func line(_ s: String, font: CTFont, color: CGColor) -> CTLine {
         CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [

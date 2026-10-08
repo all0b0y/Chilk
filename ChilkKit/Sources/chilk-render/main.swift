@@ -48,6 +48,18 @@ func sim(_ setup: (CharacterSim) -> Void = { _ in }, seconds: Double, pointer: C
     return s.pose
 }
 
+/// Review 9e-art: puts him behind the edge first — the tray popover / a game holds him (`.away`) or he hides and peeks
+/// (`.lurk`).
+@MainActor
+func fromBehind(_ s: CharacterSim, _ where: StandOut) {
+    if `where` == .lurk {
+        s.hidden = true
+        for _ in 0..<120 { s.step(dt: 1.0 / 60, pointer: nil) }
+    }
+    s.standOut = `where`
+    for _ in 0..<120 { s.step(dt: 1.0 / 60, pointer: nil) }
+}
+
 /// Petting (slice 6c): the cursor strokes across him; `wink` — then rests until the wink.
 @MainActor
 func petted(wink: Bool) -> CharacterPose {
@@ -179,6 +191,30 @@ func previews(into dir: URL) throws {
         ("74-clap", sim({ $0.finale(.fireworksAndClap) }, seconds: 0.5, pointer: lookIn), false),
         ("75-high-five", sim({ $0.say("Пять!", duration: 20); $0.finale(.highFive) }, seconds: 0.7, pointer: lookIn), false),
         ("76-high-five-left", sim({ $0.finale(.highFive) }, seconds: 0.7, pointer: lookIn), true),
+        // Slice 9 (decision 34): «удивление» (the jump's top, round eyes after landing, both edges, beside the words) and
+        // «смущение» (mittens over the eyes, the peek, the end with the blush; both edges).
+        ("78-surprised-jump", sim({ $0.emote(.surprised, strong: false) }, seconds: 0.45), false),
+        ("78b-surprised-jump-left", sim({ $0.emote(.surprised, strong: false) }, seconds: 0.45), true),
+        ("79-surprised-wide", sim({ $0.emote(.surprised, strong: false) }, seconds: 0.8), false),
+        ("80-surprised-left", sim({ $0.emote(.surprised, strong: false) }, seconds: 0.8), true),
+        ("81-bubble-surprised", sim({ $0.say("Серьёзно? Целых три часа без перерыва?!", duration: 20)
+                                      $0.emote(.surprised, strong: false) }, seconds: 0.6), false),
+        ("82-shy-cover", sim({ $0.emote(.shy, strong: false) }, seconds: 0.8), false),
+        ("83-shy-peek", sim({ $0.emote(.shy, strong: false) }, seconds: 1.45), false),
+        ("84-shy-left", sim({ $0.emote(.shy, strong: false) }, seconds: 0.8), true),
+        ("85-shy-peek-left", sim({ $0.emote(.shy, strong: false) }, seconds: 1.45), true),
+        ("86-bubble-shy", sim({ $0.say("Ой, спасибо… мне очень приятно", duration: 20)
+                               $0.emote(.shy, strong: false) }, seconds: 1.0), false),
+        ("87-shy-end", sim({ $0.emote(.shy, strong: false) }, seconds: 2.45), false),
+        // Review 9e-art: started from behind the edge (the popover's .away, hiding's .lurk) he first comes out — no «!»
+        // half behind the edge — and only then jumps. The panel ends at the screen edge: what is cut off is hidden.
+        ("88-surprised-from-away-coming", sim({ fromBehind($0, .away); $0.emote(.surprised, strong: false) }, seconds: 0.2), false),
+        ("89-surprised-from-away-jump", sim({ fromBehind($0, .away); $0.emote(.surprised, strong: false) }, seconds: 0.5), false),
+        ("90-surprised-from-away-jump-left", sim({ fromBehind($0, .away); $0.emote(.surprised, strong: false) }, seconds: 0.5), true),
+        ("91-surprised-from-lurk-coming", sim({ fromBehind($0, .lurk); $0.emote(.surprised, strong: false) }, seconds: 0.15), false),
+        ("92-surprised-from-lurk-jump", sim({ fromBehind($0, .lurk); $0.emote(.surprised, strong: false) }, seconds: 0.47), false),
+        ("93-surprised-from-lurk-jump-left", sim({ fromBehind($0, .lurk); $0.emote(.surprised, strong: false) }, seconds: 0.47), true),
+        ("94-shy-from-lurk-left", sim({ fromBehind($0, .lurk); $0.emote(.shy, strong: false) }, seconds: 0.9), true),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),
         ("61-bubble-laugh", sim({ $0.say("Почему программисты путают Хэллоуин и Рождество? 31 OCT = 25 DEC", duration: 20)

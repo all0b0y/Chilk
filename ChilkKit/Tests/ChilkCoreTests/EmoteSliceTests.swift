@@ -51,8 +51,10 @@ struct EmoteGateTests {
         #expect(EmoteBook.load(from: url) == EmoteBook())          // damaged: the clown is allowed, nothing crashes
     }
 
-    @Test func onlyTheSixEmotionsExistAndNoneIsANeedSignal() {
-        #expect(Set(Emotion.allCases.map(\.rawValue)) == ["cheer", "laugh", "clown", "offended", "dizzy", "sad"])
+    @Test func onlyTheEightEmotionsExistAndNoneIsANeedSignal() {
+        // Slice 9 (decision 34) added «удивление» and «смущение» to the six of slice 6c.
+        #expect(Set(Emotion.allCases.map(\.rawValue))
+                == ["cheer", "laugh", "clown", "offended", "dizzy", "sad", "surprised", "shy"])
     }
 }
 

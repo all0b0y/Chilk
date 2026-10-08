@@ -38,6 +38,7 @@ public enum ChilkRenderer {
         if let age = p.confettiAge { confettiPlacements(into: &out, age: age, origin: p.confettiOrigin, mirror: mirror) }
         if p.sleep > 0.3 { zPlacements(into: &out, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let age = p.haAge { haPlacements(into: &out, age: age, count: p.haCount, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
+        if let age = p.exclaimAge { exclaimPlacement(into: &out, age: age, pose: p, metrics: m, mirror: mirror, mirrored: mirrored) }
         if let age = p.puffAge { puffPlacements(into: &out, age: age, origin: p.puffOrigin, mirror: mirror) }
         if p.props.contains(.lamp) {                       // 6f: on the floor beside him, on the screen side
             out.append(Placement(slot: Slot.lamp, part: .lamp(lw: 1),
@@ -126,6 +127,9 @@ public enum ChilkRenderer {
             if p.blushHot > 0.01 {                          // petted: the cheeks glow (6c)
                 out.append(Placement(slot: Slot.blushHot + i, part: .blushHot, transform: t, alpha: clamp(p.blushHot)))
             }
+            if p.blushShy > 0.01 {                          // «смущение» (9): the glow with «///»
+                out.append(Placement(slot: Slot.blushShy + i, part: .blushShy, transform: t, alpha: clamp(p.blushShy)))
+            }
         }
 
         let mood = p.mood
@@ -150,6 +154,16 @@ public enum ChilkRenderer {
                 part = .eyeAnnoyed(side: Int(s), lw: lw)
             } else if p.sleep > 0.5 {
                 part = .eyeSleep(lw: lw)
+            } else if mood.surprised {
+                part = .eyeRound(lw: lw)                           // ⊙ ⊙ (9)
+                t = eye.scaledBy(x: p.eyeScale * strainScale, y: p.eyeScale * strainScale)
+            } else if mood.shy {
+                if i == 0 && p.shyPeek > 0.5 && p.eyeOpen >= 0.14 {
+                    part = .eyeOpen                                // peeking past the mitten that slid off (9)
+                    t = eye.scaledBy(x: 0.85 * strainScale, y: 0.85 * p.eyeOpen * strainScale)
+                } else {
+                    part = .eyeSleep(lw: lw)                       // closed, looking down — never ^ ^ (that is joy)
+                }
             } else if mood.winking && i == 0 {
                 part = .eyeHappy(lw: lw)                           // the wink after petting (6c)
             } else if (mood.deadpan || mood.sad || mood.slumped || mood.sulking) && p.eyeOpen < 0.14 {
@@ -201,6 +215,12 @@ public enum ChilkRenderer {
             let r = mood.carried ? 4.2 : 2.6 + sin(p.time * .pi * 2 / 5.2 + p.phase) * 0.6
             mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: r / 4.2, y: r / 4.2).translatedBy(x: 0, y: -1)
             mouthPart = .mouthO
+        } else if mood.surprised {                                      // «о!» (9)
+            mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: 1.05, y: 1.3).translatedBy(x: 0, y: -1)
+            mouthPart = .mouthO
+        } else if mood.shy {                                            // a small bashful smile (9)
+            mouthT = mouth.translatedBy(x: 0, y: 1).scaledBy(x: 0.7, y: 0.8)
+            mouthPart = .mouthSmile(tired: 0, lw: lw)
         } else if mood.called || mood.yawning || mood.cheering || mood.chomping {
             mouthPart = .mouthOpen(yawn: mood.yawning)
         } else if mood.laughing {
@@ -231,7 +251,7 @@ public enum ChilkRenderer {
         for (i, h) in p.hands.prefix(2).enumerated() {
             let t = base.translatedBy(x: h.x * m.radiusX, y: h.y * m.radiusY).rotated(by: h.angle)
             out.append(h.arm ? Placement(slot: Slot.arm + i, part: .arm(lw: lw), transform: t, alpha: 1)
-                             : Placement(slot: Slot.hand + i, part: .hand(lw: lw), transform: t, alpha: 1))
+                             : Placement(slot: Slot.hand + i, part: h.paw ? .paw(lw: lw) : .hand(lw: lw), transform: t, alpha: 1))
         }
     }
 
@@ -304,6 +324,22 @@ public enum ChilkRenderer {
             t = t.scaledBy(x: scale, y: scale).rotated(by: j % 2 == 0 ? -0.15 : 0.12)
             out.append(Placement(slot: Slot.ha + j, part: .ha, transform: t, alpha: alpha))
         }
+    }
+
+    /// «!» of surprise (9): pops up over his head on the screen side of the sprout, follows the jump, fades out.
+    static func exclaimPlacement(into out: inout [Placement], age: Double, pose p: CharacterPose, metrics m: Metrics,
+                                 mirror: CGAffineTransform, mirrored: Bool) {
+        let life = CharacterSim.exclaimLife
+        let alpha = clamp(age / 0.06) * clamp((life - age) / 0.3)
+        guard alpha > 0.002 else { return }
+        let pop = max(0.01, easeOutBack(clamp(age / 0.22)))
+        let x = p.x - m.radiusX * 0.95
+        let y = m.ground + p.hop - m.radiusY * 2 * p.scaleY - 4
+        var t = mirror.translatedBy(x: x, y: y)
+        if mirrored { t = t.scaledBy(x: -1, y: 1) }             // never backwards (the glyph is centred)
+        // Leans away from the head, towards the screen, on both edges (the un-mirroring above also undid the tilt's side).
+        t = t.scaledBy(x: pop, y: pop).rotated(by: mirrored ? 0.18 : -0.18)
+        out.append(Placement(slot: Slot.exclaim, part: .exclaim, transform: t, alpha: alpha))
     }
 
     /// Bubble pops out of him (scale from the tail, easeOutBack); words arrive one by one (offset & delay).

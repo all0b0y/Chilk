@@ -1,9 +1,10 @@
 import Foundation
 
 /// Slice 6c (decision 12): what Codex may show with Chilk's body. Needs and states (tired posture, eye bags, the stretch
-/// hops, «лежит», sleep) are not here — one signal, one meaning.
+/// hops, «лежит», sleep) are not here — one signal, one meaning. Slice 9 (decision 34): «удивление» (`surprised`) and
+/// «смущение» (`shy`).
 public enum Emotion: String, CaseIterable, Sendable, Codable {
-    case cheer, laugh, clown, offended, dizzy, sad
+    case cheer, laugh, clown, offended, dizzy, sad, surprised, shy
 }
 
 /// What is kept between launches: when the clown was last shown (decision 13).

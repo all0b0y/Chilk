@@ -1039,7 +1039,8 @@ final class BalanceController {
         sim.emote(e, strong: strong)
     }
 
-    /// «Проверка ▸ Эмоции» and `CHILK_DEMO_EMOTE`: `laugh`, `laughStrong`, `clown`, `offended`, `dizzy`, `sad`.
+    /// «Проверка ▸ Эмоции» and `CHILK_DEMO_EMOTE`: `laugh`, `laughStrong`, `clown`, `offended`, `dizzy`, `sad`, and
+    /// (slice 9) `surprised`, `shy`.
     func emoteForCheck(_ key: String) {
         guard activity == nil, !isBusy(), !engine.slumped, hideout?.isHidden != true else {
             return log("emote \(key) skipped: busy or hidden")

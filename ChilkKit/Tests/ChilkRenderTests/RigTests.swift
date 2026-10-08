@@ -154,6 +154,13 @@ func playScenario(_ visit: (_ pose: CharacterPose, _ mirrored: Bool) -> Void) {
     sim.putOnNightcap(); run(4); sim.wakeUp(); run(1)
     // Slice 6f-2: the dance (arms up in turn, a spin, the bow), both edges.
     sim.perform(.dance(seconds: 8)); run(4); mirrored = true; run(4.5); mirrored = false
+    // Slice 9 (decision 34): «удивление» (round eyes, «!») and «смущение» (mittens over the eyes, «///»), both edges.
+    sim.emote(.surprised, strong: false); run(2.5)
+    sim.emote(.shy, strong: false); run(2.9)
+    mirrored = true
+    sim.emote(.surprised, strong: false); run(2.5)
+    sim.emote(.shy, strong: false); run(2.9)
+    mirrored = false
     sim.fatigue = 0.37
     mirrored = false
     run(20)
@@ -184,7 +191,8 @@ struct RigTests {
         var failures: [String] = []
         let parts = allParts()
         // The scenario reaches every part of slice 6c (otherwise this test would not check them).
-        for p in [Part.tear, .ha, .foot(lw: 1), .clownNose(lw: 1), .wig(lw: 1), .blushHot, .puff(index: 0), .puff(index: 1)] {
+        for p in [Part.tear, .ha, .foot(lw: 1), .clownNose(lw: 1), .wig(lw: 1), .blushHot, .puff(index: 0), .puff(index: 1),
+                  .eyeRound(lw: 1), .blushShy, .exclaim, .paw(lw: 1)] {   // and of slice 9
             #expect(parts.contains(p), "\(p)")
         }
         for part in parts {
@@ -228,7 +236,7 @@ struct RigTests {
                 }
                 print("frame \(frame): mean \(d.mean) big \(d.bigShare)")
             }
-            if pose.bubble != nil || pose.haAge != nil {                // glyphs: the bubble's words, «ХА» (6c)
+            if pose.bubble != nil || pose.haAge != nil || pose.exclaimAge != nil {   // glyphs: words, «ХА» (6c), «!» (9)
                 if d.mean > worstText.mean { worstText = (d.mean, max(worstText.big, d.bigShare), frame) }
                 worstText.big = max(worstText.big, d.bigShare)
             } else {
