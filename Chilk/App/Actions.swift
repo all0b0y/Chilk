@@ -325,13 +325,17 @@ final class Actions {
             guard !found.locked else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.locked)) }
             switch change {
             case .append(let text):
+                // Notes rewrites the whole body even to append: pictures, checklists and tables would be lost.
+                guard !found.rich else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.rich)) }
                 kind = .noteAppend(id: id, title: found.title, text: text)
             case .rewrite(let title, let text):
-                guard !found.attachments else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.attachments)) }
+                guard !found.rich else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.rich)) }
+                // The model writes at most 2000 characters: a longer note would lose its end without anyone seeing it.
+                guard found.text.count <= 2000 else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.tooLong)) }
                 guard (title ?? found.title) != found.title || text != found.text else {
                     return .failure("nothing_to_change: the note already is like that; no card was made")
                 }
-                kind = .noteRewrite(id: id, oldTitle: found.title, title: title ?? found.title, text: text)
+                kind = .noteRewrite(id: id, oldTitle: found.title, oldText: found.text, title: title ?? found.title, text: text)
             case .delete:
                 kind = .noteDelete(id: id, title: found.title)
             }
@@ -428,7 +432,7 @@ final class Actions {
             tool = "card_note_append"
             result = await notes.append(id: id, text: text)
             line = String(localized: "Готово: дописал в «\(title)»")
-        case .noteRewrite(let id, _, let title, let text):
+        case .noteRewrite(let id, _, _, let title, let text):
             tool = "card_note_rewrite"
             result = await notes.rewrite(id: id, title: title, text: text)
             line = String(localized: "Готово: заметка «\(title)» изменена")
@@ -458,8 +462,10 @@ final class Actions {
             case "no_access": return (false, String(localized: "Не получилось: нет доступа к «Заметкам» — разреши в Настройках"))
             case "not_found": return (false, String(localized: "Не получилось: этой заметки уже нет в папке «Чилк»"))
             case "note_locked": return (false, String(localized: "Не получилось: заметка закрыта паролем — измени её в «Заметках»"))
-            case "note_has_attachments":
-                return (false, String(localized: "Не получилось: в заметке есть картинки или файлы — измени её в «Заметках»"))
+            case "note_rich_content":
+                return (false, String(localized: "Не получилось: в заметке картинки, списки или таблицы — измени её в «Заметках»"))
+            case "notes_timeout":
+                return (false, String(localized: "Не знаю, получилось ли: «Заметки» не ответили — загляни в папку «Чилк»"))
             default: return (false, String(localized: "Не получилось — ничего не изменилось"))
             }
         default:

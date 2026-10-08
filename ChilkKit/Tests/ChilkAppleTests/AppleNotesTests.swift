@@ -23,8 +23,8 @@ struct AppleNotesTests {
     }
 
     private static let US = "\u{1F}", RS = "\u{1E}"
-    private static func row(_ id: String, _ title: String, _ text: String, locked: Bool = false, files: Bool = false) -> String {
-        [id, title, locked ? "true" : "false", files ? "true" : "false", "2026-10-8-39780", text].joined(separator: US)
+    private static func row(_ id: String, _ title: String, _ text: String, locked: Bool = false, rich: Bool = false) -> String {
+        [id, title, locked ? "true" : "false", rich ? "true" : "false", "2026-10-8-39780", text].joined(separator: US)
     }
 
     @Test func theScriptCompilesWithoutStartingNotes() async throws {
@@ -56,7 +56,7 @@ struct AppleNotesTests {
         let (n, defaults) = notes(.init(status: 0, output: out, error: ""), calls: calls)
         let found = try await n.notes()
         #expect(found.map(\.id) == ["n1", "n2"] && found[0].title == "Покупки" && found[0].text == "молоко\nхлеб")
-        #expect(found[1].locked && !found[0].locked && !found[0].attachments)
+        #expect(found[1].locked && !found[0].locked && !found[0].rich)
         #expect(found[0].modified == Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 8, hour: 11, minute: 3)))
         #expect(defaults.string(forKey: AppleNotes.folderKey) == "folder-1" && defaults.string(forKey: AppleNotes.automationKey) == "granted")
         _ = try await n.notes()
@@ -71,8 +71,9 @@ struct AppleNotesTests {
     }
 
     @Test func scriptErrorsBecomeNamedFailures() async {
-        let cases: [(String, NotesAccessError)] = [("(-1743)", .denied), ("(1001)", .notFound), ("(-1728)", .notFound),
-                                                   ("(1002)", .locked), ("(1003)", .unavailable), ("(1004)", .attachments)]
+        let cases: [(String, NotesAccessError)] = [("(-1743)", .denied), ("(-1744)", .denied), ("(1001)", .notFound),
+                                                   ("(-1728)", .notFound), ("(1002)", .locked), ("(1003)", .unavailable),
+                                                   ("(1004)", .rich), ("(-10000)", .script(-10000))]
         for (tail, expected) in cases {
             let (n, _) = notes(.init(status: 1, output: "", error: "0:12: execution error: Notes got an error: x \(tail)\n"), name: tail)
             await #expect(throws: expected) { try await n.delete(id: "n1") }
@@ -80,8 +81,9 @@ struct AppleNotesTests {
         let (n, defaults) = notes(.init(status: 1, output: "", error: "execution error: Not authorized to send Apple events to Notes. (-1743)\n"))
         await #expect(throws: NotesAccessError.denied) { try await n.notes() }
         #expect(defaults.string(forKey: AppleNotes.automationKey) == "denied")
+        // Killed after 90 s: the write may have happened — a timeout, never «nothing changed».
         let (slow, _) = notes(.init(status: ClockShortcut.timedOut, output: "", error: "timeout"), name: "slow")
-        await #expect(throws: (any Error).self) { try await slow.notes() }
+        await #expect(throws: NotesAccessError.timeout) { try await slow.add(title: "Мысль", text: "x") }
     }
 
     @Test func theNoteBodyKeepsLinesAndEscapes() {

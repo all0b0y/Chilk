@@ -20,7 +20,8 @@ public struct ToolJournal: Sendable {
     /// `invalid_arguments`), else `error` — free text never reaches the journal.
     public static func code(of message: String) -> String {
         let head = message.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
-        let ok = !head.isEmpty && head.count <= 40 && head.allSatisfy { $0.isASCII && ($0.isLowercase || $0 == "_") }
+        // Digits too: an AppleScript error number («notes_error_1728») says what went wrong without any text.
+        let ok = !head.isEmpty && head.count <= 40 && head.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "_") }
         return ok ? head : "error"
     }
 

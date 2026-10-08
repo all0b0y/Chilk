@@ -108,7 +108,10 @@ struct ChilkNotesTests {
         let missing = await ChilkNotesExecutor(store: FakeStore()).delete(id: "zz")
         #expect(missing.value["error"]?.string?.hasPrefix("not_found:") == true)
         #expect(ChilkNotesExecutor.failure(NotesAccessError.locked).hasPrefix("note_locked:"))
-        #expect(ChilkNotesExecutor.failure(NotesAccessError.attachments).hasPrefix("note_has_attachments:"))
+        #expect(ChilkNotesExecutor.failure(NotesAccessError.rich).hasPrefix("note_rich_content:"))
+        #expect(ChilkNotesExecutor.failure(NotesAccessError.tooLong).hasPrefix("note_too_long:"))
+        #expect(ChilkNotesExecutor.failure(NotesAccessError.timeout).contains("may or may not have happened"))
+        #expect(ChilkNotesExecutor.failure(NotesAccessError.script(-1728)).hasPrefix("notes_error_1728:"))
         #expect(ChilkNotesExecutor.failure(NotesAccessError.unavailable, nothing: "created").hasSuffix("nothing was created"))
         #expect(await store.writes.isEmpty)
     }

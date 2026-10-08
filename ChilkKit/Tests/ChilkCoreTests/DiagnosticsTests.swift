@@ -17,6 +17,7 @@ struct ToolJournalTests {
     @Test func onlyACodeOfAFailureIsKept() {
         #expect(ToolJournal.code(of: "invalid_arguments: title — must not be empty") == "invalid_arguments")
         #expect(ToolJournal.code(of: "ambiguous_time: «в 3» — ночи или дня?") == "ambiguous_time")
+        #expect(ToolJournal.code(of: "notes_error_1728: AppleScript error -1728") == "notes_error_1728")
         #expect(ToolJournal.code(of: "No access to Reminders. The user can allow it…") == "error")
         #expect(ToolJournal.code(of: "Купить хлеб: завтра") == "error")
     }

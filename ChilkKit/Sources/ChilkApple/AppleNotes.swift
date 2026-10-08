@@ -53,8 +53,8 @@ public actor AppleNotes: NotesStore {
             let failure = Self.failure(run)
             switch failure as? NotesAccessError {
             case .denied?: defaults.set("denied", forKey: Self.automationKey)
+            case .timeout?, nil: break
             case .some: defaults.set("granted", forKey: Self.automationKey)        // the script ran: Notes answered
-            case nil: break
             }
             throw failure
         }
@@ -64,25 +64,29 @@ public actor AppleNotes: NotesStore {
         return reply.notes
     }
 
-    struct ScriptFailure: Error { let code: Int? }
+    /// osascript itself failed (no AppleScript error number).
+    struct ScriptFailure: Error {}
 
-    /// osascript ends a failed run with the error number in brackets: «… execution error: … (-1743)».
+    /// osascript ends a failed run with the error number in brackets: «… execution error: … (-1743)». A run killed
+    /// after 90 s may have written already: that is `timeout`, never «nothing changed».
     static func failure(_ run: ClockShortcut.Run) -> any Error {
-        guard run.status != ClockShortcut.timedOut else { return ScriptFailure(code: nil) }
+        guard run.status != ClockShortcut.timedOut else { return NotesAccessError.timeout }
         let code = run.error.range(of: #"\((-?[0-9]+)\)\s*$"#, options: .regularExpression)
             .flatMap { Int(run.error[$0].dropFirst().prefix { $0 != ")" }) }
         switch code {
-        case -1743: return NotesAccessError.denied            // errAEEventNotPermitted: the user said no
+        case -1743, -1744: return NotesAccessError.denied     // not permitted / would need a consent it cannot ask for
         case 1001, -1728: return NotesAccessError.notFound
         case 1002: return NotesAccessError.locked
         case 1003: return NotesAccessError.unavailable
-        case 1004: return NotesAccessError.attachments
-        default: return ScriptFailure(code: code)
+        case 1004: return NotesAccessError.rich
+        case let code?: return NotesAccessError.script(code)
+        case nil: return ScriptFailure()
         }
     }
 
     /// The script's answer: the folder's id, then one record per note (U+001E between records, U+001F between fields:
-    /// id, name, locked, has attachments, modified, plain text). An absent folder answers nothing.
+    /// id, name, locked, rich, modified, plain text — the script removes those two characters from names and texts).
+    /// An absent folder answers nothing.
     static func parse(_ output: String) -> (folder: String?, notes: [NoteInfo]) {
         let text = output.hasSuffix("\n") ? String(output.dropLast()) : output
         guard !text.isEmpty else { return (nil, []) }
@@ -92,7 +96,8 @@ public actor AppleNotes: NotesStore {
 
     static func row(_ record: Substring) -> NoteInfo? {
         let f = record.split(separator: "\u{1F}", maxSplits: 5, omittingEmptySubsequences: false).map(String.init)
-        guard f.count == 6, !f[0].isEmpty, let modified = stamp(f[4]) else { return nil }
+        guard f.count == 6, !f[0].isEmpty else { return nil }
+        let modified = stamp(f[4]) ?? Date(timeIntervalSince1970: 0)
         let title = f[1].trimmingCharacters(in: .whitespaces)
         var body = f[5].replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         // The plain text starts with the title line.
@@ -102,7 +107,7 @@ public actor AppleNotes: NotesStore {
             body = ""
         }
         return NoteInfo(id: f[0], title: title, text: body.trimmingCharacters(in: .whitespacesAndNewlines), modified: modified,
-                        locked: f[2] == "true", attachments: f[3] == "true")
+                        locked: f[2] == "true", rich: f[3] == "true")
     }
 
     /// «2026-10-8-39780»: AppleScript's year, month, day and seconds since midnight — local wall-clock time.
@@ -132,7 +137,10 @@ public actor AppleNotes: NotesStore {
     }
 
     /// argv: op (list / read / add / append / rewrite / delete), the remembered folder id, then the note id and/or the
-    /// HTML. Own errors: 1001 not in the folder, 1002 locked, 1003 no folder could be made, 1004 has attachments.
+    /// HTML. Own errors: 1001 not in the folder, 1002 locked, 1003 no folder could be made, 1004 rich content. The folder
+    /// lives only in Notes' default account (where a deleted note goes to «Recently Deleted»): a folder named exactly
+    /// «Чилк», at the top of the account, not shared; a remembered id is checked the same way. Every write reads the
+    /// body back first and refuses pictures, files, lists or tables — Notes would lose or flatten them.
     static let script = #"""
     on run argv
     	set op to item 1 of argv
@@ -153,15 +161,16 @@ public actor AppleNotes: NotesStore {
     		else if op is "append" or op is "rewrite" or op is "delete" then
     			set n to my ownNote(chilk, item 3 of argv)
     			if password protected of n then error "locked" number 1002
-    			if op is "append" then
-    				set body of n to (body of n) & (item 4 of argv)
-    				set answerText to answerText & RS & my noteRow(n, 0)
-    			else if op is "rewrite" then
-    				if (count of attachments of n) > 0 then error "attachments" number 1004
-    				set body of n to item 4 of argv
-    				set answerText to answerText & RS & my noteRow(n, 0)
-    			else
+    			if op is "delete" then
     				delete n
+    			else
+    				if my isRich(n) then error "rich" number 1004
+    				if op is "append" then
+    					set body of n to (body of n) & (item 4 of argv)
+    				else
+    					set body of n to item 4 of argv
+    				end if
+    				set answerText to answerText & RS & my noteRow(n, 0)
     			end if
     		else
     			error "unknown operation" number 1099
@@ -175,29 +184,31 @@ public actor AppleNotes: NotesStore {
     		if remembered is not "" then
     			try
     				set f to folder id remembered
-    				if not (shared of f) then return f
+    				if my isChilk(f) then return f
     			end try
     		end if
-    		set accs to {default account}
-    		repeat with a in accounts
-    			if (id of a) is not (id of default account) then set end of accs to (contents of a)
-    		end repeat
-    		repeat with a in accs
-    			set acc to contents of a
-    			repeat with f in (folders of acc)
-    				if (name of f) is "Чилк" and not (shared of f) then return (contents of f)
-    			end repeat
+    		set acc to default account
+    		repeat with f in (folders of acc)
+    			if my isChilk(contents of f) then return (contents of f)
     		end repeat
     		if not makeIt then return missing value
-    		repeat with a in accs
-    			set acc to contents of a
-    			try
-    				return make new folder at acc with properties {name:"Чилк"}
-    			end try
-    		end repeat
-    		error "no folder" number 1003
+    		try
+    			return make new folder at acc with properties {name:"Чилк"}
+    		on error
+    			error "no folder" number 1003
+    		end try
     	end tell
     end chilkFolder
+
+    on isChilk(f)
+    	tell application "Notes"
+    		considering case
+    			if (name of f) is not "Чилк" then return false
+    		end considering
+    		if shared of f then return false
+    		return (class of (container of f)) is account
+    	end tell
+    end isChilk
 
     on ownNote(chilk, noteID)
     	tell application "Notes"
@@ -212,21 +223,59 @@ public actor AppleNotes: NotesStore {
     	end tell
     end ownNote
 
+    on isRich(n)
+    	tell application "Notes"
+    		if (count of attachments of n) > 0 then return true
+    		set noteHTML to body of n
+    	end tell
+    	repeat with marker in {"<ul", "<ol", "<table", "<img", "<object"}
+    		if noteHTML contains (contents of marker) then return true
+    	end repeat
+    	return false
+    end isRich
+
+    on clean(t)
+    	set saved to AppleScript's text item delimiters
+    	set AppleScript's text item delimiters to {character id 30, character id 31}
+    	set pieces to text items of t
+    	set AppleScript's text item delimiters to " "
+    	set t to pieces as text
+    	set AppleScript's text item delimiters to saved
+    	return t
+    end clean
+
     on noteRow(n, maxLength)
     	tell application "Notes"
     		set US to character id 31
-    		set isLocked to password protected of n
+    		set noteName to ""
+    		set isLocked to false
     		set noteText to ""
+    		set stampText to ""
+    		set richNote to false
+    		try
+    			set noteName to name of n
+    		end try
+    		try
+    			set isLocked to password protected of n
+    		end try
     		if not isLocked then
     			try
     				set noteText to plaintext of n
     			end try
     		end if
     		if maxLength > 0 and (length of noteText) > maxLength then set noteText to text 1 thru maxLength of noteText
-    		set d to modification date of n
-    		set stampText to ((year of d) as text) & "-" & (((month of d) as integer) as text) & "-" & ((day of d) as text) & "-" & ((time of d) as text)
-    		set hasFiles to ((count of attachments of n) > 0)
-    		return (id of n) & US & (name of n) & US & (isLocked as text) & US & (hasFiles as text) & US & stampText & US & noteText
+    		try
+    			set d to modification date of n
+    			set stampText to ((year of d) as text) & "-" & (((month of d) as integer) as text) & "-" & ((day of d) as text) & "-" & ((time of d) as text)
+    		end try
+    		try
+    			if maxLength > 0 then
+    				set richNote to ((count of attachments of n) > 0)
+    			else if not isLocked then
+    				set richNote to my isRich(n)
+    			end if
+    		end try
+    		return (id of n) & US & my clean(noteName) & US & (isLocked as text) & US & (richNote as text) & US & stampText & US & my clean(noteText)
     	end tell
     end noteRow
     """#

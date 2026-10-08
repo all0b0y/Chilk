@@ -29,8 +29,8 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case note(title: String, text: String)
         /// Lines added at the end of one of Chilk's notes; the rest of it stays.
         case noteAppend(id: String, title: String, text: String)
-        /// One of Chilk's notes rewritten: the new title and the whole new text.
-        case noteRewrite(id: String, oldTitle: String, title: String, text: String)
+        /// One of Chilk's notes rewritten: the new title and the whole new text (`oldText`: what it replaces).
+        case noteRewrite(id: String, oldTitle: String, oldText: String, title: String, text: String)
         case noteDelete(id: String, title: String)
     }
 
@@ -127,9 +127,9 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
             out = ["🗒 Заметка: \(title)"] + Self.excerpt(text) + [notesPlace]
         case .noteAppend(_, let title, let text):
             out = ["➕ Дописать в заметку «\(title)»"] + Self.excerpt(text) + [notesPlace]
-        case .noteRewrite(_, let oldTitle, let title, let text):
+        case .noteRewrite(_, let oldTitle, let oldText, let title, let text):
             out = ["✏️ Изменить заметку «\(oldTitle)»"] + (title != oldTitle ? ["Название: \(title)"] : [])
-                + Self.excerpt(text, prefix: "Станет: ") + [notesPlace]
+                + Self.excerpt(oldText, prefix: "Было: ", limit: 120) + Self.excerpt(text, prefix: "Станет: ") + [notesPlace]
         case .noteDelete(_, let title):
             out = ["🗑 Удалить заметку: \(title)", notesPlace + " · останется в «Недавно удалённых»"]
         }
@@ -197,10 +197,10 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
             return "change calendar event «\(oldTitle)» → «\(title)» "
                 + (allDay ? "on \(day.string(from: start))" : "\(f.string(from: start)) – \(f.string(from: end))")
         case .eventDelete(_, let title, _, _, _): return "delete calendar event «\(title)»"
-        case .note(let title, let text): return "new note «\(title)» (\(text.count) characters) in Notes → «Чилк»"
-        case .noteAppend(_, let title, let text): return "append \(text.count) characters to note «\(title)»"
-        case .noteRewrite(_, let oldTitle, let title, let text):
-            return "rewrite note «\(oldTitle)» → «\(title)» (\(text.count) characters)"
+        // The text too: a correction turn sees the card as it is now, edits in «Изменить» included.
+        case .note(let title, let text): return "new note «\(title)» in Notes → «Чилк»: «\(text)»"
+        case .noteAppend(_, let title, let text): return "append to note «\(title)»: «\(text)»"
+        case .noteRewrite(_, let oldTitle, _, let title, let text): return "rewrite note «\(oldTitle)» → «\(title)»: «\(text)»"
         case .noteDelete(_, let title): return "delete note «\(title)»"
         }
     }

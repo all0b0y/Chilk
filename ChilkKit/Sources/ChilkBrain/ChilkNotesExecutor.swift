@@ -1,27 +1,33 @@
 import Foundation
 
 /// Slice 8f: one note of Chilk's own «Чилк» folder in Apple Notes. `text`: what is under the title (in a list — its
-/// beginning); `locked`: closed with a password (its text cannot be read, Chilk does not change it); `attachments`:
-/// pictures or files — a rewrite would lose them.
+/// beginning); `locked`: closed with a password (its text cannot be read, Chilk does not change it); `rich`: pictures,
+/// files, lists, checklists or tables — writing the note's body back would lose or flatten them, so Chilk does not.
 public struct NoteInfo: Sendable, Equatable {
     public let id: String
     public let title: String
     public let text: String
     public let modified: Date
     public let locked: Bool
-    public let attachments: Bool
+    public let rich: Bool
 
-    public init(id: String, title: String, text: String, modified: Date, locked: Bool = false, attachments: Bool = false) {
+    public init(id: String, title: String, text: String, modified: Date, locked: Bool = false, rich: Bool = false) {
         self.id = id
         self.title = title
         self.text = text
         self.modified = modified
         self.locked = locked
-        self.attachments = attachments
+        self.rich = rich
     }
 }
 
-public enum NotesAccessError: Error, Equatable { case denied, unavailable, notFound, locked, attachments }
+public enum NotesAccessError: Error, Equatable {
+    case denied, unavailable, notFound, locked, rich, tooLong
+    /// Notes did not answer in time: the write may or may not have happened.
+    case timeout
+    /// An AppleScript error number the app has no name for.
+    case script(Int)
+}
 
 /// Apple Notes, Chilk's own «Чилк» folder only (SPEC «Срез 8», decision 10). Notes has no framework API: the app drives
 /// it with AppleScript, and macOS asks once whether Chilk may control Notes.
@@ -100,8 +106,13 @@ public struct ChilkNotesExecutor: Sendable {
             "no_access: Chilk may not control Notes. The user can allow it in System Settings → Privacy & Security → Automation → Чилк → Notes"
         case NotesAccessError.notFound: "not_found: no such note in the «Чилк» folder; list them with chilk_notes"
         case NotesAccessError.locked: "note_locked: the note is locked with a password — Chilk neither reads nor changes it; the user can in Notes"
-        case NotesAccessError.attachments:
-            "note_has_attachments: the note has pictures or files — a rewrite would lose them; append still works, or the user edits it in Notes"
+        case NotesAccessError.rich:
+            "note_rich_content: the note has pictures, files, lists or tables — writing it would lose them; offer a new note, or the user edits it in Notes"
+        case NotesAccessError.tooLong:
+            "note_too_long: the note is longer than 2000 characters — a rewrite would cut it; append, or the user edits it in Notes"
+        case NotesAccessError.timeout:
+            "notes_timeout: Notes did not answer in time — the change may or may not have happened; check with chilk_notes before trying again"
+        case NotesAccessError.script(let code): "notes_error_\(abs(code)): AppleScript error \(code) from Apple Notes; nothing was \(nothing)"
         case NotesAccessError.unavailable: "notes_unavailable: could not make the «Чилк» folder; nothing was \(nothing)"
         case is CancellationError: "cancelled"
         default: "notes_unreachable: could not reach Apple Notes; nothing was \(nothing)"
@@ -118,7 +129,7 @@ public struct ChilkNotesExecutor: Sendable {
         f.timeZone = .current
         var out: [String: JSON] = ["id": .string(info.id), "title": .string(info.title), "folder": .string(folderTitle),
                                    "modified": .string(f.string(from: info.modified)), "locked": .bool(info.locked),
-                                   "attachments": .bool(info.attachments)]
+                                   "rich": .bool(info.rich)]
         if !info.locked {
             out["text"] = .string(String(info.text.prefix(limit)))
             out["truncated"] = .bool(info.text.count > limit)

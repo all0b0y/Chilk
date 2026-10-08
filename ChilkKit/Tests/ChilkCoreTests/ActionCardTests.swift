@@ -207,9 +207,12 @@ struct ActionCardTests {
     @Test func noteChangeCardsSayWhatHappensToTheNote() {
         #expect(ActionCard(kind: .noteAppend(id: "n1", title: "Покупки", text: "сыр")).lines(now: now, calendar: cal)
                 == ["➕ Дописать в заметку «Покупки»", "сыр", "«Заметки» → «Чилк»"])
-        #expect(ActionCard(kind: .noteRewrite(id: "n1", oldTitle: "Покупки", title: "Кофе", text: "только кофе"))
+        #expect(ActionCard(kind: .noteRewrite(id: "n1", oldTitle: "Покупки", oldText: "молоко\nхлеб", title: "Кофе", text: "только кофе"))
                     .lines(now: now, calendar: cal)
-                == ["✏️ Изменить заметку «Покупки»", "Название: Кофе", "Станет: только кофе", "«Заметки» → «Чилк»"])
+                == ["✏️ Изменить заметку «Покупки»", "Название: Кофе", "Было: молоко / хлеб", "Станет: только кофе", "«Заметки» → «Чилк»"])
+        // The model gets the text itself, so a correction after «Изменить» starts from what the card says now.
+        #expect(ActionCard(kind: .noteAppend(id: "n1", title: "Покупки", text: "сыр")).summary(calendar: cal)
+                == "append to note «Покупки»: «сыр»")
         let delete = ActionCard(kind: .noteDelete(id: "n1", title: "Покупки"))
         #expect(delete.lines(now: now, calendar: cal)
                 == ["🗑 Удалить заметку: Покупки", "«Заметки» → «Чилк» · останется в «Недавно удалённых»"])

@@ -3,7 +3,7 @@ import Foundation
 
 /// Acceptance runs (CHILK_FAKE_NOTES=1 | seed): the real Codex and card path without the user's Notes. Every write lands
 /// in `notes-fake.json` in CHILK_STATE_DIR. `seed`: «Покупки» (молоко, хлеб), «Пароли» locked with a password and «Дача»
-/// with a photo (the refusals).
+/// with a photo (rich: the refusals).
 actor FakeNotes: NotesStore {
     private var items: [NoteInfo] = []
     private var deleted: [NoteInfo] = []
@@ -16,7 +16,7 @@ actor FakeNotes: NotesStore {
         items = [
             NoteInfo(id: "fake-shopping", title: "Покупки", text: "молоко\nхлеб", modified: now.addingTimeInterval(-3600)),
             NoteInfo(id: "fake-passwords", title: "Пароли", text: "", modified: now.addingTimeInterval(-7200), locked: true),
-            NoteInfo(id: "fake-dacha", title: "Дача", text: "фото забора", modified: now.addingTimeInterval(-86400), attachments: true),
+            NoteInfo(id: "fake-dacha", title: "Дача", text: "фото забора", modified: now.addingTimeInterval(-86400), rich: true),
         ]
     }
 
@@ -30,7 +30,7 @@ actor FakeNotes: NotesStore {
 
     func notes() async throws -> [NoteInfo] {
         items.map { NoteInfo(id: $0.id, title: $0.title, text: String($0.text.prefix(300)), modified: $0.modified, locked: $0.locked,
-                             attachments: $0.attachments) }
+                             rich: $0.rich) }
     }
 
     func note(id: String) async throws -> NoteInfo {
@@ -40,16 +40,16 @@ actor FakeNotes: NotesStore {
 
     func append(id: String, text: String) async throws -> NoteInfo {
         let i = try writable(id)
+        guard !items[i].rich else { throw NotesAccessError.rich }
         let n = items[i]
-        items[i] = NoteInfo(id: id, title: n.title, text: n.text.isEmpty ? text : n.text + "\n" + text, modified: Date(),
-                            attachments: n.attachments)
+        items[i] = NoteInfo(id: id, title: n.title, text: n.text.isEmpty ? text : n.text + "\n" + text, modified: Date())
         try save()
         return items[i]
     }
 
     func rewrite(id: String, title: String, text: String) async throws -> NoteInfo {
         let i = try writable(id)
-        guard !items[i].attachments else { throw NotesAccessError.attachments }
+        guard !items[i].rich else { throw NotesAccessError.rich }
         items[i] = NoteInfo(id: id, title: title, text: text, modified: Date())
         try save()
         return items[i]
@@ -69,7 +69,7 @@ actor FakeNotes: NotesStore {
 
     private func save() throws {
         func row(_ n: NoteInfo, _ state: String) -> [String: Any] {
-            ["id": n.id, "title": n.title, "text": n.text, "locked": n.locked, "attachments": n.attachments, "state": state]
+            ["id": n.id, "title": n.title, "text": n.text, "locked": n.locked, "rich": n.rich, "state": state]
         }
         let rows = items.map { row($0, "open") } + deleted.map { row($0, "deleted") }
         try JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys]).write(to: file, options: .atomic)

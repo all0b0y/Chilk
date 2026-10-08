@@ -88,9 +88,15 @@ final class CardDesk {
     /// Slice 8f: the note a change card is about (nil for anything else).
     private static func noteID(_ kind: ActionCard.Kind) -> String? {
         switch kind {
-        case .noteAppend(let id, _, _), .noteRewrite(let id, _, _, _), .noteDelete(let id, _): id
+        case .noteAppend(let id, _, _), .noteRewrite(let id, _, _, _, _), .noteDelete(let id, _): id
         default: nil
         }
+    }
+
+    /// The same words, whatever the case or the spacing (a correction may retype them).
+    private static func sameText(_ a: String, _ b: String) -> Bool {
+        func words(_ s: String) -> String { s.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        return words(a) == words(b)
     }
 
     static func sameThing(_ a: ActionCard, _ b: ActionCard) -> Bool {
@@ -114,8 +120,8 @@ final class CardDesk {
              (.eventDelete(let i1, _, _, _, _), .eventDelete(let i2, _, _, _, _)): i1 == i2
         // Slice 8f: «нет, назови её «Покупки»» / «нет, добавь ещё сыр» — a correction of the one note on the card;
         // «нет, допиши это в «Покупки»» turns a new note into an append (the same text).
-        case (.note, .note): true
-        case (.note(_, let x1), .noteAppend(_, _, let x2)), (.noteAppend(_, _, let x1), .note(_, let x2)): x1 == x2
+        case (.note(let t1, let x1), .note(let t2, let x2)): t1 == t2 || sameText(x1, x2)
+        case (.note(_, let x1), .noteAppend(_, _, let x2)), (.noteAppend(_, _, let x1), .note(_, let x2)): sameText(x1, x2)
         default: noteID(a.kind).map { $0 == noteID(b.kind) } ?? false
         }
     }
@@ -477,7 +483,7 @@ final class CardEditModel {
             if !allDay { length = e.timeIntervalSince(s) }
         case .eventDelete(_, let t, let s, _, _):
             title = t; date = s; text = ""; hasText = false; hasDate = false; startDate = s; dateOnly = false
-        case .note(let t, let x), .noteAppend(_, let t, let x), .noteRewrite(_, _, let t, let x):
+        case .note(let t, let x), .noteAppend(_, let t, let x), .noteRewrite(_, _, _, let t, let x):
             title = t; date = Date(); text = x; hasText = true; hasDate = false; startDate = nil; dateOnly = false
         case .noteDelete(_, let t):
             title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
@@ -557,7 +563,7 @@ final class CardEditModel {
     /// The edited card: a new id (a new card), no guess marks — the user set the time himself.
     func edited() -> ActionCard {
         let t = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
-        let noteText = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
+        let noteText = String(ChilkToolCatalog.noteText(text).prefix(2000))
         let kind: ActionCard.Kind
         switch original.kind {
         case .reminder: kind = .reminder(title: t, due: date)
@@ -575,7 +581,8 @@ final class CardEditModel {
                                 start: span.start, end: span.end)
         case .note: kind = .note(title: t, text: noteText)
         case .noteAppend(let id, let title, _): kind = .noteAppend(id: id, title: title, text: noteText)
-        case .noteRewrite(let id, let old, _, _): kind = .noteRewrite(id: id, oldTitle: old, title: t, text: noteText)
+        case .noteRewrite(let id, let old, let oldText, _, _):
+            kind = .noteRewrite(id: id, oldTitle: old, oldText: oldText, title: t, text: noteText)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)
@@ -598,8 +605,14 @@ struct CardEditView: View {
     var body: some View {
         Form {
             if model.hasTitle { TextField(model.titleLabel, text: $model.title) }
-            if model.hasText {
-                TextField(model.textLabel, text: $model.text, axis: .vertical).lineLimit(model.isNote ? 3...8 : 2...4)
+            if model.hasText && model.isNote {
+                // A note has lines: Return makes a new one here (in a text field it would press «Готово»).
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.textLabel).foregroundStyle(.secondary)
+                    TextEditor(text: $model.text).font(.body).scrollContentBackground(.hidden).frame(minHeight: 96, maxHeight: 150)
+                }
+            } else if model.hasText {
+                TextField(model.textLabel, text: $model.text, axis: .vertical).lineLimit(2...4)
             }
             if model.hasDate {
                 DatePicker(String(localized: "Когда"), selection: $model.date, in: model.earliest...,
