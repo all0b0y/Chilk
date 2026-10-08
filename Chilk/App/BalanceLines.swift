@@ -178,6 +178,23 @@ extension Lines {
         String(localized: "Поиграем завтра. Сейчас — спать"),
     ]
 
+    static let nightPauseCard = String(localized: "Экран откроется утром, в 05:00. Выйти раньше — только экстренным выходом")
+    static let bedtimeSetting = String(localized: "Отбой")
+    static let sleepLockedNote = String(localized: "Сейчас нельзя — сначала поспи")
+    static func trayBedtime(_ time: String) -> String { String(localized: "Отбой в \(time)") }
+    static func trayNight(_ until: String) -> String { String(localized: "Ночь · до \(until)") }
+    static let sleepAxis = String(localized: "Время")
+    static let sleepWeekCaption = String(localized: "Точка — последнее действие ночью, черта — отбой; оранжевая точка — дожимал")
+
+    /// Decision 27: «Сегодня» — last night.
+    static func sleepToday(_ n: SleepNight) -> String {
+        let bed = SleepClock.text(n.bedtime)
+        let how = n.pushed ? String(localized: "дожимал") : String(localized: "вовремя")
+        guard let last = n.lastActivity else { return String(localized: "Отбой \(bed) · \(how)") }
+        let time = last.formatted(date: .omitted, time: .shortened)
+        return String(localized: "Последнее действие в \(time) (отбой \(bed)) · \(how)")
+    }
+
     static let goodNight: [String] = [
         String(localized: "Спокойной ночи 🌙"),
         String(localized: "Сладких снов. Я посторожу экран"),

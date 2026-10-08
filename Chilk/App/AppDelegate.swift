@@ -447,6 +447,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.onEndOfDay = { [weak notices] in notices?.endOfDayFired() }
         // Slice 9c (decisions 17, 20): the warning an hour before bedtime, by the timer's rule, with the evening review.
         balance.onBedtimeSoon = { [weak notices] at in notices?.bedtimeSoon(at: at) }
+        tray.sleepLine = { [weak balance] in balance?.sleepLine() }
         notices.sleepOn = { [weak balance] in !(balance?.engine.config.needsOff.contains(.sleep) ?? true) }
         Lines.userName = { [weak self] in self?.profile.profile.name ?? "" }
         let balanceBusy = balance.isBusy
@@ -471,6 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             after("CHILK_DEMO_PLAN_PRESS") { [weak edge] in edge?.onButton?(0) }
             // Slice 9c: «Сон» on and tonight's bedtime in N s (the warning comes at once).
             if let s = env["CHILK_DEMO_BEDTIME_IN"].flatMap(Double.init) { balance.demoBedtime(in: s) }
+            if let path = env["CHILK_DEMO_NIGHT_CARD"] {
+                Escalation.snapshotNightCard(to: URL(fileURLWithPath: path), exitsLeft: 3)
+            }
             if let raw = env["CHILK_DEMO_PLAN_REVIEW"], let colon = raw.firstIndex(of: ":"), let s = Double(raw[..<colon]) {
                 let dir = URL(fileURLWithPath: String(raw[raw.index(after: colon)...]))
                 try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

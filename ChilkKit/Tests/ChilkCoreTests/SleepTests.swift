@@ -267,6 +267,17 @@ struct SleepTests {
         #expect(night.asks(.endOfDay).isEmpty)
     }
 
+    @Test func noNewGamesAtNightAndARunningOneWaitsAQuarterOfAnHour() {
+        #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 0, exercise: false, night: true) == .night)
+        #expect(GameGate.refusal(kind: .ticTacToe, exhausted: false, stage: 0, exercise: false) == nil)
+        func decide(waiting: TimeInterval, between: Bool = false) -> GameBreakAction {
+            GameBreakPolicy.decide(stage: 1, need: .sleep, slumped: false, silent: false, betweenGames: between, waiting: waiting)
+        }
+        #expect(decide(waiting: 700) == .keepPlaying)                          // longer than the day's 10 minutes
+        #expect(decide(waiting: 900) == .card)
+        #expect(decide(waiting: 0, between: true) == .card)
+    }
+
     @Test func theDayRemembersItsNight() {
         let night = Night(start: at("2026-10-05T23:00:00Z"))
         night.work(minutes: 0.2)

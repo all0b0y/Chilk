@@ -58,6 +58,8 @@ final class TrayModel {
     struct PlanLine: Equatable { let done: Int; let total: Int }
     var plan: PlanLine?
     var openPlan: () -> Void = {}
+    /// Slice 9c (decision 20): «Отбой в 23:00» / «Ночь · до 05:00».
+    var sleepLine: String?
     var openSettings: () -> Void = {}
     /// Slice 9f: «Выбрать другую» → Settings, scrolled to «Мозг».
     var openBrainSettings: () -> Void = {}
@@ -118,6 +120,9 @@ struct TrayView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.callout)
+            }
+            if let sleep = model.sleepLine {
+                Label(sleep, systemImage: "moon.zzz").font(.callout).foregroundStyle(.secondary)
             }
             if let problem = model.problem { problemLine(problem) }
             Divider()

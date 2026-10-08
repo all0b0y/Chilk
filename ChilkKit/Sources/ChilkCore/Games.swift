@@ -66,12 +66,15 @@ public enum GameChooser {
 /// Why a game cannot start now (decision 26). The raw values are the tool's refusal codes.
 public enum GameRefusal: String, Sendable {
     case exhausted = "chilk_exhausted", topStage = "top_stage", exercise = "in_exercise", notReady = "not_ready"
+    /// Slice 9c (decision 25): no new games after bedtime.
+    case night = "night_bedtime"
 }
 
 public enum GameGate {
     /// No games while he is «измотан», on stages 3–4 (dimmed screen / the pause) or in a guided exercise.
-    public static func refusal(kind: GameKind, exhausted: Bool, stage: Int, exercise: Bool) -> GameRefusal? {
+    public static func refusal(kind: GameKind, exhausted: Bool, stage: Int, exercise: Bool, night: Bool = false) -> GameRefusal? {
         guard GameKind.ready.contains(kind) else { return .notReady }
+        if night { return .night }
         if exhausted { return .exhausted }
         if stage >= 3 { return .topStage }
         if exercise { return .exercise }
@@ -93,6 +96,8 @@ public enum GameBreakAction: Equatable, Sendable {
 public enum GameBreakPolicy {
     /// A request waits for the end of a game at most this long (a long game: battleship, checkers).
     public static let maxWait: TimeInterval = 600
+    /// Slice 9c (decision 25): «Пора спать» waits for a game running into bedtime at most this long, then over the game.
+    public static let sleepWait: TimeInterval = 900
 
     /// `stage`/`need`: the request on screen (`nil` = none); `waiting`: how long it has waited for the game.
     public static func decide(stage: Int?, need: Need?, slumped: Bool, silent: Bool, betweenGames: Bool,
@@ -102,7 +107,7 @@ public enum GameBreakPolicy {
         if stage >= 3 { return .pause }
         // Тишина: no signs. The end of the day concerns work apps only (user story 34): an evening game goes on.
         if silent || need == .endOfDay { return .keepPlaying }
-        return betweenGames || waiting >= maxWait ? .card : .keepPlaying
+        return betweenGames || waiting >= (need == .sleep ? sleepWait : maxWait) ? .card : .keepPlaying
     }
 }
 

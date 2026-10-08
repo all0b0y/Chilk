@@ -45,6 +45,8 @@ final class Tray: NSObject, NSPopoverDelegate {
     var openMain: () -> Void = {}
     /// Slice 9b: today's plan («План: 2 из 5») and «Лист дня».
     var planSummary: () -> (done: Int, total: Int)? = { nil }
+    /// Slice 9c (decision 20): «Отбой в 23:00» / «Ночь · до 05:00».
+    var sleepLine: () -> String? = { nil }
     var openPlan: () -> Void = {}
     var openSettings: () -> Void = {}
     /// Slice 9f: the main window on «Настройки», scrolled to «Мозг».
@@ -267,6 +269,8 @@ final class Tray: NSObject, NSPopoverDelegate {
         if balance.focusUntil != model.focusUntil { model.focusUntil = balance.focusUntil }
         let plan = planSummary().map { TrayModel.PlanLine(done: $0.done, total: $0.total) }
         if plan != model.plan { model.plan = plan }
+        let sleep = sleepLine()
+        if sleep != model.sleepLine { model.sleepLine = sleep }
         let problem: TrayModel.Problem? = switch brain.state {
         case .signedOut: .codexSignedOut
         case .failed(let why): .codexDown(why)

@@ -14,6 +14,8 @@ final class Escalation {
     private var card: PauseCard?
     private var guideCard: GuideCard?
     private var breakTitle: String?
+    /// Slice 9c (decision 23): the night's pause shows this instead of the rest countdown (it ends only in the morning).
+    private var pauseCaption: String?
     private var screenFrames: [NSRect] = []
     private var observers: [(NotificationCenter, Any)] = []
 
@@ -66,13 +68,14 @@ final class Escalation {
     // MARK: Stage 4
 
     /// `breakTitle`: a button that turns the pause into the matching guided break (nil = none for this need).
-    func pause(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String? = nil) {
+    func pause(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String? = nil, caption: String? = nil) {
         if level == .pause { card?.exitsLeft = exitsLeft; return }
         lift()
         level = .pause
         self.breakTitle = breakTitle
+        pauseCaption = caption
         cover { [weak self] in
-            let card = PauseCard(exitsLeft: exitsLeft, restNeeded: restNeeded, breakTitle: breakTitle)
+            let card = PauseCard(exitsLeft: exitsLeft, restNeeded: restNeeded, breakTitle: breakTitle, caption: caption)
             card.onExit = { reason, minutes, held in self?.onExit?(reason, minutes, held) ?? false }
             card.onHolding = { holding in self?.onHolding?(holding) }
             card.onBreak = { self?.onStartBreak?() }
@@ -178,6 +181,28 @@ final class Escalation {
 
     /// Acceptance runs only (CHILK_DEMO_SNAPSHOT): the pause as drawn on Chilk's screen, shade included, to a PNG.
     /// Rendering our own view needs no screen-recording permission. Chilk himself is a separate window.
+    /// Acceptance only: the night's pause card (slice 9c) drawn offscreen on the pause's dark — nothing covers the screen.
+    static func snapshotNightCard(to url: URL, exitsLeft: Int) {
+        let card = PauseCard(exitsLeft: exitsLeft, restNeeded: 900, breakTitle: nil, caption: Lines.nightPauseCard)
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 200))
+        card.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(card)
+        NSLayoutConstraint.activate([card.centerXAnchor.constraint(equalTo: box.centerXAnchor),
+                                     card.centerYAnchor.constraint(equalTo: box.centerYAnchor)])
+        box.layoutSubtreeIfNeeded()
+        guard let rep = box.bitmapImageRepForCachingDisplay(in: box.bounds) else { return }
+        box.cacheDisplay(in: box.bounds, to: rep)
+        let image = NSImage(size: box.bounds.size)
+        image.lockFocus()
+        NSColor(white: 0.06, alpha: 1).setFill()
+        box.bounds.fill()
+        rep.draw(in: box.bounds, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+        image.unlockFocus()
+        if let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: url)
+        }
+    }
+
     func snapshot(to url: URL, openForm: Bool) {
         guard let window = pauses.first(where: { $0.contentView?.subviews.isEmpty == false }),
               let view = window.contentView else { return }
@@ -230,7 +255,11 @@ final class Escalation {
         pauses = []
         card = nil
         guideCard = nil
-        if was == .guide { guide(caption: caption) } else { pause(exitsLeft: exits, restNeeded: rest, breakTitle: breakTitle) }
+        if was == .guide {
+            guide(caption: caption)
+        } else {
+            pause(exitsLeft: exits, restNeeded: rest, breakTitle: breakTitle, caption: pauseCaption)
+        }
     }
 }
 
@@ -272,6 +301,8 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
     var onHolding: ((Bool) -> Void)?
     var onBreak: (() -> Void)?
     let restNeeded: TimeInterval
+    /// Slice 9c: shown instead of the countdown (the night's pause).
+    let caption: String?
     var exitsLeft: Int { didSet { if exitsLeft != oldValue { refresh() } } }
     var restLeft: TimeInterval = .infinity { didSet { refreshCountdown() } }
 
@@ -287,9 +318,10 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
 
     private let breakButton = NSButton()
 
-    init(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String?) {
+    init(exitsLeft: Int, restNeeded: TimeInterval, breakTitle: String?, caption: String? = nil) {
         self.exitsLeft = exitsLeft
         self.restNeeded = restNeeded
+        self.caption = caption
         super.init(frame: .zero)
         breakButton.bezelStyle = .rounded
         breakButton.controlSize = .large
@@ -366,6 +398,7 @@ private final class PauseCard: NSView, NSTextFieldDelegate {
     }
 
     private func refreshCountdown() {
+        if let caption { countdown.stringValue = caption; return }
         countdown.stringValue = restLeft > restNeeded - 5 || !restLeft.isFinite        // typing right now: the rule, not 2:59
             ? Lines.pauseStart(minutes: Int((restNeeded / 60).rounded()))
             : Lines.pauseCountdown(seconds: Int(max(0, restLeft).rounded(.up)))

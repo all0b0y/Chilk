@@ -50,6 +50,8 @@ final class MainModel {
     var care = CareSettings()
     /// «Договор с собой»: a request is on stage 3–4.
     var locked = false
+    /// Slice 9c (decision 26): from the warning until 05:00 — no later bedtime, «Сон» stays on.
+    var sleepLocked = false
     /// The last refused change, for a few seconds.
     var refusal: String?
     var apps: [AppRow] = []
@@ -240,6 +242,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if plan != model.plan { model.plan = plan }
         if model.mode != balance.mode { model.mode = balance.mode }
         if model.locked != balance.settingsLocked { model.locked = balance.settingsLocked }
+        let sleepLocked = balance.engine.sleepLocked(Date())
+        if model.sleepLocked != sleepLocked { model.sleepLocked = sleepLocked }
         for k in Permissions.Kind.allCases {
             let s = Permissions.state(k)
             if model.permissions[k] != s { model.permissions[k] = s }
@@ -319,8 +323,13 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         return NSImage(cgImage: cg, size: NSSize(width: 150, height: 150))
     }
 
-    private func refused() {
-        model.refusal = Lines.locked
+    private func refused(_ change: CareChange? = nil) {
+        // Slice 9c (decision 26): a later bedtime or «Сон» off from the warning until 05:00.
+        let sleep: Bool = switch change {
+        case .need(.sleep, _)?, .bedtime?: true
+        default: false
+        }
+        model.refusal = sleep && balance.engine.sleepLocked(Date()) ? Lines.sleepLockedNote : Lines.locked
         refusalTimer?.invalidate()
         refusalTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated { self?.model.refusal = nil }
@@ -337,7 +346,7 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         }
         model.changeCare = { [weak self] change in
             guard let self else { return }
-            if !self.balance.changeCare(change) { self.refused() }
+            if !self.balance.changeCare(change) { self.refused(change) }
             self.model.care = self.balance.engine.state.care
             self.refresh()
         }

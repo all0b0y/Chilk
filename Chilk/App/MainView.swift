@@ -183,6 +183,12 @@ private struct TodaySection: View {
                 Figure(title: Lines.deferrals, value: "\(model.today.deferrals)")
             }
             Tallies(tallies: model.today.tallies)
+            if let night = model.today.sleep {
+                // Slice 9c (decision 27): last night — the last action at the Mac after bedtime, and whether he had to push.
+                Card(title: Lines.name(.sleep)) {
+                    Text(Lines.sleepToday(night)).foregroundStyle(.secondary)
+                }
+            }
             Exits(exits: model.today.exits, empty: Lines.noExitsToday, withDay: false)
         }
     }
@@ -219,8 +225,58 @@ private struct WeekSection: View {
                 Figure(title: Lines.deferrals, value: "\(model.week.deferrals)")
             }
             Tallies(tallies: model.week.tallies)
+            if model.week.days.contains(where: { $0.bedtime != nil }) { sleepChart }
             Exits(exits: model.week.exits, empty: Lines.noExitsWeek, withDay: true)
         }
+    }
+}
+
+extension WeekSection {
+    /// Slice 9c (decision 27): seven nights — the last action at the Mac (a dot) against bedtime (a line); hours from 20:00.
+    var sleepChart: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(Lines.name(.sleep)).font(.headline)
+            Chart {
+                ForEach(model.week.days, id: \.key) { d in
+                    if let bed = d.bedtime {
+                        RectangleMark(x: .value(Lines.weekDay, d.date, unit: .day), y: .value(Lines.sleepAxis, Self.hours(bed)),
+                                      height: .fixed(2))
+                            .foregroundStyle(Color.primary.opacity(0.65))
+                        if let last = d.lastNightActivity {
+                            PointMark(x: .value(Lines.weekDay, d.date, unit: .day), y: .value(Lines.sleepAxis, Self.hours(Self.minute(last))))
+                                .foregroundStyle(d.sleepPushed ? Color.orange : TrayView.peach)
+                        }
+                    }
+                }
+            }
+            .chartYScale(domain: 0...9)
+            .chartXScale(domain: weekDomain)                                   // all seven days, as the chart above
+            .chartYAxis {
+                AxisMarks(values: [0.0, 2, 4, 6, 8]) { v in
+                    AxisGridLine()
+                    AxisValueLabel { Text(verbatim: SleepClock.text((20 * 60 + Int(v.as(Double.self) ?? 0) * 60) % 1440)) }
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .stride(by: .day)) { _ in AxisValueLabel(format: .dateTime.weekday(.abbreviated), centered: true) }
+            }
+            .frame(height: 140)
+            Text(Lines.sleepWeekCaption).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// From the first day's start to the end of the last one.
+    var weekDomain: ClosedRange<Date> {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: model.week.days.first?.date ?? Date())
+        let last = cal.startOfDay(for: model.week.days.last?.date ?? Date())
+        return start...(cal.date(byAdding: .day, value: 1, to: last) ?? last)
+    }
+
+    static func hours(_ minutes: Int) -> Double { Double(SleepClock.order(minutes) - SleepClock.order(20 * 60)) / 60 }
+    static func minute(_ d: Date) -> Int {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
     }
 }
 
@@ -269,6 +325,15 @@ private struct SettingsSection: View {
                     .disabled(model.locked && model.care.isOn(.endOfDay))
                 budgetStepper(weekend: false)
                 budgetStepper(weekend: true)
+                // Slice 9c (decision 19): «Сон» — the switch and one bedtime for every day (20:00–03:00).
+                Toggle(Lines.name(.sleep), isOn: needBinding(.sleep)).disabled(model.sleepLocked && model.care.sleepOn)
+                if model.care.sleepOn {
+                    Picker(Lines.bedtimeSetting, selection: Binding(get: { model.care.bedtime },
+                                                                    set: { model.changeCare(.bedtime($0)) })) {
+                        ForEach(bedtimes, id: \.self) { m in Text(verbatim: SleepClock.text(m)).tag(m) }
+                    }
+                    if model.sleepLocked { Text(Lines.sleepLockedNote).font(.caption).foregroundStyle(.secondary) }
+                }
             } header: {
                 Text(Lines.care)
             } footer: {
@@ -399,6 +464,15 @@ private struct SettingsSection: View {
     }
 
     // MARK: Care
+
+    /// Decision 19: 20:00–03:00 every half hour (and the stored time if it is off the grid); decision 26: from the warning
+    /// until 05:00 only that time and earlier ones.
+    private var bedtimes: [Int] {
+        var all = stride(from: 20 * 60, through: 27 * 60, by: 30).map { $0 % 1440 }
+        if !all.contains(model.care.bedtime) { all.append(model.care.bedtime) }
+        all.sort { SleepClock.order($0) < SleepClock.order($1) }
+        return model.sleepLocked ? all.filter { SleepClock.order($0) <= SleepClock.order(model.care.bedtime) } : all
+    }
 
     private func needBinding(_ n: Need) -> Binding<Bool> {
         Binding(get: { model.care.isOn(n) }, set: { model.changeCare(.need(n, on: $0)) })

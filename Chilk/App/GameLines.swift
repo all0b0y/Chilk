@@ -39,6 +39,7 @@ enum GameLines {
         case .topStage: String(localized: "Сейчас не до игр — сначала перерыв")
         case .exercise: String(localized: "Доделаем упражнение — потом поиграем")
         case .notReady: String(localized: "В это я ещё не умею")
+        case .night: Lines.noGamesAtNight.randomElement()!
         }
     }
 

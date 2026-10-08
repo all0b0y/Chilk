@@ -99,7 +99,7 @@ final class BalanceController {
     /// Slice 7a (decision 26): no games while he is «измотан», on stages 3–4 or in a guided exercise or walk.
     func gameRefusal(_ kind: GameKind) -> GameRefusal? {
         GameGate.refusal(kind: kind, exhausted: engine.slumped, stage: stageThreeOrMore ? 3 : (shownStage ?? 0),
-                         exercise: activity != nil || walking || guidedRun != nil)
+                         exercise: activity != nil || walking || guidedRun != nil, night: engine.isNight(Date()))
     }
 
     /// Slice 7a (decision 32): the request on screen while the notebook holds Chilk — its need, stage and the buttons
@@ -305,6 +305,19 @@ final class BalanceController {
         syncEscalation()
         sim.fatigue = engine.leafFatigue
         sim.eyeStrain = engine.eyeStrain
+        // Slice 9c (decision 27): after bedtime the nightcap at the edge and now and then a yawn — a look, not a request.
+        let night = engine.isNight(s.now)
+        if night != nightLook {
+            nightLook = night
+            if night { sim.wear(.nightcap) } else { sim.takeOff(.nightcap) }
+            nextYawn = s.now.addingTimeInterval(.random(in: 120...300) / max(1, engine.config.timeScale))
+            log("night look: nightcap \(night ? "on" : "off")")
+        }
+        if night, s.now >= nextYawn, activity == nil, !isBusy(), !sim.isTalking, sim.act == nil {
+            log("night look: a yawn")
+            sim.startAntic(.yawn)
+            nextYawn = s.now.addingTimeInterval(.random(in: 8 * 60...15 * 60) / max(1, engine.config.timeScale))
+        }
         // A credited eye rest blinks twice (6a, decision 4) — a switched-off need only fades the mirror.
         let eyesCredit = engine.state.needs[.eyes]?.lastCredit
         if eyesCreditSeen, let c = eyesCredit, c != lastEyesCredit { sim.eyesRested() }
@@ -327,6 +340,21 @@ final class BalanceController {
 
     /// Slice 9b (decision 17): «Конец дня» asks — the plan's evening review may follow (it decides itself, once a day).
     var onEndOfDay: () -> Void = {}
+    private var nightLook = false
+    private var nextYawn = Date.distantPast
+
+    /// Slice 9c (decision 20): the popover's line — «Отбой в 23:00» from the warning, «Ночь · до 05:00» from bedtime.
+    func sleepLine(now: Date = Date()) -> String? {
+        guard let st = engine.sleepStatus(now) else { return nil }
+        if st.night { return Lines.trayNight(Self.hhmm(st.end)) }
+        return now >= st.warning ? Lines.trayBedtime(Self.hhmm(st.bedtime)) : nil
+    }
+
+    /// «05:00», not «5:00» (decision 20 writes the times so).
+    static func hhmm(_ d: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: d)
+        return SleepClock.text((c.hour ?? 0) * 60 + (c.minute ?? 0))
+    }
     /// Slice 9c (decision 20): an hour before bedtime — shown by the timer's rule (it waits while he is busy).
     var onBedtimeSoon: (Date) -> Void = { _ in }
 
@@ -430,8 +458,11 @@ final class BalanceController {
 
     /// Stage 4's shade with its form (also while he stays hidden: decision 19).
     private func startPause(_ n: Need) {
+        // Slice 9c (decision 23): the night's pause — until the morning; he yawns in the nightcap; only the emergency exit.
+        if n == .sleep { sim.wear(.nightcap); sim.startAntic(.yawn) }
         escalation.pause(exitsLeft: engine.state.exitsLeft, restNeeded: engine.pauseRest ?? engine.config.walkRest,
-                         breakTitle: n == .stretch ? Lines.startWarmup : (n == .walk ? Lines.goWalk : nil))
+                         breakTitle: n == .stretch ? Lines.startWarmup : (n == .walk ? Lines.goWalk : nil),
+                         caption: n == .sleep ? Lines.nightPauseCard : nil)
         if let after = env["CHILK_DEMO_PAUSE_BREAK"].flatMap(Double.init) {
             Timer.scheduledTimer(withTimeInterval: after, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated { self?.startFromPause() }
