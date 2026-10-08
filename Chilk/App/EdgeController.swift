@@ -153,6 +153,16 @@ final class EdgeController: NSObject {
     /// His window on screen (the long-answer panel opens beside it).
     var windowFrame: NSRect { panel.frame }
 
+    /// Slice 10 (Б6, decision 14): him plus the widest bubble beside him, on screen — a window that opens «beside him» («Лист
+    /// дня», «Подробнее», «Изменить») goes past it, so a bubble never lands on the window. The widest bubble is the scene's
+    /// width less 20 (`BubbleLayout`), 26 pt clear of his body; 30 pt more for the windows' own overlap.
+    var besideFrame: NSRect {
+        let far = Double(sim.pose.x) - metrics.radiusX - 26 - (metrics.width - 20) - 30
+        var r = CGRect(x: far, y: 0, width: metrics.width - far, height: metrics.height)
+        if isMirrored { r.origin.x = metrics.width - r.maxX }
+        return screenRect(fromScene: r)
+    }
+
     /// A rect of the scene (canonical y-down coordinates, already mirrored like `ChilkRenderer.buttonRects`) on the
     /// screen — the name field sits exactly over a bubble button slot (slice 5a).
     func screenRect(fromScene r: CGRect) -> NSRect {

@@ -40,6 +40,10 @@ func leapPose(at: Double) -> CharacterPose {
     return s.pose
 }
 
+/// Slice 10 (Б6): the tallest bubbles — a plan card of 8 timed lines and the 240-character answer.
+let tallCard = "🗓 План на пятницу, 9 октября\n08:00 — зал\n09:30 — созвон\n11:00 — английский\n13:00 — обед с мамой\n15:00 — врач · день?\n17:00 — почта\n18:30 — бассейн\n20:00 — кино\nБез времени: купить хлеб, стирка\n«Напоминания» → «Чилк»"
+let longAnswer = String(String(repeating: "Это длинный ответ Codex, который почти упирается в предел облачка. ", count: 4).prefix(238)) + "…"
+
 @MainActor
 func sim(_ setup: (CharacterSim) -> Void = { _ in }, seconds: Double, pointer: CGPoint? = nil) -> CharacterPose {
     let s = CharacterSim(metrics: metrics, rng: SeededRandom(seed: 42))
@@ -215,6 +219,13 @@ func previews(into dir: URL) throws {
         ("92-surprised-from-lurk-jump", sim({ fromBehind($0, .lurk); $0.emote(.surprised, strong: false) }, seconds: 0.47), false),
         ("93-surprised-from-lurk-jump-left", sim({ fromBehind($0, .lurk); $0.emote(.surprised, strong: false) }, seconds: 0.47), true),
         ("94-shy-from-lurk-left", sim({ fromBehind($0, .lurk); $0.emote(.shy, strong: false) }, seconds: 0.9), true),
+        // Slice 10 (Б6): the bubble beside him — a tall plan card, the longest answer, hidden with a request (Б5).
+        ("95-card-tall", sim({ $0.standOut = .out; $0.say(tallCard, buttons: ["Да", "Изменить", "Нет"]) }, seconds: 2), false),
+        ("96-card-tall-left", sim({ $0.standOut = .out; $0.say(tallCard, buttons: ["Да", "Изменить", "Нет"]) }, seconds: 2), true),
+        ("97-answer-240", sim({ $0.standOut = .peek; $0.say(longAnswer) }, seconds: 3), false),
+        ("98-lurk-request", sim({ fromBehind($0, .lurk); $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]) }, seconds: 2), false),
+        ("98b-lurk-request-left", sim({ fromBehind($0, .lurk); $0.say("Эй, ты давно не пил. Глоток воды?", buttons: ["Попил", "Через 10 мин", "Я занят"]) }, seconds: 2), true),
+        ("98c-cheer-bubble", sim({ $0.standOut = .peek; $0.perform(.cheer); $0.say("Готово: план на пятницу — 3 дела в «Напоминаниях»") }, seconds: 1.2), false),
         ("59-tired-max", sim({ $0.fatigue = 1 }, seconds: 3, pointer: lookIn), false),
         ("60-exhausted-sway", sim({ $0.slumped = true }, seconds: 4.5, pointer: lookIn), false),
         ("61-bubble-laugh", sim({ $0.say("Почему программисты путают Хэллоуин и Рождество? 31 OCT = 25 DEC", duration: 20)
@@ -236,9 +247,12 @@ func previews(into dir: URL) throws {
         ("57-dance-bow", sim({ $0.perform(.dance(seconds: 20)) }, seconds: 19.4), true),
     ]
     for (name, pose, mirrored) in states {
-        let image = render(metrics.sceneSize) { ctx in
+        // The whole canvas the app's window would have (slice 10: the bubble beside him may reach past the scene).
+        let viewport = SceneViewport(metrics: metrics, placements: ChilkRenderer.placements(pose: pose, metrics: metrics, mirrored: mirrored))
+        let image = render(viewport.rect.size) { ctx in
             ctx.setFillColor(CGColor(srgbRed: 0.98, green: 0.95, blue: 0.89, alpha: 1))   // stand-in wallpaper
-            ctx.fill(CGRect(origin: .zero, size: metrics.sceneSize))
+            ctx.fill(CGRect(origin: .zero, size: viewport.rect.size))
+            ctx.translateBy(x: viewport.drawingOffset.x, y: viewport.drawingOffset.y)
             ChilkRenderer.drawScene(in: ctx, pose: pose, metrics: metrics, palette: palette, mirrored: mirrored)
         }
         writePNG(image, to: dir.appendingPathComponent("\(name).png"))

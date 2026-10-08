@@ -286,6 +286,6 @@ struct RigTests {
         pose.bubble = nil
         rig.apply(ChilkRenderer.placements(pose: pose, metrics: m, mirrored: false))
         let without = rig.root.sublayers!.filter { !$0.isHidden }.count
-        #expect(withBubble - without == 4)                     // box, tail, stroke, one word
+        #expect(withBubble - without == 3)                     // box, stroke with its tail (slice 10), one word
     }
 }

@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             brain?.conversationEnded()                     // 9f: a model / depth chosen meanwhile takes over now
         }
         conversation.refusal = { [weak balance] in balance?.refusal() }        // «лежит» (6b)
-        conversation.chilkFrame = { [weak edge] in (edge?.windowFrame ?? .zero, edge?.edge == .left) }
+        conversation.chilkFrame = { [weak edge] in (edge?.besideFrame ?? .zero, edge?.edge == .left) }   // 10, Б6: past the bubble
 
         // Tray → Tools (decision 9): switched-off tools leave new threads; folder kinds pause their folders.
         actions.switches = { switches.switches }

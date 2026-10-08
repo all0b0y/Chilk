@@ -85,6 +85,8 @@ final class BalanceController {
     weak var hideout: HideController?
     /// The request he chose not to come out for (decision 19): shown again after a conversation only quietly.
     private var quietRequest: String?
+    /// Slice 10 (Б5): the request he looks out with, its bubble held until answered — a resume shows it again, no new roll.
+    private var lurkRequest: String?
     /// Stage ≥ 2 insists: the tray icon wiggles (slice 5a; was the Dock bounce). Also while the stage is busy.
     var onNudge: () -> Void = {}
 
@@ -306,6 +308,9 @@ final class BalanceController {
         }
         ticks += 1
         apply(events)
+        // Б5: the request he holds out from behind the edge is gone (credited by being away, released) — after this tick's
+        // events, so a climb re-rolls and holds the next stage without a dive in between.
+        if hideout?.holding == true, lurkRequest != engine.currentPrompt().flatMap(Self.requestKey) { releaseLurk("request gone") }
         syncEscalation()
         sim.fatigue = engine.leafFatigue
         sim.eyeStrain = engine.eyeStrain
@@ -540,17 +545,28 @@ final class BalanceController {
     }
 
     /// Hidden, a request starts or climbs: the roll. He comes out for good — «Не, я тут посижу…», then the request as
-    /// usual. He stays hidden — he looks out ~3 s with the need's pantomime, no bubble, the ladder goes on; the shade
-    /// and the pause still come. `true` = handled here.
+    /// usual. He stays hidden — slice 10 (Б5, decision 11; was: ~3 s of pantomime, no bubble): he looks out from behind the
+    /// edge with the request's bubble and buttons and holds it until it is answered; the ladder goes on, the shade and the
+    /// pause still come. Stage 0 (Тишина: no bubbles at all) keeps the old peek with the pantomime. `true` = handled here.
     private func hiddenRequest(_ event: BalanceEvent, need n: Need, stage: Int) -> Bool {
-        guard let hide = hideout, hide.isHidden else { quietRequest = nil; return false }
+        guard let hide = hideout, hide.isHidden else { quietRequest = nil; lurkRequest = nil; return false }
+        let key = Self.requestKey(event)
+        if stage >= 1, let key, key == lurkRequest { showLurking(event, hide: hide); return true }   // a resume: no new roll
         if hide.rollStays(stage: stage) {
             quietRequest = nil
+            lurkRequest = nil
             hide.show("came out for \(n.rawValue), stage \(stage)", notify: false)
             comeOutFirst { [weak self] in self?.apply(event) }
             return true
         }
-        quietRequest = Self.requestKey(event)
+        if stage >= 1 {
+            quietRequest = nil
+            lurkRequest = key
+            showLurking(event, hide: hide)
+            return true
+        }
+        lurkRequest = nil
+        quietRequest = key
         hideBubble()
         if n == .walk { sim.wear(.hat) }
         _ = pantomime(n, inPlace: true)
@@ -558,6 +574,21 @@ final class BalanceController {
         if stage == 3 { escalation.dim() }
         if stage >= 4 { startPause(n) }
         return true
+    }
+
+    /// Б5: the request's own bubble while he leans out from behind the edge (stage 3 also dims, stage 4 also pauses).
+    private func showLurking(_ event: BalanceEvent, hide: HideController) {
+        guard case .ask(let n, let stage, let buttons, let again) = event else { return }
+        cancelIntro()
+        hide.hold(why: "\(n.rawValue), stage \(stage), bubble")
+        showAsk(n, stage: stage, buttons: buttons, again: again)
+        sim.standOut = .lurk
+    }
+
+    /// Б5: the held request was answered or went — he dives back behind the edge.
+    private func releaseLurk(_ why: String) {
+        lurkRequest = nil
+        hideout?.release(why)
     }
 
     /// «Не, я тут посижу. Нам надо поговорить» (~3 s), then `then` — unless something else came meanwhile.
@@ -1001,6 +1032,16 @@ final class BalanceController {
         log("button \(index)")
         let action = buttonActions[index]
         hideBubble()
+        if hideout?.holding == true {
+            // Б5: answered — his reaction («Ура, вода!») still shows from behind the edge, then he dives back.
+            lurkRequest = nil
+            Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.lurkRequest == nil else { return }       // a new request holds him meanwhile
+                    self.releaseLurk("answered")
+                }
+            }
+        }
         action()
     }
 

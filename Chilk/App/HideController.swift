@@ -121,9 +121,30 @@ final class HideController {
         }
     }
 
+    /// Slice 10 (Б5, decision 11): he leans out with a request's bubble and stays so until it is answered or gone.
+    private(set) var holding = false
+    func hold(why: String) {
+        guard state.hidden else { return }
+        lookTimer?.invalidate()
+        lookTimer = nil
+        lurking = true
+        holding = true
+        sim.standOut = .lurk
+        log("lurk: \(why) — held until answered")
+    }
+
+    /// The request held out was answered or went: back behind the edge (unless something else took him out).
+    func release(_ why: String) {
+        guard holding else { return }
+        holding = false
+        endLook(goHome: true)
+        log("lurk released (\(why))")
+    }
+
     private func endLook(goHome: Bool = false) {
         lookTimer?.invalidate()
         lookTimer = nil
+        holding = false
         if lurking, goHome, sim.standOut == .lurk { sim.standOut = .docked }
         lurking = false
     }

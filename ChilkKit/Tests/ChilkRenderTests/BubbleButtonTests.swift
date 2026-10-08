@@ -18,10 +18,12 @@ struct BubbleButtonTests {
 
     @Test func everyButtonGetsAClickableRectInsideThePanel() {
         for mirrored in [false, true] {
-            let rects = ChilkRenderer.buttonRects(pose: talkingPose(), metrics: m, mirrored: mirrored)
+            let pose = talkingPose()
+            let rects = ChilkRenderer.buttonRects(pose: pose, metrics: m, mirrored: mirrored)
             #expect(rects.map(\.index) == [0, 1, 2])
-            let scene = CGRect(origin: .zero, size: m.sceneSize)
-            #expect(rects.allSatisfy { scene.contains($0.rect) })
+            // Slice 10 (Б6): the bubble is beside him and may reach past the nominal scene — inside the panel's canvas.
+            let panel = SceneViewport(metrics: m, placements: ChilkRenderer.placements(pose: pose, metrics: m, mirrored: mirrored)).rect
+            #expect(rects.allSatisfy { panel.contains($0.rect) })
             for (a, b) in zip(rects, rects.dropFirst()) { #expect(!a.rect.intersects(b.rect)) }
             #expect(rects.allSatisfy { $0.rect.height > 20 && $0.rect.width > 40 })
         }
@@ -39,6 +41,31 @@ struct BubbleButtonTests {
         let rects = ChilkRenderer.buttonRects(pose: pose, metrics: m, mirrored: false)
         #expect(rects.count == 4)
         #expect(Set(rects.map { $0.rect.minY.rounded() }).count >= 2)
-        #expect(rects.allSatisfy { CGRect(origin: .zero, size: m.sceneSize).contains($0.rect) })
+        let panel = SceneViewport(metrics: m, placements: ChilkRenderer.placements(pose: pose, metrics: m, mirrored: false)).rect
+        #expect(rects.allSatisfy { panel.contains($0.rect) })
+    }
+
+    /// Slice 10 (Б6): the bubble never covers him — beside him on the screen side at any height (a tall card included),
+    /// on both edges, standing, peeking and hidden-lurking.
+    @Test func theBubbleIsBesideHimNeverOverHim() {
+        let tall = (1...10).map { "Строка номер \($0) карточки" }.joined(separator: "\n")
+        for text in ["Звал?", "Попей водички 💧", tall, String(repeating: "длинный ответ ", count: 17)] {
+            for mirrored in [false, true] {
+                for out in [StandOut.peek, .out, .lurk] {
+                    let sim = CharacterSim(metrics: m, rng: SeededRandom(seed: 3))
+                    if out == .lurk { sim.hidden = true }
+                    sim.standOut = out
+                    sim.say(text, buttons: ["Да", "Нет"])
+                    for _ in 0..<150 { sim.step(dt: 1.0 / 60, pointer: nil) }
+                    let plan = ChilkRenderer.placements(pose: sim.pose, metrics: m, mirrored: mirrored)
+                    guard let box = plan.first(where: { if case .bubbleBox = $0.part { true } else { false } }),
+                          let body = plan.first(where: { $0.slot == Slot.body }) else { Issue.record("no bubble/body"); continue }
+                    let b = box.part.bounds(metrics: m).applying(box.transform)
+                    let him = body.part.bounds(metrics: m).applying(body.transform)
+                    #expect(!b.intersects(him), "\(text.prefix(12)) mirrored=\(mirrored) \(out)")
+                    #expect(mirrored ? b.minX > him.midX : b.maxX < him.midX)            // on the screen side
+                }
+            }
+        }
     }
 }

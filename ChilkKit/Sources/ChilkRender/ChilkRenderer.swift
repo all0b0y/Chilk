@@ -352,23 +352,19 @@ public enum ChilkRenderer {
 
         let layout = BubbleLayout.of(text, buttons: p.buttons, maxTextWidth: m.width - 20 - 28)
         let bw = layout.width, bh = layout.height
-        // Above the body as it stands — or lies (6b: lower and wider, its centre further from the edge).
-        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY, roll: p.roll)
-        let turned = Lying.turned(lying: p.lying, roll: p.roll)
-        let cx = p.x + (turned ? lie.dx : 0)
-        let top = m.ground + p.hop - (turned ? 2 * lie.halfHeight : m.radiusY * 2)
-        var bx = min(max(cx - bw - 14, 10), m.width - bw - 10)
-        let by = min(max(top - (46 - 28 * p.lying) - bh, 10), m.height)   // above the sprout (lying: it points sideways)
-        var tailX = min(cx - 22, bx + bw - 18)
-        var dir = 1.0
-        if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX; dir = -1 }
-        let tailY = by + bh
+        let side = bubbleSide(pose: p, metrics: m, width: bw, height: bh)
+        var bx = side.x
+        let by = side.y
+        var tailX = bx + bw - 1
+        let tailY = side.tailY
+        if mirrored { bx = m.width - bx - bw; tailX = m.width - tailX }
 
         let pop = CGAffineTransform(translationX: tailX, y: tailY).scaledBy(x: scale, y: scale).translatedBy(x: -tailX, y: -tailY)
         let a = clamp(scale)
         out.append(Placement(slot: Slot.bubbleBox, part: .bubbleBox(width: bw, height: bh), transform: pop.translatedBy(x: bx, y: by), alpha: a))
-        out.append(Placement(slot: Slot.bubbleTail, part: .bubbleTail, transform: pop.translatedBy(x: tailX, y: tailY).scaledBy(x: dir, y: 1), alpha: a))
-        out.append(Placement(slot: Slot.bubbleStroke, part: .bubbleStroke(width: bw, height: bh), transform: pop.translatedBy(x: bx, y: by), alpha: a))
+        // The outline carries the tail on the side facing him.
+        out.append(Placement(slot: Slot.bubbleStroke, part: .bubbleStroke(width: bw, height: bh, tailY: tailY - by, tailLeft: mirrored),
+                             transform: pop.translatedBy(x: bx, y: by), alpha: a))
         for (index, word) in layout.words.enumerated() {
             let wa = clamp((p.bubbleAge - 0.45 - Double(index) * 0.08) / 0.2)
             guard wa * a > 0.002 else { continue }
@@ -382,6 +378,26 @@ public enum ChilkRenderer {
             let t = pop.translatedBy(x: bx + 14 + b.x, y: by + b.y + (1 - ba) * 4)
             out.append(Placement(slot: Slot.button + i, part: .button(title: b.title, hovered: p.hoveredButton == i), transform: t, alpha: ba * a))
         }
+    }
+
+    /// Slice 10 (Б6, decision 13; was: above the sprout, its top held at the scene's top — a tall bubble slid onto him):
+    /// beside him on the screen side, never over him. Its top is at his head and it grows down; at the floor it rises.
+    /// Canonical (unmirrored) space: he lives at the right edge, so the bubble is to his left. `tailY` — where the tail
+    /// meets the bubble (towards his upper body).
+    static func bubbleSide(pose p: CharacterPose, metrics m: Metrics, width bw: Double, height bh: Double)
+        -> (x: Double, y: Double, tailY: Double) {
+        let lie = Lying.frame(lying: p.lying, tilt: p.tilt, rx: m.radiusX, ry: m.radiusY, roll: p.roll)
+        let turned = Lying.turned(lying: p.lying, roll: p.roll)
+        let cx = p.x + (turned ? lie.dx : 0)
+        let halfWidth = turned ? m.radiusY : m.radiusX
+        let top = m.ground + p.hop - (turned ? 2 * lie.halfHeight : m.radiusY * 2)
+        // Clear of his body, his arms out (cheer) and a held mug — and of his lean (a tilt about the feet moves his head to
+        // the screen side, e.g. leaning out from behind the edge).
+        let lean = min(0, sin(p.tilt) * m.radiusY * 2)
+        let x = cx + lean - halfWidth - 26 - bw
+        let y = min(top - 8, m.ground - bh)
+        let tailY = min(max(top + m.radiusY * 0.55, y + 16), y + bh - 16)
+        return (x, y, tailY)
     }
 
     /// Where the bubble's buttons are this frame (scene coordinates, already mirrored) — for hit testing.
