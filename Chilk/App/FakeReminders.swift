@@ -4,7 +4,8 @@ import Foundation
 /// Acceptance runs (CHILK_FAKE_REMINDERS=1 | seed): the real Codex and tool path without touching the user's Reminders.
 /// The list lives in `reminders-fake.json` in CHILK_STATE_DIR (read back at launch, so a run can be continued).
 /// Slice 9b: `seed` starts with three things planned for tomorrow (one done), for «На … уже 3 дела — добавим?»;
-/// `seed-today` — the same three for today (the popover's «План: 1 из 3», «Сегодня»).
+/// `seed-today` — the same three for today (the popover's «План: 1 из 3», «Сегодня»); `seed-yesterday` — for
+/// yesterday (the morning's «Вчера не подвели итоги — подвести?»).
 actor FakeReminders: ReminderStore {
     private struct Row: Codable {
         var id: String

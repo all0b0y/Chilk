@@ -30,6 +30,19 @@ final class DaySheetModel {
     var addTimed = false
     var addTime = Date()
 
+    /// Decision 17: «Подвести» — the day's results. Ticks wait for «Готово»; what is left open moves on (the default) or
+    /// goes; «Готово» applies it all at once.
+    var reviewing = false
+    var choices: [String: PlanNotice.Choice] = [:]
+    var finishReview: () -> Void = {}
+
+    /// «→ Завтра», or «→ Сегодня» when the day after the reviewed one is today (yesterday's review in the morning).
+    var moveLabel: String {
+        let cal = Calendar.current
+        return cal.isDateInToday(cal.date(byAdding: .day, value: 1, to: day)!) ? String(localized: "→ Сегодня")
+                                                                               : String(localized: "→ Завтра")
+    }
+
     var toggle: (Row) -> Void = { _ in }
     var saveEdit: () -> Void = {}
     var delete: (Row) -> Void = { _ in }
@@ -91,6 +104,9 @@ struct DaySheetView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if model.reviewing {
+                Text(String(localized: "Подведём день")).font(.subheadline).foregroundStyle(.secondary)
+            }
             Text(model.title).font(.title2.weight(.semibold))
             if model.noAccess {
                 Label(String(localized: "Нет доступа к «Напоминаниям» — разреши в Настройках"), systemImage: "lock")
@@ -111,8 +127,16 @@ struct DaySheetView: View {
                     }
                 }
             }
-            Button { model.beginAdd() } label: { Image(systemName: "plus") }
-                .buttonStyle(.borderless).help(String(localized: "Добавить дело")).disabled(model.noAccess)
+            if model.reviewing {
+                HStack {
+                    Spacer()
+                    Button(String(localized: "Готово")) { model.finishReview() }
+                        .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.noAccess)
+                }
+            } else {
+                Button { model.beginAdd() } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless).help(String(localized: "Добавить дело")).disabled(model.noAccess)
+            }
         }
         .padding(20)
         .frame(minWidth: 340, minHeight: 320, alignment: .topLeading)
@@ -122,11 +146,22 @@ struct DaySheetView: View {
         HStack(spacing: 10) {
             PlanTick(done: row.done) { model.toggle(row) }
             if let t = row.time { Text(t.text).monospacedDigit().foregroundStyle(.secondary) }
-            Text(row.title).strikethrough(row.done).foregroundStyle(row.done ? .secondary : .primary)
-                .onTapGesture(count: 2) { model.beginEdit(row) }
+            Text(row.title).strikethrough(row.done).foregroundStyle(row.done ? .secondary : .primary).lineLimit(1)
+                .onTapGesture(count: 2) { if !model.reviewing { model.beginEdit(row) } }
             Spacer(minLength: 8)
-            Button { model.delete(row) } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless).foregroundStyle(.tertiary).help(String(localized: "Удалить"))
+            if model.reviewing {
+                if !row.done {
+                    Picker(String(localized: "Что дальше"), selection: Binding(get: { model.choices[row.id] ?? .tomorrow },
+                                                                           set: { model.choices[row.id] = $0 })) {
+                        Text(model.moveLabel).tag(PlanNotice.Choice.tomorrow)
+                        Text(String(localized: "✕ Не нужно")).tag(PlanNotice.Choice.drop)
+                    }
+                    .pickerStyle(.segmented).labelsHidden().fixedSize()
+                }
+            } else {
+                Button { model.delete(row) } label: { Image(systemName: "xmark") }
+                    .buttonStyle(.borderless).foregroundStyle(.tertiary).help(String(localized: "Удалить"))
+            }
         }
         .padding(.vertical, 5)
     }
@@ -159,6 +194,10 @@ final class DaySheet: NSObject, NSWindowDelegate {
     var onWrite: () -> Void = {}
     var onOpen: () -> Void = {}
     var onClose: () -> Void = {}
+    /// «Готово» in the review: the day, how many were done, how many there were.
+    var onReviewed: (_ day: Date, _ done: Int, _ total: Int) -> Void = { _, _, _ in }
+    /// The review's done states as Reminders had them: only what changed is written.
+    private var original: [String: Bool] = [:]
     var log: (String) -> Void = { _ in }
 
     init(reminders: ChilkReminderExecutor) {
@@ -168,15 +207,19 @@ final class DaySheet: NSObject, NSWindowDelegate {
         model.saveEdit = { [weak self] in self?.saveEdit() }
         model.delete = { [weak self] row in self?.delete(row) }
         model.add = { [weak self] in self?.add() }
+        model.finishReview = { [weak self] in self?.finishReview() }
     }
 
     var isOpen: Bool { window?.isVisible == true }
     var shownDay: Date { model.day }
 
-    func open(day: Date) {
+    func open(day: Date, review: Bool = false) {
         model.day = Calendar.current.startOfDay(for: day)
         model.editing = nil
         model.adding = false
+        model.reviewing = review
+        model.choices = [:]
+        original = [:]
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 440),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -191,11 +234,12 @@ final class DaySheet: NSObject, NSWindowDelegate {
             w.delegate = self
             window = w
         }
+        window?.setContentSize(NSSize(width: review ? 480 : 380, height: 440))
         place()
         let wasOpen = isOpen
         window?.makeKeyAndOrderFront(nil)
         if !wasOpen { WindowPolicy.opened(); onOpen() }
-        log("plan sheet opened for \(PlanDay.iso(model.day, calendar: .current))")
+        log("plan sheet opened for \(PlanDay.iso(model.day, calendar: .current))\(review ? " (review)" : "")")
         reload()
     }
 
@@ -220,6 +264,7 @@ final class DaySheet: NSObject, NSWindowDelegate {
 
     /// Re-read the day (after Chilk's writes, and on every change in Reminders while it is open).
     func reload() {
+        if model.reviewing, !original.isEmpty { return }      // the review keeps its own ticks until «Готово»
         let day = model.day
         Task {
             do {
@@ -227,6 +272,7 @@ final class DaySheet: NSObject, NSWindowDelegate {
                 guard day == model.day else { return }
                 model.noAccess = false
                 model.rows = DaySheetModel.rows(items)
+                if model.reviewing { original = Dictionary(model.rows.map { ($0.id, $0.done) }, uniquingKeysWith: { a, _ in a }) }
             } catch {
                 model.noAccess = true
                 model.rows = []
@@ -236,6 +282,7 @@ final class DaySheet: NSObject, NSWindowDelegate {
 
     private func toggle(_ row: DaySheetModel.Row) {
         guard let i = model.rows.firstIndex(where: { $0.id == row.id }) else { return }
+        if model.reviewing { model.rows[i].done.toggle(); return }      // decision 17: «Готово» writes it all at once
         let done = !row.done
         model.rows[i].done = done                                       // at once; undone again if Reminders refuses
         let last = done && model.rows.allSatisfy(\.done)
@@ -299,6 +346,50 @@ final class DaySheet: NSObject, NSWindowDelegate {
             onWrite()
         }
     }
+
+    /// Decision 17: «Готово» — the ticks that changed, then every open thing «→ Завтра» (on the next day, without a time)
+    /// or «✕ Не нужно» (deleted); the sheet closes and he reacts.
+    private func finishReview() {
+        guard model.reviewing else { return }
+        let cal = Calendar.current
+        let day = model.day
+        let next = cal.date(byAdding: .day, value: 1, to: day)!
+        let rows = model.rows
+        let choices = model.choices
+        let original = original
+        let done = rows.filter(\.done).count
+        model.reviewing = false
+        self.original = [:]
+        close()
+        Task {
+            var moved = 0, dropped = 0, failed = 0
+            for row in rows {
+                if row.done != (original[row.id] ?? row.done), !(await reminders.setDone(id: row.id, done: row.done)).success {
+                    failed += 1
+                }
+                guard !row.done else { continue }
+                switch choices[row.id] ?? .tomorrow {
+                case .tomorrow:
+                    if (await reminders.edit(id: row.id, title: row.title, due: next, timed: false)).success { moved += 1 } else { failed += 1 }
+                case .drop:
+                    if (await reminders.delete(id: row.id)).success { dropped += 1 } else { failed += 1 }
+                }
+            }
+            log("plan review \(PlanDay.iso(day, calendar: cal)): \(done) of \(rows.count) done, \(moved) moved to "
+                + "\(PlanDay.iso(next, calendar: cal)), \(dropped) dropped, \(failed) failed")
+            onWrite()
+            onReviewed(day, done, rows.count)
+        }
+    }
+
+    /// Acceptance only: in the review, the second open thing «✕ Не нужно».
+    func demoReviewDropSecond() {
+        let open = model.rows.filter { !$0.done }
+        if model.reviewing, open.count > 1 { model.choices[open[1].id] = .drop }
+    }
+
+    /// Acceptance only: «Готово» in the review.
+    func demoFinishReview() { finishReview() }
 
     /// Acceptance only: tick the first open thing through the same path as a click.
     func demoTickFirst() {

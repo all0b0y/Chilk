@@ -16,7 +16,7 @@ final class Actions {
     let files: Files
     /// CHILK_FAKE_REMINDERS=1 | seed: a fake list in the state dir (slice 9b: `seed` plans three things for tomorrow).
     let reminders = ChilkReminderExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil
-                                          ? FakeReminders(seedDay: ["seed": 1, "seed-today": 0][ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] ?? ""])
+                                          ? FakeReminders(seedDay: ["seed": 1, "seed-today": 0, "seed-yesterday": -1][ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] ?? ""])
                                           : EventKitReminders())
     /// Slice 8e: Chilk's own «Чилк» calendar (CHILK_FAKE_CALENDAR=1 | seed: a fake in the state dir for acceptance runs).
     private let calendar = ChilkCalendarExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] != nil

@@ -20,6 +20,9 @@ final class Planner {
     var now: () -> Date = { Date() }
     /// A draft nobody touched for this long is dropped (the user walked away mid-plan).
     static let lapse: TimeInterval = 600
+    /// Decision 13: «спланируем день целиком?» was just offered for this day — the next turns know it for a while.
+    private var offered: (day: Date, at: Date)?
+    static let offerHeard: TimeInterval = 180
 
     init(reminders: ChilkReminderExecutor) {
         self.reminders = reminders
@@ -38,10 +41,33 @@ final class Planner {
 
     func collecting(in c: Channel) -> Bool { collecting && channel == c }
 
-    /// [контекст] while collecting: the day and the draft as the app has it.
-    func context() -> String? {
-        guard collecting, let draft else { return nil }
+    func offer(_ day: Date) { offered = (Calendar.current.startOfDay(for: day), now()) }
+
+    /// «Давай» on the offer: that day's plan starts without a model turn; what is already there goes to «Уже в плане».
+    func start(day: Date, channel c: Channel) async -> Bool {
         let cal = Calendar.current
+        let d = cal.startOfDay(for: day)
+        guard let items = try? await reminders.day(d) else {
+            log("plan: the offer's day could not be read")
+            return false
+        }
+        draft = PlanDraft(day: d, already: items.map(\.title))
+        channel = c
+        touched = now()
+        offered = nil
+        log("plan: started for \(PlanDay.iso(d, calendar: cal)) from the offer, \(items.count) already there")
+        return true
+    }
+
+    /// [контекст] while collecting: the day and the draft as the app has it; right after the offer — the offer.
+    func context() -> String? {
+        let cal = Calendar.current
+        guard collecting, let draft else {
+            guard let o = offered, now().timeIntervalSince(o.at) < Self.offerHeard else { return nil }
+            let iso = PlanDay.iso(o.day, calendar: cal)
+            return "Чилк только что сам предложил спланировать \(PlanDay.title(o.day, now: now(), calendar: cal)) (\(iso)) целиком. "
+                + "Согласие («давай», «да») — chilk_plan collect с day=\(iso) (и делами, если названы); отказ — коротко, без вызова"
+        }
         let list = draft.items.isEmpty ? "пока пусто"
             : draft.items.map { ($0.time.map { $0.text + " " } ?? "") + $0.title }.joined(separator: "; ")
         return "идёт план на \(PlanDay.title(draft.day, now: now(), calendar: cal)) (\(PlanDay.iso(draft.day, calendar: cal))); "
@@ -55,6 +81,7 @@ final class Planner {
         if action == .cancel {
             let had = draft != nil
             draft = nil
+            offered = nil
             log("plan: cancelled")
             return .ok(["cancelled": .bool(had)])
         }
@@ -82,6 +109,7 @@ final class Planner {
             }
             current = PlanDraft(day: day, already: already)
             channel = c
+            offered = nil
             log("plan: started for \(PlanDay.iso(day, calendar: cal)), \(already.count) already there")
         }
         // «всё» often comes with an empty list (the model sent it already): finish keeps the draft as collected.

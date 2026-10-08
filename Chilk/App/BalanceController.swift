@@ -325,7 +325,11 @@ final class BalanceController {
         } else { demoPressSince = nil }
     }
 
+    /// Slice 9b (decision 17): «Конец дня» asks — the plan's evening review may follow (it decides itself, once a day).
+    var onEndOfDay: () -> Void = {}
+
     private func apply(_ events: [BalanceEvent]) {
+        for case .ask(let n, let stage, _, _) in events where n == .endOfDay && stage >= 1 { onEndOfDay() }
         // The end of a focus with a request on screen: «Фокус закончился…» first, the request a moment later.
         guard events.contains(.focusEnded), !isBusy() else {
             for event in events { apply(event) }

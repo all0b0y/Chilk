@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var planner: Planner?
     private var planBoard: PlanBoard?
     private var daySheet: DaySheet?
+    private var planNotices: PlanNotices?
     /// Slice 8d: timers in Apple's Clock.
     private var clock: ClockTimers?
     /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
@@ -397,6 +398,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // Slice 9b (decisions 13, 15, 17): the morning summary, the evening review and the «whole day» offer.
+        let notices = PlanNotices(sim: edge.sim, reminders: actions.reminders, board: board)
+        notices.log = { [weak balance] in balance?.log($0) }
+        let cardsFree = cards.stageFree
+        notices.stageFree = { [weak cards] in cardsFree() && !(cards?.hasCard ?? true) }
+        notices.conversationActive = { [weak conversation, weak tray, weak greeting] in
+            (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
+        }
+        notices.signals = { [weak balance] in (balance?.lastSignals?.idle ?? 0, balance?.lastSignals?.locked ?? false) }
+        notices.resultPending = { [weak cards] in cards?.resultPending ?? false }
+        notices.enabled = { switches.switches.isOn(.reminders) }
+        notices.collecting = { [weak planner] in planner?.collecting ?? false }
+        notices.openSheet = { [weak sheet] day, review in sheet?.open(day: day, review: review) }
+        notices.offerAtEdge = { [weak conversation] line, buttons in conversation?.offerPlan(line, buttons: buttons) }
+        notices.offerInChat = { [weak chat] line in chat?.postLocal(line) }
+        notices.onOffer = { [weak planner] day in planner?.offer(day) }
+        notices.startPlan = { [weak planner, weak conversation] day in
+            Task {
+                guard await planner?.start(day: day, channel: .voice) == true else { return }
+                conversation?.planStarted(PlanLines.planning(day))
+            }
+        }
+        notices.declineOffer = { [weak conversation] in conversation?.dropOffer(saying: PlanLines.declined) }
+        notices.onDone = { [weak balance] in balance?.resume() }
+        sheet.onReviewed = { [weak notices] day, done, total in notices?.reviewed(day: day, done: done, total: total) }
+        cards.onCommitted = { [weak notices] card, source, ok in
+            guard ok, case .reminder(_, let due) = card.kind else { return }
+            notices?.reminderWritten(due: due, viaChat: source == .chat)
+        }
+        balance.onEndOfDay = { [weak notices] in notices?.endOfDayFired() }
+        let balanceBusy = balance.isBusy
+        balance.isBusy = { [weak notices] in balanceBusy() || (notices?.ownsStage ?? false) }
+        cards.stageFree = { [weak notices] in cardsFree() && !(notices?.ownsStage ?? false) }
+        let ended = conversation.onEnd
+        conversation.onEnd = { [weak notices] in ended?(); notices?.conversationEnded() }
+        self.planNotices = notices
+        // Acceptance only: CHILK_DEMO_PLAN_MORNING=<s> — the morning summary now; CHILK_DEMO_PLAN_EVENING=<s> — «Конец
+        // дня» fired; CHILK_DEMO_PLAN_OFFER=<s> — the offer for tomorrow at the edge; CHILK_DEMO_PLAN_PRESS=<s> — the first
+        // button under his bubble (the same path as a click); CHILK_DEMO_PLAN_REVIEW=<s>:<dir> — the open review sheet: a
+        // snapshot, the second open thing «✕ Не нужно», a snapshot, «Готово».
+        if AppState.isolated != nil {
+            let env = ProcessInfo.processInfo.environment
+            func after(_ key: String, _ f: @escaping @MainActor @Sendable () -> Void) {
+                guard let s = env[key].flatMap(Double.init) else { return }
+                Timer.scheduledTimer(withTimeInterval: s, repeats: false) { _ in MainActor.assumeIsolated { f() } }
+            }
+            after("CHILK_DEMO_PLAN_MORNING") { [weak notices] in notices?.demoMorning() }
+            after("CHILK_DEMO_PLAN_EVENING") { [weak notices] in notices?.endOfDayFired() }
+            after("CHILK_DEMO_PLAN_OFFER") { [weak notices] in notices?.demoOffer() }
+            after("CHILK_DEMO_PLAN_PRESS") { [weak edge] in edge?.onButton?(0) }
+            if let raw = env["CHILK_DEMO_PLAN_REVIEW"], let colon = raw.firstIndex(of: ":"), let s = Double(raw[..<colon]) {
+                let dir = URL(fileURLWithPath: String(raw[raw.index(after: colon)...]))
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                Timer.scheduledTimer(withTimeInterval: s, repeats: false) { [weak sheet] _ in
+                    MainActor.assumeIsolated {
+                        sheet?.snapshot(to: dir.appending(path: "review-1.png"))
+                        sheet?.demoReviewDropSecond()
+                        Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak sheet] _ in
+                            MainActor.assumeIsolated {
+                                sheet?.snapshot(to: dir.appending(path: "review-2.png"))
+                                sheet?.demoFinishReview()
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let chatFree = chat.chilkFree
         chat.chilkFree = { [weak cards] in !(cards?.ownsStage ?? false) && chatFree() }
         let trayFree = tray.isFree
@@ -411,10 +479,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Bubble buttons: a conversation's own («Подробнее», «Да / Нет», a card in its bubble), the greeting's,
         // basketball's, a card's at the edge, then the balance's.
         let balanceButton = edge.onButton
-        edge.onButton = { [weak conversation, weak greeting, weak game, weak cards] i in
+        edge.onButton = { [weak conversation, weak greeting, weak game, weak cards, weak notices] i in
             if conversation?.pressedButton(i) == true { return }
             if greeting?.pressedButton(i) == true { return }
             if game?.pressedButton(i) == true { return }             // 7b: basketball's own bubbles
+            if notices?.pressedButton(i) == true { return }          // 9b: «Подвести», «Давай» / «Не надо»
             if cards?.pressed(i, source: .edge) == true { return }   // 8c
             balanceButton?(i)
         }
@@ -442,9 +511,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // A click on him while he listens = «I'm done talking»; on a due timer = «seen»; in the greeting = next line;
         // otherwise the balance poke.
-        edge.onPoke = { [weak conversation, weak actions, weak greeting, weak balance, weak hide] in
+        edge.onPoke = { [weak conversation, weak actions, weak greeting, weak balance, weak hide, weak notices] in
             if conversation?.clicked() == true { return }
             if actions?.clicked() == true { return }
+            if notices?.clicked() == true { return }                 // 9b: the morning / evening notice → «Лист дня»
             if greeting?.clicked() == true { return }
             if hide?.clicked() == true { return }                 // 6d: a click on him peeking = out for good
             balance?.poked()

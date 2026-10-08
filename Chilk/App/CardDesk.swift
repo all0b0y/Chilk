@@ -55,6 +55,10 @@ final class CardDesk {
     var onChange: () -> Void = {}
     /// The result of a «Да» (the chat shows it).
     var onResult: (UUID, String, Bool) -> Void = { _, _, _ in }
+    /// Slice 9b (decision 13): a card was confirmed and written — which one, where it was answered, whether it worked.
+    var onCommitted: (ActionCard, Source, Bool) -> Void = { _, _, _ in }
+    /// The result line of a card answered by voice still waits for a free stage.
+    var resultPending: Bool { pendingResult != nil }
     /// The card left a conversation's bubble (answered elsewhere): the conversation stops routing its buttons.
     var onLeftConversation: () -> Void = {}
     /// Acceptance only (CHILK_DEMO_CARD_SNAPSHOT=/dir): the screen around him a few seconds after a card shows.
@@ -254,6 +258,7 @@ final class CardDesk {
             let result = await commit(card)
             log("card committed: ok=\(result.ok)")
             onResult(card.id, result.line, result.ok)
+            onCommitted(card, source, result.ok)
             guard source != .chat else { return }
             // At the edge the card's own bubble becomes the result; by voice it waits until the stage is free.
             if source == .edge || source == .panel, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }

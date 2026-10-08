@@ -147,6 +147,16 @@ final class ChatController: NSObject, NSWindowDelegate {
         }
     }
 
+    /// Slice 9b (decision 13): Chilk's own line in the chat's current thread (the plan offer) — no model turn; the user's
+    /// answer continues the same thread.
+    func postLocal(_ line: String) {
+        let id = store.recordLocal(question: "", answer: line, via: .text,
+                                   continuing: model.selected.flatMap { store.log.session($0)?.id })
+        lastLiveChat = id
+        model.selected = id
+        log("chat: Chilk's own line «\(line)»")
+    }
+
     /// A voice turn: kept as text in the chat of its thread (decision 10, 13).
     func recordVoice(question: String, answer: String, thread: String) {
         let previous = lastLiveChat

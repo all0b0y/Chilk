@@ -63,6 +63,51 @@ final class Conversation {
         listen(window: Dialogue.cardAnswerWindow)
     }
 
+    // MARK: The plan offer (slice 9b, decision 13)
+
+    /// «Может, спланируем день целиком?» after a second reminder for the same day: his own question with «Давай» /
+    /// «Не надо». With the ears on he also listens a while without his name — the words go to Codex, which has the offer
+    /// in the turn's context. Busy, no ears or no Codex: the buttons only.
+    func offerPlan(_ line: String, buttons: [String]) {
+        guard phase == .idle, !closing, ears.enabled, ears.ready, brain.problem == nil, refusal() == nil else {
+            sim.say(line, duration: 20, buttons: buttons)
+            return
+        }
+        log("plan offer: listening for the answer")
+        suppressFollowUps = false
+        turns = 0
+        closeLongAnswer()
+        sim.call(line: line)
+        sim.say(line, duration: .infinity, buttons: buttons)
+        listen(window: Dialogue.planSilence)
+    }
+
+    /// «Давай»: the plan of the offered day has started — he says so and listens for the things (the plan's silence rules).
+    func planStarted(_ line: String) {
+        if phase == .idle && !closing {
+            guard ears.enabled, ears.ready, refusal() == nil, brain.problem == nil else { return sim.say(line, duration: 4) }
+            suppressFollowUps = false
+            turns = 0
+            closeLongAnswer()
+            sim.call(line: line)
+        } else {
+            stopEars()
+            sim.updateBubble(line)
+            sim.setBubbleButtons([])
+        }
+        listen(window: Dialogue.planSilence)
+    }
+
+    /// «Не надо» on the offer.
+    func dropOffer(saying line: String) {
+        if phase == .listening || phase == .waiting {
+            stopEars()
+            leave(saying: line, after: 1.5)
+        } else if !isActive {
+            sim.say(line, duration: 1.5)
+        }
+    }
+
     /// His window on screen and whether he lives on the left edge: the long-answer panel opens beside him.
     var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
 
