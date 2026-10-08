@@ -72,13 +72,29 @@ struct PlanBookTests {
         #expect(!written("2026-10-09", at(8, 8, 10)))
         #expect(!written("2026-10-10", at(8, 8, 11)))       // another day
         #expect(written("2026-10-09", at(8, 8, 39)))        // 29 min after the first
-        #expect(book.offered == "2026-10-08")
+        #expect(book.offered == nil)                        // spent only once it is shown
+        #expect(written("2026-10-09", at(8, 8, 39)))        // not shown (lapsed, Reminders off): may come again
+        book.markOffered("2026-10-08")
         #expect(!written("2026-10-09", at(8, 8, 40)))       // once a day
         #expect(!written("2026-10-10", at(8, 8, 41)))
         // The next day it may come again; 32 minutes apart is not «in a row».
         #expect(!written("2026-10-12", at(9, 9, 9), today: "2026-10-09"))
         #expect(!written("2026-10-12", at(9, 9, 41), today: "2026-10-09"))
         #expect(written("2026-10-12", at(9, 9, 50), today: "2026-10-09"))
+    }
+
+    @Test func theReviewWritesWhatChangedThenMovesOrDropsTheRest() {
+        typealias Row = PlanNotice.ReviewRow
+        let rows = [Row(id: "a", title: "зал", done: true),        // ticked in the review
+                    Row(id: "b", title: "стирка", done: false),    // left open: moves (the default)
+                    Row(id: "c", title: "почта", done: true),      // done before: nothing
+                    Row(id: "d", title: "кино", done: false),      // dropped
+                    Row(id: "e", title: "хлеб", done: false)]      // unticked, then dropped: only the drop
+        let ops = PlanNotice.reviewOps(rows, original: ["a": false, "b": false, "c": true, "d": false, "e": true],
+                                       choices: ["d": .drop, "e": .drop])
+        #expect(ops == [.setDone("a", true), .move("b", title: "стирка"), .drop("d"), .drop("e")])
+        let undone = PlanNotice.reviewOps([Row(id: "x", title: "зал", done: false)], original: ["x": true], choices: [:])
+        #expect(undone == [.setDone("x", false), .move("x", title: "зал")])
     }
 
     @Test func reviewedKeepsTheLastFourteenDaysOnce() {

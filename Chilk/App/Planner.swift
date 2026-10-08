@@ -112,9 +112,14 @@ final class Planner {
             offered = nil
             log("plan: started for \(PlanDay.iso(day, calendar: cal)), \(already.count) already there")
         }
+        // A night hour only when said so — for what is new in this turn (things kept from earlier turns keep their hour).
+        let words = lastWords()
+        let kept = Set(current.items.map { $0.title + "|" + ($0.time?.text ?? "") })
+        let items = items.map { kept.contains($0.title + "|" + ($0.time?.text ?? "")) ? $0 : $0.dayHour(words: words) }
         // «всё» often comes with an empty list (the model sent it already): finish keeps the draft as collected.
         if !(action == .finish && items.isEmpty) { current.update(items) }
         draft = current
+        channel = c                    // the channel of this turn: the silences follow the user (review 9b)
         touched = now
         if action == .finish { return finish(reason: "finish") }
         return .ok(["day": .string(PlanDay.iso(day, calendar: cal)),

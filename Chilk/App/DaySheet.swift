@@ -1,6 +1,7 @@
 import AppKit
 import ChilkBrain
 import ChilkCore
+import EventKit
 import SwiftUI
 
 /// Slice 9b (decision 16): «Лист дня» — a small window in the system style. The day is its title; timed things by time,
@@ -194,10 +195,13 @@ final class DaySheet: NSObject, NSWindowDelegate {
     var onWrite: () -> Void = {}
     var onOpen: () -> Void = {}
     var onClose: () -> Void = {}
-    /// «Готово» in the review: the day, how many were done, how many there were.
-    var onReviewed: (_ day: Date, _ done: Int, _ total: Int) -> Void = { _, _, _ in }
+    /// «Готово» in the review: the day, how many were done, how many there were, how many writes Reminders refused.
+    var onReviewed: (_ day: Date, _ done: Int, _ total: Int, _ failed: Int) -> Void = { _, _, _, _ in }
     /// The review's done states as Reminders had them: only what changed is written.
     private var original: [String: Bool] = [:]
+    /// Counted with `WindowPolicy` from open to close: a minimised sheet is still open (`isVisible` is false for it).
+    private var counted = false
+    private var observer: NSObjectProtocol?
     var log: (String) -> Void = { _ in }
 
     init(reminders: ChilkReminderExecutor) {
@@ -208,9 +212,13 @@ final class DaySheet: NSObject, NSWindowDelegate {
         model.delete = { [weak self] row in self?.delete(row) }
         model.add = { [weak self] in self?.add() }
         model.finishReview = { [weak self] in self?.finishReview() }
+        // Decision 16 (review 9b): edits in Reminders (Mac, iPhone) reach the open sheet of any day, not only today's.
+        observer = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.isOpen == true { self?.reload() } }
+        }
     }
 
-    var isOpen: Bool { window?.isVisible == true }
+    var isOpen: Bool { counted }
     var shownDay: Date { model.day }
 
     func open(day: Date, review: Bool = false) {
@@ -236,9 +244,13 @@ final class DaySheet: NSObject, NSWindowDelegate {
         }
         window?.setContentSize(NSSize(width: review ? 480 : 380, height: 440))
         place()
-        let wasOpen = isOpen
+        if window?.isMiniaturized == true { window?.deminiaturize(nil) }
         window?.makeKeyAndOrderFront(nil)
-        if !wasOpen { WindowPolicy.opened(); onOpen() }
+        if !counted {
+            counted = true
+            WindowPolicy.opened()
+            onOpen()
+        }
         log("plan sheet opened for \(PlanDay.iso(model.day, calendar: .current))\(review ? " (review)" : "")")
         reload()
     }
@@ -246,6 +258,8 @@ final class DaySheet: NSObject, NSWindowDelegate {
     func close() { window?.performClose(nil) }
 
     func windowWillClose(_ notification: Notification) {
+        guard counted else { return }
+        counted = false
         WindowPolicy.closed()
         onClose()
     }
@@ -273,9 +287,12 @@ final class DaySheet: NSObject, NSWindowDelegate {
                 model.noAccess = false
                 model.rows = DaySheetModel.rows(items)
                 if model.reviewing { original = Dictionary(model.rows.map { ($0.id, $0.done) }, uniquingKeysWith: { a, _ in a }) }
-            } catch {
+            } catch ReminderAccessError.denied {
+                guard day == model.day else { return }
                 model.noAccess = true
                 model.rows = []
+            } catch {
+                log("plan sheet: Reminders not readable — \(error)")       // what is shown stays
             }
         }
     }
@@ -358,27 +375,27 @@ final class DaySheet: NSObject, NSWindowDelegate {
         let choices = model.choices
         let original = original
         let done = rows.filter(\.done).count
+        let ops = PlanNotice.reviewOps(rows.map { PlanNotice.ReviewRow(id: $0.id, title: $0.title, done: $0.done) },
+                                       original: original, choices: choices)
         model.reviewing = false
         self.original = [:]
         close()
         Task {
             var moved = 0, dropped = 0, failed = 0
-            for row in rows {
-                if row.done != (original[row.id] ?? row.done), !(await reminders.setDone(id: row.id, done: row.done)).success {
-                    failed += 1
-                }
-                guard !row.done else { continue }
-                switch choices[row.id] ?? .tomorrow {
-                case .tomorrow:
-                    if (await reminders.edit(id: row.id, title: row.title, due: next, timed: false)).success { moved += 1 } else { failed += 1 }
-                case .drop:
-                    if (await reminders.delete(id: row.id)).success { dropped += 1 } else { failed += 1 }
+            for op in ops {
+                switch op {
+                case .setDone(let id, let on):
+                    if !(await reminders.setDone(id: id, done: on)).success { failed += 1 }
+                case .move(let id, let title):
+                    if (await reminders.edit(id: id, title: title, due: next, timed: false)).success { moved += 1 } else { failed += 1 }
+                case .drop(let id):
+                    if (await reminders.delete(id: id)).success { dropped += 1 } else { failed += 1 }
                 }
             }
             log("plan review \(PlanDay.iso(day, calendar: cal)): \(done) of \(rows.count) done, \(moved) moved to "
                 + "\(PlanDay.iso(next, calendar: cal)), \(dropped) dropped, \(failed) failed")
             onWrite()
-            onReviewed(day, done, rows.count)
+            onReviewed(day, done, rows.count, failed)
         }
     }
 

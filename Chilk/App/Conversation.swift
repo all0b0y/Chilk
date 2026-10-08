@@ -82,6 +82,12 @@ final class Conversation {
         listen(window: Dialogue.planSilence)
     }
 
+    /// «Давай» may go on by voice: he is listening for the answer, or could listen now (else the chat takes it).
+    var canListenForPlan: Bool {
+        if phase == .waiting || phase == .listening { return true }
+        return phase == .idle && !closing && ears.enabled && ears.ready && brain.problem == nil && refusal() == nil
+    }
+
     /// «Давай»: the plan of the offered day has started — he says so and listens for the things (the plan's silence rules).
     func planStarted(_ line: String) {
         if phase == .idle && !closing {

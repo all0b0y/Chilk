@@ -2,7 +2,7 @@ import ChilkCore
 import SwiftUI
 
 /// Slice 9b (decision 12): «Изменить» on a plan card — the plan as a list: the thing, its time (on or off), ✕, and a bare
-/// «+». «Готово» makes a new card (no guess marks: the user set the times himself).
+/// «+». «Готово» makes a new card; a guess mark stays only on a time left as it was (review 9b).
 @MainActor
 @Observable
 final class PlanEditModel {
@@ -11,6 +11,8 @@ final class PlanEditModel {
         var title: String
         var timed: Bool
         var time: Date
+        var guessed = false
+        var firstTime: PlanTime?
     }
 
     let original: ActionCard
@@ -24,7 +26,10 @@ final class PlanEditModel {
         self.day = day
         self.already = already
         let nine = PlanTime(hour: 9, minute: 0)!
-        rows = items.map { Row(title: $0.title, timed: $0.time != nil, time: ($0.time ?? nine).date(on: day, calendar: .current)) }
+        rows = items.map {
+            Row(title: $0.title, timed: $0.time != nil, time: ($0.time ?? nine).date(on: day, calendar: .current), guessed: $0.guessed,
+                firstTime: $0.time)
+        }
     }
 
     func add() {
@@ -39,7 +44,8 @@ final class PlanEditModel {
         let items = rows.compactMap { r -> PlanItem? in
             let t = String(r.title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
             guard !t.isEmpty else { return nil }
-            return PlanItem(title: t, time: r.timed ? PlanTime(of: r.time, calendar: .current) : nil)
+            let time = r.timed ? PlanTime(of: r.time, calendar: .current) : nil
+            return PlanItem(title: t, time: time, guessed: r.guessed && time != nil && time == r.firstTime)
         }
         return ActionCard(kind: .plan(day: day, items: items, already: already))
     }

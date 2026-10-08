@@ -361,7 +361,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let edge, cards?.stageFree() == true else { return }
             edge.sim.perform(last ? .cheer : .hops)
         }
-        board.onChange.append { [weak sheet] in if sheet?.isOpen == true { sheet?.reload() } }
+        // Decision 16: he peeks out beside the sheet while it is open (when he is free).
+        sheet.onOpen = { [weak edge, weak cards] in
+            guard let edge, cards?.stageFree() == true, edge.sim.standOut == .docked else { return }
+            edge.sim.standOut = .peek
+        }
+        sheet.onClose = { [weak edge] in
+            guard let edge, edge.sim.standOut == .peek, !edge.sim.isTalking else { return }
+            edge.sim.standOut = .docked
+        }
         tray.planSummary = { [weak board] in board?.summary }
         tray.openPlan = { [weak sheet] in sheet?.open(day: Calendar.current.startOfDay(for: Date())) }
         actions.showPlan = { [weak sheet] day in sheet?.open(day: day) }
@@ -414,15 +422,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         notices.offerAtEdge = { [weak conversation] line, buttons in conversation?.offerPlan(line, buttons: buttons) }
         notices.offerInChat = { [weak chat] line in chat?.postLocal(line) }
         notices.onOffer = { [weak planner] day in planner?.offer(day) }
-        notices.startPlan = { [weak planner, weak conversation] day in
+        notices.startPlan = { [weak planner, weak conversation, weak chat] day in
+            // By voice when he can listen; otherwise (ears off, Codex down) the chat takes the plan (review 9b).
+            let byVoice = conversation?.canListenForPlan ?? false
             Task {
-                guard await planner?.start(day: day, channel: .voice) == true else { return }
-                conversation?.planStarted(PlanLines.planning(day))
+                guard await planner?.start(day: day, channel: byVoice ? .voice : .chat) == true else { return }
+                if byVoice {
+                    conversation?.planStarted(PlanLines.planning(day))
+                } else {
+                    chat?.show()
+                    chat?.postLocal(PlanLines.planning(day))
+                }
             }
         }
         notices.declineOffer = { [weak conversation] in conversation?.dropOffer(saying: PlanLines.declined) }
         notices.onDone = { [weak balance] in balance?.resume() }
-        sheet.onReviewed = { [weak notices] day, done, total in notices?.reviewed(day: day, done: done, total: total) }
+        sheet.onReviewed = { [weak notices] day, done, total, failed in
+            notices?.reviewed(day: day, done: done, total: total, failed: failed)
+        }
         cards.onCommitted = { [weak notices] card, source, ok in
             guard ok, case .reminder(_, let due) = card.kind else { return }
             notices?.reminderWritten(due: due, viaChat: source == .chat)
@@ -640,6 +657,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         phrases?.shutdown()
         tray?.shutdown()
         cards?.shutdown()
+        planNotices?.shutdown()
+        planBoard?.shutdown()
         brain?.shutdown()
         ears?.shutdown()
     }

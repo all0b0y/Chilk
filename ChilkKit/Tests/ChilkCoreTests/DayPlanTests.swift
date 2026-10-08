@@ -136,4 +136,17 @@ struct DayPlanTests {
         #expect(lines.count == 1 + 8 + 1 + 1)
         #expect(lines[9] == "…и ещё 3 со временем")
     }
+
+    @Test func aNightHourOnlyWhenTheWordsSaySo() {
+        let three = PlanItem(title: "спортзал", time: PlanTime(hour: 3, minute: 0))
+        let moved = three.dayHour(words: "В 03:00 спортзал")              // dictated «в три часа»
+        #expect(moved.time == PlanTime(hour: 15, minute: 0))
+        #expect(moved.guessed)
+        #expect(three.dayHour(words: "в три ночи спортзал").time == PlanTime(hour: 3, minute: 0))
+        #expect(three.dayHour(words: "в 3 утра на поезд").time == PlanTime(hour: 3, minute: 0))
+        let noon = PlanItem(title: "обед", time: PlanTime(hour: 13, minute: 0))
+        #expect(noon.dayHour(words: "в час обед") == noon)
+        let untimed = PlanItem(title: "хлеб")
+        #expect(untimed.dayHour(words: "купить хлеб") == untimed)
+    }
 }

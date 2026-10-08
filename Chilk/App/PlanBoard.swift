@@ -49,7 +49,7 @@ final class PlanBoard {
         Task {
             let fresh = (try? await reminders.day(day)) ?? items              // a failed read keeps what was there
             reading = false
-            if fresh != items { items = fresh; changed() }
+            if day == self.day, fresh != items { items = fresh; changed() }   // the day may have turned meanwhile
             if again { again = false; refresh() }
         }
     }
@@ -64,4 +64,11 @@ final class PlanBoard {
     }
 
     private func changed() { for f in onChange { f() } }
+
+    func shutdown() {
+        timer?.invalidate()
+        timer = nil
+        if let observer { NotificationCenter.default.removeObserver(observer) }
+        observer = nil
+    }
 }

@@ -54,6 +54,16 @@ public struct PlanItem: Equatable, Hashable, Sendable, Codable {
         self.guessed = guessed && time != nil
     }
 
+    /// Decision 8 for the plan (acceptance 9b): 00:00–05:59 is a night hour only when the user's words say so (ночи,
+    /// ночью, утра, утром, рано, полночь); otherwise it is the day's hour (+12 h), marked as a guess. Dictation writes «в три
+    /// часа» as «03:00», and the model may take it literally.
+    public func dayHour(words: String) -> PlanItem {
+        guard let t = time, t.hour < 6, let day = PlanTime(hour: t.hour + 12, minute: t.minute) else { return self }
+        let w = words.lowercased()
+        if ["ночи", "ночью", "утра", "утром", "рано", "полноч"].contains(where: { w.contains($0) }) { return self }
+        return PlanItem(title: title, time: day, guessed: true)
+    }
+
     /// Like an open hour of a single reminder (slice 8c): a guessed hour that landed in 00:00–05:59 is a day hour.
     public var daytime: PlanItem {
         guard guessed, let t = time, t.hour < 6, let day = PlanTime(hour: t.hour + 12, minute: t.minute) else { return self }

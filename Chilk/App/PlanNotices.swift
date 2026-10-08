@@ -32,6 +32,9 @@ final class PlanNotices {
     private var showing: Notice?
     private var timer: Timer?
     private var preparingMorning = false
+    private var checkingEvening = false
+    /// The line after «Готово»: said once the stage is free (within a minute).
+    private var reaction: (line: String, cheer: Bool, until: Date)?
     /// Decision 13: the offer waits for its card's result line (and, at the edge, for a free stage).
     private var offer: (day: Date, viaChat: Bool, from: Date)?
     /// Offered at the edge: «Давай» / «Не надо» under his bubble are ours until then.
@@ -93,6 +96,15 @@ final class PlanNotices {
             prepareMorning()
         }
         stepOffer()
+        if let r = reaction, showing == nil {
+            if now() > r.until {
+                reaction = nil
+            } else if stageFree() {
+                reaction = nil
+                if r.cheer { sim.perform(.cheer) }
+                sim.say(r.line, duration: 5)
+            }
+        }
         if showing != nil, conversationActive() {
             display.interrupted()                       // he talks now; the notice comes back afterwards, unseen
             showing = nil
@@ -159,20 +171,20 @@ final class PlanNotices {
 
     /// A button under his bubble: «Подвести», or «Давай» / «Не надо» of the offer. `false` — not ours.
     func pressedButton(_ index: Int) -> Bool {
-        if let o = offerButtons {
-            offerButtons = nil
-            guard now() < o.until else { return false }
-            log("plan: offer answered \(index == 0 ? "«Давай»" : "«Не надо»") (button)")
-            if index == 0 { startPlan(o.day) } else { declineOffer() }
+        if let n = showing {
+            _ = display.clicked()
+            finish(how: "button")
+            switch n {
+            case .morning(_, let review): if let review { openSheet(review, true) }
+            case .evening(let day, _): openSheet(day, true)
+            }
             return true
         }
-        guard let n = showing else { return false }
-        _ = display.clicked()
-        finish(how: "button")
-        switch n {
-        case .morning(_, let review): if let review { openSheet(review, true) }
-        case .evening(let day, _): openSheet(day, true)
-        }
+        // The offer's buttons only while its own words are in his bubble: a press on a later bubble is not ours (review 9b).
+        guard let o = offerButtons, now() < o.until, sim.bubbleWords == PlanLines.offer else { return false }
+        offerButtons = nil
+        log("plan: offer answered \(index == 0 ? "«Давай»" : "«Не надо»") (button)")
+        if index == 0 { startPlan(o.day) } else { declineOffer() }
         return true
     }
 
@@ -181,25 +193,25 @@ final class PlanNotices {
 
     // MARK: Morning (decision 15)
 
+    /// `force` (by hand): nothing is marked when there is nothing to say — the real morning still comes.
     private func prepareMorning(force: Bool = false) {
         preparingMorning = true
         let cal = Calendar.current
         let today = cal.startOfDay(for: now())
         let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+        let chilksDay = iso(PlanNotice.chilkDay(now(), calendar: cal))
         Task {
             defer { preparingMorning = false }
             guard let todays = try? await reminders.day(today), let yesterdays = try? await reminders.day(yesterday) else {
                 log("plan: morning — Reminders not readable, no summary")
-                book.morningShown = iso(today)
-                save()
+                if !force { book.morningShown = chilksDay; save() }
                 return
             }
             let reviewed = book.reviewed.contains(iso(yesterday))
             guard let m = PlanNotice.morning(today: Self.things(todays), yesterday: Self.things(yesterdays), yesterdayReviewed: reviewed)
             else {
                 log("plan: morning — nothing planned, no summary")
-                book.morningShown = iso(today)
-                save()
+                if !force { book.morningShown = chilksDay; save() }
                 return
             }
             guard !queue.contains(where: { $0.id == "plan-morning" }) else { return }
@@ -219,27 +231,35 @@ final class PlanNotices {
     /// warning instead.
     func endOfDayFired() {
         let cal = Calendar.current
-        let today = PlanNotice.chilkDay(now(), calendar: cal)
-        guard enabled(), book.eveningOffered != iso(today), !book.reviewed.contains(iso(today)),
+        let day = PlanNotice.chilkDay(now(), calendar: cal)          // after midnight it is still the evening before
+        guard enabled(), board.canRead, !checkingEvening, book.eveningOffered != iso(day), !book.reviewed.contains(iso(day)),
               !queue.contains(where: { if case .evening = $0 { true } else { false } }) else { return }
-        guard cal.isDate(board.day, inSameDayAs: today), !board.items.isEmpty else {
-            log("plan: end of day — nothing planned today, no review")
-            return
+        checkingEvening = true
+        Task {
+            defer { checkingEvening = false }
+            guard let items = try? await reminders.day(day), !items.isEmpty else {
+                log("plan: end of day — nothing planned for \(iso(day)), no review")
+                return
+            }
+            let done = items.filter(\.done).count
+            queue.append(.evening(day: day, text: PlanLines.evening(done: done, total: items.count)))
+            log("plan: evening review waits (\(done) of \(items.count) done)")
         }
-        let done = board.items.filter(\.done).count
-        queue.append(.evening(day: today, text: PlanLines.evening(done: done, total: board.items.count)))
-        log("plan: evening review waits (\(done) of \(board.items.count) done)")
     }
 
-    /// «Готово» in the review: the day is summed up; he reacts when he is free.
-    func reviewed(day: Date, done: Int, total: Int) {
+    /// «Готово» in the review: the day is summed up and he reacts once he is free. A change Reminders refused is named,
+    /// and the day stays open (the morning asks again).
+    func reviewed(day: Date, done: Int, total: Int, failed: Int) {
+        guard failed == 0 else {
+            log("plan: \(iso(day)) — \(failed) change(s) not written, the day stays open")
+            reaction = (PlanLines.reviewFailed, false, now().addingTimeInterval(60))
+            return
+        }
         book.markReviewed(iso(day))
         save()
         let line = PlanLines.reaction(PlanNotice.result(done: done, total: total), done: done, total: total)
         log("plan: \(iso(day)) summed up, \(done) of \(total) done — «\(line)»")
-        guard stageFree() else { return }
-        if done == total, total > 0 { sim.perform(.cheer) }
-        sim.say(line, duration: 5)
+        reaction = (line, done == total && total > 0, now().addingTimeInterval(60))
     }
 
     // MARK: The offer (decision 13)
@@ -248,9 +268,9 @@ final class PlanNotices {
     func reminderWritten(due: Date, viaChat: Bool) {
         let cal = Calendar.current
         let day = cal.startOfDay(for: due)
-        let offered = book.reminderWritten(day: iso(day), now: now(), today: iso(cal.startOfDay(for: now())))
+        let second = book.reminderWritten(day: iso(day), now: now(), today: iso(cal.startOfDay(for: now())))
         save()
-        guard offered, enabled(), !collecting() else { return }
+        guard second, enabled(), !collecting() else { return }
         offer = (day, viaChat, now())
         log("plan: a second reminder for \(iso(day)) within 30 min — offering to plan the day")
     }
@@ -260,8 +280,11 @@ final class PlanNotices {
         let age = now().timeIntervalSince(o.from)
         guard age >= 1.5 else { return }                                   // after the card's result line
         if age > 120 || collecting() { offer = nil; log("plan: the offer lapsed"); return }
+        let today = iso(Calendar.current.startOfDay(for: now()))
         if o.viaChat {
             offer = nil
+            book.markOffered(today)
+            save()
             onOffer(o.day)
             offerInChat(PlanLines.offer)
             log("plan: offer said in the chat")
@@ -269,6 +292,8 @@ final class PlanNotices {
         }
         guard showing == nil, !resultPending(), stageFree() else { return }
         offer = nil
+        book.markOffered(today)
+        save()
         onOffer(o.day)
         offerButtons = (o.day, now().addingTimeInterval(60))
         offerAtEdge(PlanLines.offer, [PlanLines.letsDo, PlanLines.noNeed])
@@ -280,8 +305,12 @@ final class PlanNotices {
     /// The morning summary now — «Проверка ▸ Утренняя сводка» and the demo (not waiting for 05:00 or an active user; the
     /// display rule still applies).
     func demoMorning() {
-        guard showing == nil, !preparingMorning, !queue.contains(where: { $0.id == "plan-morning" }) else { return }
-        book.morningShown = nil
+        // Never asks for access (review 9b): Reminders on and already allowed, nothing else of ours on screen.
+        guard enabled(), board.canRead, showing == nil, !preparingMorning, !queue.contains(where: { $0.id == "plan-morning" })
+        else {
+            log("plan: the morning by hand — not now (Reminders off or not allowed, or a notice is up)")
+            return
+        }
         prepareMorning(force: true)
     }
 
@@ -298,6 +327,7 @@ extension PlanLines {
     static var letsDo: String { String(localized: "Давай") }
     static var noNeed: String { String(localized: "Не надо") }
     static var declined: String { String(localized: "Хорошо, не буду") }
+    static var reviewFailed: String { String(localized: "Не всё записалось в Напоминания — загляни туда") }
 
     static func planning(_ day: Date) -> String {
         String(localized: "Планируем \(PlanDay.title(day, now: Date(), calendar: .current, accusative: true)). Что в планах?")

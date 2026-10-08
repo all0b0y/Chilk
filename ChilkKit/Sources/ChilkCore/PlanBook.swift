@@ -46,17 +46,17 @@ public struct PlanBook: Codable, Equatable, Sendable {
     }
 
     /// Decision 13: a single reminder was written for `day`. `true` — it is the second one for the same day within 30
-    /// minutes and nothing was offered on `today` yet: offer to plan that day whole (the offer is then spent for today,
-    /// whatever the answer).
+    /// minutes and nothing was offered on `today` yet: offer to plan that day whole. The offer is spent only once it is
+    /// really shown (`markOffered`), whatever the answer (review 9b: not when Reminders are off or it lapsed unseen).
     public mutating func reminderWritten(day: String, now: Date, today: String) -> Bool {
         recent.removeAll { now.timeIntervalSince($0.at) > Self.offerWindow || $0.at > now }
         let second = recent.contains { $0.day == day }
         recent.append(Recent(day: day, at: now))
         if recent.count > 8 { recent.removeFirst(recent.count - 8) }
-        guard second, offered != today else { return false }
-        offered = today
-        return true
+        return second && offered != today
     }
+
+    public mutating func markOffered(_ today: String) { offered = today }
 }
 
 /// Slice 9b: the pure rules of the plan's morning summary, evening review and its reaction.
@@ -107,6 +107,32 @@ public enum PlanNotice {
 
     /// Decision 17: what is left open gets one of these in the review; the default is «→ Завтра».
     public enum Choice: String, Equatable, Sendable { case tomorrow, drop }
+
+    public struct ReviewRow: Equatable, Sendable {
+        public var id: String
+        public var title: String
+        public var done: Bool
+        public init(id: String, title: String, done: Bool) {
+            self.id = id
+            self.title = title
+            self.done = done
+        }
+    }
+
+    public enum ReviewOp: Equatable, Sendable { case setDone(String, Bool), move(String, title: String), drop(String) }
+
+    /// Decision 17: what «Готово» writes — the ticks that changed in the review, then every open thing moved to the next
+    /// day (the default) or dropped. A thing dropped needs no tick first.
+    public static func reviewOps(_ rows: [ReviewRow], original: [String: Bool], choices: [String: Choice]) -> [ReviewOp] {
+        var ops: [ReviewOp] = []
+        for row in rows {
+            let choice = choices[row.id] ?? .tomorrow
+            if row.done != (original[row.id] ?? row.done), row.done || choice == .tomorrow { ops.append(.setDone(row.id, row.done)) }
+            guard !row.done else { continue }
+            ops.append(choice == .tomorrow ? .move(row.id, title: row.title) : .drop(row.id))
+        }
+        return ops
+    }
 
     /// Decision 17: the reaction after «Готово».
     public enum Result: Equatable, Sendable { case all, most, some, none }

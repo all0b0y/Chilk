@@ -1,4 +1,5 @@
 @testable import ChilkApple
+import EventKit
 import EventKitFakes
 import Foundation
 import Testing
@@ -17,6 +18,26 @@ struct EventKitRemindersTests {
         let items = await reminders.fetch(NSPredicate(value: true))
         #expect(items.count == count)
         #expect(items.allSatisfy { $0.title == "Проверить почту" && $0.due != nil })
+    }
+
+    /// Slice 9b (decision 9; review 9b): a thing on a date only has no alarm (it does not ring), a timed one has its
+    /// alarm; moving a timed one to a date only («→ Завтра» in the review) takes the alarm away; done is read back.
+    @Test func aDateOnlyThingHasNoAlarmAndATimedOneHasIt() {
+        let r = EKReminder(eventStore: EKEventStore())
+        let due = Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 9, hour: 15, minute: 30))!
+        EventKitReminders.setDue(r, due, timed: true)
+        #expect(r.dueDateComponents?.hour == 15)
+        #expect(r.alarms?.count == 1)
+        #expect(r.alarms?.first?.absoluteDate == due)
+        #expect(EventKitReminders.info(r).timed)
+        EventKitReminders.setDue(r, due, timed: false)
+        #expect(r.dueDateComponents?.hour == nil)
+        #expect(r.alarms?.isEmpty ?? true)
+        let info = EventKitReminders.info(r)
+        #expect(!info.timed)
+        #expect(info.due == Calendar.current.startOfDay(for: due))
+        r.isCompleted = true
+        #expect(EventKitReminders.info(r).done)
     }
 
     @Test func theAccessAnswerOnEventKitsQueueDoesNotCrash() async {
