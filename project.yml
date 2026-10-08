@@ -49,6 +49,7 @@ targets:
         NSRemindersUsageDescription: "Чилк ставит напоминания, о которых ты просишь, в отдельный список «Чилк» и читает только его."
         NSCalendarsFullAccessUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
         NSCalendarsUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
+        NSAppleEventsUsageDescription: "Чилк записывает заметки, о которых ты просишь, в отдельную папку «Чилк» в «Заметках» и читает только её."
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.all0b0y.chilk

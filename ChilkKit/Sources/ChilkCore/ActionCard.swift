@@ -24,6 +24,14 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case eventChange(id: String, oldTitle: String, oldStart: Date, oldEnd: Date, allDay: Bool, title: String,
                          start: Date, end: Date)
         case eventDelete(id: String, title: String, start: Date, end: Date, allDay: Bool)
+        /// Slice 8f (decisions 3–7, 10): a new note in Chilk's own «Чилк» folder of Apple Notes. A note has no time: the
+        /// card never expires.
+        case note(title: String, text: String)
+        /// Lines added at the end of one of Chilk's notes; the rest of it stays.
+        case noteAppend(id: String, title: String, text: String)
+        /// One of Chilk's notes rewritten: the new title and the whole new text.
+        case noteRewrite(id: String, oldTitle: String, title: String, text: String)
+        case noteDelete(id: String, title: String)
     }
 
     public let id: UUID
@@ -48,7 +56,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .reminderChange(_, _, let oldDue, _, let due): due != oldDue ? due : nil
         case .event(_, let start, _, _): start
         case .eventChange(_, _, let oldStart, _, _, _, let start, _): start != oldStart ? start : nil
-        case .reminderComplete, .reminderDelete, .timer, .eventDelete: nil
+        case .reminderComplete, .reminderDelete, .timer, .eventDelete, .note, .noteAppend, .noteRewrite, .noteDelete: nil
         }
     }
 
@@ -65,8 +73,8 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
     /// Can be edited in the «Изменить» panel (decision 5): title and date/time; completing or deleting cannot.
     public var editable: Bool {
         switch kind {
-        case .reminder, .message, .reminderChange, .timer, .event, .eventChange: true
-        case .reminderComplete, .reminderDelete, .eventDelete: false
+        case .reminder, .message, .reminderChange, .timer, .event, .eventChange, .note, .noteAppend, .noteRewrite: true
+        case .reminderComplete, .reminderDelete, .eventDelete, .noteDelete: false
         }
     }
 
@@ -76,6 +84,7 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         func when(_ d: Date) -> String { fmt.when(d, guessedPart: guessedPart, guessedDay: guessedDay) }
         let place = "«Напоминания» → «Чилк»"
         let calendarPlace = "«Календарь» → «Чилк»"
+        let notesPlace = "«Заметки» → «Чилк»"
         var out: [String]
         switch kind {
         case .reminder(let title, let due):
@@ -114,6 +123,15 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
         case .eventDelete(_, let title, let start, let end, let allDay):
             out = ["🗑 Удалить событие: \(title)", fmt.span(start, end, allDay: allDay, guessedPart: false, guessedDay: false),
                    calendarPlace]
+        case .note(let title, let text):
+            out = ["🗒 Заметка: \(title)"] + Self.excerpt(text) + [notesPlace]
+        case .noteAppend(_, let title, let text):
+            out = ["➕ Дописать в заметку «\(title)»"] + Self.excerpt(text) + [notesPlace]
+        case .noteRewrite(_, let oldTitle, let title, let text):
+            out = ["✏️ Изменить заметку «\(oldTitle)»"] + (title != oldTitle ? ["Название: \(title)"] : [])
+                + Self.excerpt(text, prefix: "Станет: ") + [notesPlace]
+        case .noteDelete(_, let title):
+            out = ["🗑 Удалить заметку: \(title)", notesPlace + " · останется в «Недавно удалённых»"]
         }
         if expired(now: now, calendar: calendar) { out.append("Время уже прошло — измени его") }
         return out
@@ -179,7 +197,22 @@ public struct ActionCard: Equatable, Sendable, Identifiable {
             return "change calendar event «\(oldTitle)» → «\(title)» "
                 + (allDay ? "on \(day.string(from: start))" : "\(f.string(from: start)) – \(f.string(from: end))")
         case .eventDelete(_, let title, _, _, _): return "delete calendar event «\(title)»"
+        case .note(let title, let text): return "new note «\(title)» (\(text.count) characters) in Notes → «Чилк»"
+        case .noteAppend(_, let title, let text): return "append \(text.count) characters to note «\(title)»"
+        case .noteRewrite(_, let oldTitle, let title, let text):
+            return "rewrite note «\(oldTitle)» → «\(title)» (\(text.count) characters)"
+        case .noteDelete(_, let title): return "delete note «\(title)»"
         }
+    }
+
+    /// Slice 8f: a note's text on the card — its lines joined by « / », at most `limit` characters («…» when cut; the
+    /// whole text is in «Изменить»). An empty text shows no line.
+    static func excerpt(_ text: String, prefix: String = "", limit: Int = 240) -> [String] {
+        let lines = text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        guard !lines.isEmpty else { return [] }
+        let joined = lines.joined(separator: " / ")
+        guard joined.count > limit else { return [prefix + joined] }
+        return [prefix + String(joined.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"]
     }
 
     /// «45 с», «5 мин», «1 ч 30 мин», «2 ч», «1 д 2 ч».

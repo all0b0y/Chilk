@@ -26,6 +26,8 @@
 	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Чилк записывает заметки, о которых ты просишь, в отдельную папку «Чилк» в «Заметках» и читает только её.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его.</string>
 	<key>NSCalendarsUsageDescription</key>

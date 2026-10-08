@@ -193,6 +193,29 @@ struct ActionCardTests {
                                      calendar: berlin) == nil)
     }
 
+    /// Slice 8f: a note's card shows its text (lines joined, cut at 240) and the folder; it never expires.
+    @Test func aNoteCardShowsItsTextAndTheFolder() {
+        let card = ActionCard(kind: .note(title: "Покупки", text: "молоко\nхлеб\n\nсыр"))
+        #expect(card.lines(now: now, calendar: cal) == ["🗒 Заметка: Покупки", "молоко / хлеб / сыр", "«Заметки» → «Чилк»"])
+        #expect(card.when == nil && !card.expired(now: now.addingTimeInterval(400 * 86400), calendar: cal) && card.editable)
+        let shown = ActionCard(kind: .note(title: "Мысль", text: String(repeating: "а", count: 300))).lines(now: now, calendar: cal)[1]
+        #expect(shown.count == 240 && shown.hasSuffix("…"))
+        #expect(ActionCard(kind: .note(title: "Только заголовок", text: "")).lines(now: now, calendar: cal)
+                == ["🗒 Заметка: Только заголовок", "«Заметки» → «Чилк»"])
+    }
+
+    @Test func noteChangeCardsSayWhatHappensToTheNote() {
+        #expect(ActionCard(kind: .noteAppend(id: "n1", title: "Покупки", text: "сыр")).lines(now: now, calendar: cal)
+                == ["➕ Дописать в заметку «Покупки»", "сыр", "«Заметки» → «Чилк»"])
+        #expect(ActionCard(kind: .noteRewrite(id: "n1", oldTitle: "Покупки", title: "Кофе", text: "только кофе"))
+                    .lines(now: now, calendar: cal)
+                == ["✏️ Изменить заметку «Покупки»", "Название: Кофе", "Станет: только кофе", "«Заметки» → «Чилк»"])
+        let delete = ActionCard(kind: .noteDelete(id: "n1", title: "Покупки"))
+        #expect(delete.lines(now: now, calendar: cal)
+                == ["🗑 Удалить заметку: Покупки", "«Заметки» → «Чилк» · останется в «Недавно удалённых»"])
+        #expect(!delete.editable && delete.summary(calendar: cal) == "delete note «Покупки»")
+    }
+
     /// «Перенеси встречу на пятницу»: just the day — the event keeps its time of day and its length.
     @Test func aMoveToJustADayKeepsTheTimeOfDay() {
         let moved = ActionCard.movedSlot(start: at(9, 15), end: at(9, 16, 30), allDay: false, to: at(16, 0), minutes: nil,

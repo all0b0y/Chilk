@@ -56,6 +56,7 @@ extension Lines {
             if let at = c.at { String(localized: "Напоминание «\(s)» · \(when(at))") } else { String(localized: "Напоминание") }
         case .event:
             if let at = c.at { String(localized: "Событие «\(s)» · \(when(at))") } else { String(localized: "Событие") }
+        case .note: s.isEmpty ? String(localized: "Заметка") : String(localized: "Заметка «\(s)»")
         case .webSearch: String(localized: "Искал в интернете")
         case .findFiles: String(localized: "Искал файлы")
         case .readFile: s.isEmpty ? String(localized: "Читал файл") : String(localized: "Прочитал «\(s)»")
@@ -94,6 +95,7 @@ extension Lines {
         case .openClock: "timer"
         case .reminder: "checklist"
         case .event: "calendar"
+        case .note: "note.text"
         case .webSearch: "globe"
         case .findFiles: "magnifyingglass"
         case .readFile: "doc.text"

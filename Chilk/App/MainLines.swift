@@ -126,6 +126,7 @@ extension Lines {
         case .speech: String(localized: "Распознавание речи")
         case .reminders: String(localized: "Напоминания")
         case .calendar: String(localized: "Календарь")
+        case .notes: String(localized: "Заметки")
         }
     }
     static func permissionState(_ s: Permissions.State) -> String {

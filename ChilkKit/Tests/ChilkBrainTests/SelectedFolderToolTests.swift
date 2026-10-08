@@ -137,8 +137,12 @@ struct SelectedFolderToolTests {
     @Test func thereIsNoWayToWriteMoveOrDeleteAFile() async throws {
         let names = Set(ChilkToolCatalog.tools.map(\.name))
         #expect(names.isDisjoint(with: ["chilk_append_note", "chilk_write_file", "chilk_move_file", "chilk_delete_file"]))
-        #expect(names.filter { $0.contains("file") || $0.contains("folder") || $0.contains("note") }
+        // Slice 8f: Apple Notes are not files (SPEC «Файлы — только чтение»): Chilk's own «Чилк» folder in Notes, every
+        // write through a card. Those three are the only «note» tools; nothing else may say file, folder or note.
+        let appleNotes: Set = ["chilk_note", "chilk_notes", "chilk_note_change"]
+        #expect(names.filter { $0.contains("file") || $0.contains("folder") || $0.contains("note") }.subtracting(appleNotes)
                 == Set(["chilk_find_files", "chilk_read_file", "chilk_list_folders", "chilk_request_folder"]))
+        #expect(appleNotes.isSubset(of: names))
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         let e = ChilkFileToolExecutor(allowedContainer: root.deletingLastPathComponent())

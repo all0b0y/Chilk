@@ -23,6 +23,10 @@ final class Actions {
     private let calendar = ChilkCalendarExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] != nil
                                                  ? FakeCalendar(seed: ProcessInfo.processInfo.environment["CHILK_FAKE_CALENDAR"] == "seed")
                                                  : EventKitCalendar())
+    /// Slice 8f: Chilk's own «Чилк» folder in Apple Notes (CHILK_FAKE_NOTES=1 | seed: a fake in the state dir).
+    private let notes = ChilkNotesExecutor(store: ProcessInfo.processInfo.environment["CHILK_FAKE_NOTES"] != nil
+                                           ? FakeNotes(seed: ProcessInfo.processInfo.environment["CHILK_FAKE_NOTES"] == "seed")
+                                           : AppleNotes())
     private weak var balance: BalanceController?
     private let sim: CharacterSim
     private var timer: Timer?
@@ -174,7 +178,7 @@ final class Actions {
                 "opened": "Clock",
                 "note": "Chilk cannot cancel, pause or resume Clock timers himself (macOS); the user does it in Clock."])
         } else if ChilkReminderExecutor.proposes(call.name) || ChilkCalendarExecutor.proposes(call.name)
-                    || call.name == "chilk_schedule" || call.name == "chilk_timer" {
+                    || ChilkNotesExecutor.proposes(call.name) || call.name == "chilk_schedule" || call.name == "chilk_timer" {
             result = await propose(call)                        // 8c: a card first; «Да» writes it
         } else if call.name == "chilk_remember" {
             result = remember(call)
@@ -186,6 +190,8 @@ final class Actions {
             result = await reminders.execute(name: call.name, arguments: call.arguments)
         } else if ChilkCalendarExecutor.handles(call.name) {
             result = await calendar.execute(name: call.name, arguments: call.arguments)
+        } else if ChilkNotesExecutor.handles(call.name) {
+            result = await notes.execute(name: call.name, arguments: call.arguments)
         } else if let executor {
             result = executor.execute(name: call.name, arguments: call.arguments)
         } else {
@@ -310,6 +316,25 @@ final class Actions {
             case .delete:
                 kind = .eventDelete(id: id, title: found.title, start: found.start, end: found.end, allDay: found.allDay)
             }
+        case .note(let title, let text):
+            kind = .note(title: title, text: text)
+        case .noteChange(let id, let change):
+            // Only a note of the «Чилк» folder (the store checks it); a locked one is never changed.
+            let found: NoteInfo
+            do { found = try await notes.lookup(id: id) } catch { return .failure(ChilkNotesExecutor.failure(error)) }
+            guard !found.locked else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.locked)) }
+            switch change {
+            case .append(let text):
+                kind = .noteAppend(id: id, title: found.title, text: text)
+            case .rewrite(let title, let text):
+                guard !found.attachments else { return .failure(ChilkNotesExecutor.failure(NotesAccessError.attachments)) }
+                guard (title ?? found.title) != found.title || text != found.text else {
+                    return .failure("nothing_to_change: the note already is like that; no card was made")
+                }
+                kind = .noteRewrite(id: id, oldTitle: found.title, title: title ?? found.title, text: text)
+            case .delete:
+                kind = .noteDelete(id: id, title: found.title)
+            }
         default:
             return .failure("Unsupported action")
         }
@@ -329,6 +354,7 @@ final class Actions {
         case .message: .timers
         case .timer: .clock
         case .event, .eventChange, .eventDelete: .calendar
+        case .note, .noteAppend, .noteRewrite, .noteDelete: .notes
         default: .reminders
         }
         guard switches().isOn(ability) else {
@@ -394,6 +420,22 @@ final class Actions {
             tool = "card_event_delete"
             result = await calendar.delete(id: id)
             line = String(localized: "Готово: «\(title)» удалено")
+        case .note(let title, let text):
+            tool = "card_note"
+            result = await notes.create(title: title, text: text)
+            line = String(localized: "Готово: заметка «\(title)» — «Заметки» → «Чилк»")
+        case .noteAppend(let id, let title, let text):
+            tool = "card_note_append"
+            result = await notes.append(id: id, text: text)
+            line = String(localized: "Готово: дописал в «\(title)»")
+        case .noteRewrite(let id, _, let title, let text):
+            tool = "card_note_rewrite"
+            result = await notes.rewrite(id: id, title: title, text: text)
+            line = String(localized: "Готово: заметка «\(title)» изменена")
+        case .noteDelete(let id, let title):
+            tool = "card_note_delete"
+            result = await notes.delete(id: id)
+            line = String(localized: "Готово: заметка «\(title)» удалена")
         }
         journal.write(ToolJournal.line(at: started, tool: tool,
                                        outcome: result.success ? .ok : .failed(ToolJournal.code(of: result.value["error"]?.string ?? "")),
@@ -409,6 +451,15 @@ final class Actions {
             case "recurring_event":
                 return (false, String(localized: "Не получилось: это повторяющееся событие — поменяй его в «Календаре»"))
             case "not_found": return (false, String(localized: "Не получилось: этого события уже нет в календаре «Чилк»"))
+            default: return (false, String(localized: "Не получилось — ничего не изменилось"))
+            }
+        case .note, .noteAppend, .noteRewrite, .noteDelete:
+            switch code {
+            case "no_access": return (false, String(localized: "Не получилось: нет доступа к «Заметкам» — разреши в Настройках"))
+            case "not_found": return (false, String(localized: "Не получилось: этой заметки уже нет в папке «Чилк»"))
+            case "note_locked": return (false, String(localized: "Не получилось: заметка закрыта паролем — измени её в «Заметках»"))
+            case "note_has_attachments":
+                return (false, String(localized: "Не получилось: в заметке есть картинки или файлы — измени её в «Заметках»"))
             default: return (false, String(localized: "Не получилось — ничего не изменилось"))
             }
         default:

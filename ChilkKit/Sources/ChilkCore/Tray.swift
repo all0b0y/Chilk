@@ -66,6 +66,8 @@ public enum ChilkAbility: String, CaseIterable, Codable, Sendable {
     case clock
     /// Slice 8e: events in Chilk's own «Чилк» calendar (Apple Calendar).
     case calendar
+    /// Slice 8f: notes in Chilk's own «Чилк» folder (Apple Notes).
+    case notes
 }
 
 /// Everything is on until the user switches it off. Unknown or missing entries in an older file mean «on».

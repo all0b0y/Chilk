@@ -25,7 +25,13 @@ extension ChilkToolCatalog {
 
     /// The change tools leave unused fields empty: a field the action needs must not be.
     private static func actionProblem(_ tool: String, _ fields: [String: JSON]) -> String? {
-        guard tool == "chilk_reminder_change" || tool == "chilk_event_change", let action = fields["action"]?.string else { return nil }
+        guard ["chilk_reminder_change", "chilk_event_change", "chilk_note_change"].contains(tool), let action = fields["action"]?.string
+        else { return nil }
+        if tool == "chilk_note_change" {
+            guard ["append", "rewrite"].contains(action),
+                  fields["text"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true else { return nil }
+            return "invalid_arguments: text — \(action) needs " + (action == "append" ? "the text to add" : "the whole new text")
+        }
         if ["move", "move_rename"].contains(action), fields["at"]?.string?.isEmpty == true {
             return "invalid_arguments: at — \(action) needs the new time, e.g. 2026-10-09T10:00:00+03:00"
         }

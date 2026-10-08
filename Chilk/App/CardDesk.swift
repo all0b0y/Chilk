@@ -85,6 +85,14 @@ final class CardDesk {
         onChange()
     }
 
+    /// Slice 8f: the note a change card is about (nil for anything else).
+    private static func noteID(_ kind: ActionCard.Kind) -> String? {
+        switch kind {
+        case .noteAppend(let id, _, _), .noteRewrite(let id, _, _, _), .noteDelete(let id, _): id
+        default: nil
+        }
+    }
+
     static func sameThing(_ a: ActionCard, _ b: ActionCard) -> Bool {
         switch (a.kind, b.kind) {
         case (.reminder(let t1, let d1), .reminder(let t2, let d2)): t1 == t2 || d1 == d2
@@ -104,7 +112,11 @@ final class CardDesk {
              (.eventChange(let i1, _, _, _, _, _, _, _), .eventDelete(let i2, _, _, _, _)),
              (.eventDelete(let i1, _, _, _, _), .eventChange(let i2, _, _, _, _, _, _, _)),
              (.eventDelete(let i1, _, _, _, _), .eventDelete(let i2, _, _, _, _)): i1 == i2
-        default: false
+        // Slice 8f: «нет, назови её «Покупки»» / «нет, добавь ещё сыр» — a correction of the one note on the card;
+        // «нет, допиши это в «Покупки»» turns a new note into an append (the same text).
+        case (.note, .note): true
+        case (.note(_, let x1), .noteAppend(_, _, let x2)), (.noteAppend(_, _, let x1), .note(_, let x2)): x1 == x2
+        default: noteID(a.kind).map { $0 == noteID(b.kind) } ?? false
         }
     }
 
@@ -371,7 +383,7 @@ final class CardEditPanel {
         let model = CardEditModel(card)
         let view = CardEditView(model: model, save: { [weak self] in self?.finish(model.edited()) },
                                 cancel: { [weak self] in self?.finish(nil) })
-        let size = NSSize(width: 360, height: model.hasText ? 250 : model.hasDate && model.hasMinutes ? 230
+        let size = NSSize(width: 360, height: model.isNote ? 330 : model.hasText ? 250 : model.hasDate && model.hasMinutes ? 230
                           : (model.hasDate || model.hasMinutes ? 190 : 150))
         let screen = NSScreen.screens.first { $0.frame.intersects(chilk) }?.visibleFrame ?? NSScreen.main?.visibleFrame ?? chilk
         var x = onLeftEdge ? chilk.maxX - 30 : chilk.minX - size.width + 30
@@ -465,6 +477,10 @@ final class CardEditModel {
             if !allDay { length = e.timeIntervalSince(s) }
         case .eventDelete(_, let t, let s, _, _):
             title = t; date = s; text = ""; hasText = false; hasDate = false; startDate = s; dateOnly = false
+        case .note(let t, let x), .noteAppend(_, let t, let x), .noteRewrite(_, _, let t, let x):
+            title = t; date = Date(); text = x; hasText = true; hasDate = false; startDate = nil; dateOnly = false
+        case .noteDelete(_, let t):
+            title = t; date = Date(); text = ""; hasText = false; hasDate = false; startDate = nil; dateOnly = false
         }
         hasMinutes = length != nil
         if let length {
@@ -476,6 +492,34 @@ final class CardEditModel {
     }
 
     var dateTouched: Bool { startDate.map { abs($0.timeIntervalSince(date)) >= 30 } ?? false }
+
+    /// Slice 8f: a note's card edits its title and text; an append edits only the lines to add.
+    var isNote: Bool {
+        switch original.kind {
+        case .note, .noteAppend, .noteRewrite: true
+        default: false
+        }
+    }
+
+    var hasTitle: Bool {
+        if case .noteAppend = original.kind { return false }
+        return true
+    }
+
+    var titleLabel: String {
+        isNote ? String(localized: "Заголовок") : hasText ? String(localized: "Коротко") : String(localized: "Название")
+    }
+
+    var textLabel: String {
+        if case .noteAppend = original.kind { return String(localized: "Что дописать") }
+        return isNote ? String(localized: "Текст") : String(localized: "Что сказать")
+    }
+
+    /// A new note may be only its title; every other text field must say something.
+    private var textOptional: Bool {
+        if case .note = original.kind { return true }
+        return false
+    }
 
     /// «Минуты» for a Clock timer, «Длительность, мин» for an event.
     var minutesLabel: String {
@@ -491,7 +535,8 @@ final class CardEditModel {
     }
 
     var valid: Bool {
-        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!hasText || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!hasText || textOptional || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             && (!hasDate || dateValid)
             && (!hasMinutes || minutes.map { (1...1439).contains($0) } == true)
     }
@@ -512,6 +557,7 @@ final class CardEditModel {
     /// The edited card: a new id (a new card), no guess marks — the user set the time himself.
     func edited() -> ActionCard {
         let t = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(120))
+        let noteText = String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(2000))
         let kind: ActionCard.Kind
         switch original.kind {
         case .reminder: kind = .reminder(title: t, due: date)
@@ -527,6 +573,9 @@ final class CardEditModel {
             let span = slot(start: start, end: end, allDay: allDay)
             kind = .eventChange(id: id, oldTitle: old, oldStart: oldStart, oldEnd: oldEnd, allDay: allDay, title: t,
                                 start: span.start, end: span.end)
+        case .note: kind = .note(title: t, text: noteText)
+        case .noteAppend(let id, let title, _): kind = .noteAppend(id: id, title: title, text: noteText)
+        case .noteRewrite(let id, let old, _, _): kind = .noteRewrite(id: id, oldTitle: old, title: t, text: noteText)
         default: kind = original.kind
         }
         return ActionCard(kind: kind)
@@ -548,9 +597,9 @@ struct CardEditView: View {
 
     var body: some View {
         Form {
-            TextField(model.hasText ? String(localized: "Коротко") : String(localized: "Название"), text: $model.title)
+            if model.hasTitle { TextField(model.titleLabel, text: $model.title) }
             if model.hasText {
-                TextField(String(localized: "Что сказать"), text: $model.text, axis: .vertical).lineLimit(2...4)
+                TextField(model.textLabel, text: $model.text, axis: .vertical).lineLimit(model.isNote ? 3...8 : 2...4)
             }
             if model.hasDate {
                 DatePicker(String(localized: "Когда"), selection: $model.date, in: model.earliest...,

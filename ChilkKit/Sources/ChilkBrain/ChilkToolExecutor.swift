@@ -43,6 +43,7 @@ public final class ChilkToolExecutor {
                 return .failure("File access is handled by the shared-folder tools")
             case .reminder, .reminders, .reminderChange: return .failure("Apple Reminders are handled by the reminders tools")
             case .event, .events, .eventChange: return .failure("Apple Calendar is handled by the calendar tools")
+            case .note, .notes, .noteChange: return .failure("Apple Notes is handled by the notes tools")
             case .remember: return .failure("Memory is handled by the app")
             case .emote: return .failure("Emotions are handled by the app")
             case .status: return .ok(status())

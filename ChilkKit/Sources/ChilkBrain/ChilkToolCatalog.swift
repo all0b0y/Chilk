@@ -26,6 +26,15 @@ public enum EventChange: Equatable, Sendable {
     case delete
 }
 
+/// Slice 8f (decision 7): what `chilk_note_change` proposes for one of the «Чилк» folder's notes.
+public enum NoteChange: Equatable, Sendable {
+    /// Lines added at the end; the rest of the note stays.
+    case append(String)
+    /// The whole new text; `title` nil keeps the note's own.
+    case rewrite(title: String?, text: String)
+    case delete
+}
+
 /// Breaks the user asks for by voice (decisions 2026-10-05); they start when the conversation closes.
 public enum ChilkBreak: Equatable, Sendable {
     case eyeGym, warmup, walk
@@ -56,6 +65,11 @@ public enum ChilkAction: Equatable, Sendable {
     /// The «Чилк» calendar's events overlapping `from` … `to` (read without a card).
     case events(from: Date, to: Date)
     case eventChange(id: String, change: EventChange)
+    /// Slice 8f (decisions 3–7, 10): a note for Chilk's own «Чилк» folder of Apple Notes — proposed on a card.
+    case note(title: String, text: String)
+    /// The «Чилк» folder's notes (`id` empty) or one note's whole text — read without a card.
+    case notes(id: String)
+    case noteChange(id: String, change: NoteChange)
     case mode(BalanceMode)
     case takeBreak(ChilkBreak)
     /// Slice 5b, decision 17: one short fact for Chilk's memory; `asked` = the user asked («запомни…»).
@@ -120,6 +134,14 @@ public enum ChilkToolCatalog {
                   "action": ["type": "string", "enum": ["move", "rename", "move_rename", "delete"]],
                   "at": ["type": "string", "maxLength": 64], "title": ["type": "string", "maxLength": 120],
                   "minutes": ["type": "integer", "minimum": 0, "maximum": 1439]]),
+            tool("chilk_note", "Propose a new note in Chilk's own «Чилк» folder of Apple Notes (syncs to iPhone): a thought, a list, an idea the user asks to write down («запиши в заметки», «запиши мысль», «сделай заметку»). title: a short heading in the user's words (≤ 120); text: the note itself as the user said it — add nothing of your own; empty when the title says it all; up to 2000 characters, lines with \\n. Adding to a note that is already there («допиши в покупки сыр») is chilk_notes + chilk_note_change append, never a second note. Nothing is written yet: the app shows a confirmation card with the text and writes only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
+                 ["title": ["type": "string", "minLength": 1, "maxLength": 120], "text": ["type": "string", "maxLength": 2000]]),
+            tool("chilk_notes", "Read Chilk's own «Чилк» folder of Apple Notes: id empty — its notes, newest first (up to 50): id, title, modified, the beginning of the text; id — that note's whole text (up to 4000 characters, truncated=true when longer). Chilk sees ONLY this folder: never the user's other notes — say so when asked about them. locked=true: locked with a password, its text cannot be read.",
+                 ["id": ["type": "string", "maxLength": 256]]),
+            tool("chilk_note_change", "Propose a change to ONE note of the «Чилк» folder, by its exact id from chilk_notes, only on the user's request: action append (text = the lines to add at the end; the rest stays), rewrite (text = the whole new text — read the note first with chilk_notes and keep what the user did not ask to change; title = the new heading, empty keeps it), delete (the note goes to Notes' «Recently Deleted»). Unused fields: empty string. Nothing changes yet: the app shows a confirmation card and applies it only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm. Refused: not_found (no such note in the «Чилк» folder — list them again), note_locked (locked with a password), note_has_attachments (pictures or files: a rewrite would lose them — append still works, or the user edits it in Notes), nothing_to_change.",
+                 ["id": ["type": "string", "minLength": 1, "maxLength": 256],
+                  "action": ["type": "string", "enum": ["append", "rewrite", "delete"]],
+                  "title": ["type": "string", "maxLength": 120], "text": ["type": "string", "maxLength": 2000]]),
             tool("chilk_mode", "Switch Chilk's break mode on the user's request: strict (may dim the screen and finally pause it until the break is taken), soft (default: asks and insists only), silent (pantomime only). A softer mode is refused while he dims or pauses the screen; then only the emergency exit on the pause helps.",
                  ["mode": ["type": "string", "enum": ["strict", "soft", "silent"]]]),
             tool("chilk_eye_gym", "Only when the user asks: eye gymnastics with Chilk — he flies a figure-eight to follow, then «look into the distance» for 20 s. Starts after your short reply, when the conversation closes.", [:]),
@@ -198,6 +220,7 @@ public enum ChilkToolCatalog {
         case "chilk_timer", "chilk_clock_open": .clock
         case "chilk_reminder", "chilk_reminders", "chilk_reminder_change": .reminders
         case "chilk_event", "chilk_events", "chilk_event_change": .calendar
+        case "chilk_note", "chilk_notes", "chilk_note_change": .notes
         default: nil
         }
     }
@@ -220,6 +243,15 @@ public enum ChilkToolCatalog {
     /// Slice 8e: a timed event lasts 1 min … 23 h 59 min; a whole day ignores the length (0 by the schema's wording).
     static func validEventLength(_ minutes: Int, allDay: Bool) -> Bool {
         allDay ? (0...1439).contains(minutes) : (1...1439).contains(minutes)
+    }
+
+    /// Slice 8f: a note's text as it will be written — line breaks normalized, other control characters dropped (emoji
+    /// joiners stay), no blank lines at the ends.
+    static func noteText(_ text: String) -> String {
+        var scalars = String.UnicodeScalarView()
+        for s in text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").unicodeScalars
+            where s == "\n" || s == "\t" || s.properties.generalCategory != .control { scalars.append(s) }
+        return String(scalars).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Slice 8e: a bare date («2026-10-10») — local midnight: the day of a whole-day event, or the day an event moves to.
@@ -369,6 +401,28 @@ public enum ChilkToolCatalog {
             case "rename": return .eventChange(id: id, change: .rename(try name()))
             case "move_rename": return .eventChange(id: id, change: .moveRename(try start(), minutes: length, try name()))
             case "delete": return .eventChange(id: id, change: .delete)
+            default: throw ToolError.invalidArguments
+            }
+        case "chilk_note":
+            guard Set(fields.keys) == ["title", "text"], let title = fields["title"]?.string, validTitle(title, limit: 120),
+                  let text = fields["text"]?.string, text.count <= 2000 else { throw ToolError.invalidArguments }
+            return .note(title: title.trimmingCharacters(in: .whitespacesAndNewlines), text: noteText(text))
+        case "chilk_notes":
+            guard Set(fields.keys) == ["id"], let id = fields["id"]?.string, id.count <= 256 else { throw ToolError.invalidArguments }
+            return .notes(id: id.trimmingCharacters(in: .whitespacesAndNewlines))
+        case "chilk_note_change":
+            guard Set(fields.keys) == ["id", "action", "title", "text"], let id = fields["id"]?.string, !id.isEmpty, id.count <= 256,
+                  let action = fields["action"]?.string, let title = fields["title"]?.string, let raw = fields["text"]?.string,
+                  raw.count <= 2000 else { throw ToolError.invalidArguments }
+            let text = noteText(raw), heading = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            switch action {
+            case "append":
+                guard !text.isEmpty else { throw ToolError.invalidArguments }
+                return .noteChange(id: id, change: .append(text))
+            case "rewrite":
+                guard !text.isEmpty, heading.isEmpty || validTitle(heading, limit: 120) else { throw ToolError.invalidArguments }
+                return .noteChange(id: id, change: .rewrite(title: heading.isEmpty ? nil : heading, text: text))
+            case "delete": return .noteChange(id: id, change: .delete)
             default: throw ToolError.invalidArguments
             }
         case "chilk_remember":

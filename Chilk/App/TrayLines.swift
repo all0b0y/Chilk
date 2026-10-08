@@ -51,6 +51,7 @@ extension Lines {
         case .clock: String(localized: "Таймеры («Часы»)")
         case .reminders: String(localized: "Напоминания Apple")
         case .calendar: String(localized: "Календарь Apple")
+        case .notes: String(localized: "Заметки Apple")
         case .files: String(localized: "Файлы")
         case .obsidian: String(localized: "Obsidian")
         case .phrases: String(localized: "Свежие фразы от Codex")

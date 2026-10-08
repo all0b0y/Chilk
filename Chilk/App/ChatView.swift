@@ -263,9 +263,9 @@ struct CardEditFields: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            TextField(model.hasText ? String(localized: "Коротко") : String(localized: "Название"), text: $model.title)
+            if model.hasTitle { TextField(model.titleLabel, text: $model.title) }
             if model.hasText {
-                TextField(String(localized: "Что сказать"), text: $model.text, axis: .vertical).lineLimit(2...4)
+                TextField(model.textLabel, text: $model.text, axis: .vertical).lineLimit(model.isNote ? 3...8 : 2...4)
             }
             if model.hasDate {
                 DatePicker(String(localized: "Когда"), selection: $model.date, in: model.earliest...,

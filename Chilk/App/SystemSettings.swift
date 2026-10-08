@@ -1,5 +1,7 @@
 import AppKit
 import AVFoundation
+import ChilkApple
+import CoreServices
 import EventKit
 import ServiceManagement
 import Speech
@@ -45,7 +47,7 @@ enum LoginItem {
 @MainActor
 enum Permissions {
     enum Kind: String, CaseIterable, Identifiable {
-        case microphone, speech, reminders, calendar
+        case microphone, speech, reminders, calendar, notes
         var id: String { rawValue }
     }
 
@@ -78,6 +80,27 @@ enum Permissions {
             case .notDetermined: .notAsked
             default: .denied
             }
+        case .notes:
+            notesState()
+        }
+    }
+
+    /// Slice 8f: controlling Notes is Automation, not a privacy switch. macOS answers without asking only while Notes
+    /// runs; otherwise Chilk's own last call to Notes tells.
+    private static func notesState() -> State {
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Notes").isEmpty {
+            let target = NSAppleEventDescriptor(bundleIdentifier: "com.apple.Notes")
+            switch AEDeterminePermissionToAutomateTarget(target.aeDesc, AEEventClass(typeWildCard), AEEventID(typeWildCard), false) {
+            case noErr: return .granted
+            case OSStatus(errAEEventNotPermitted): return .denied
+            case OSStatus(errAEEventWouldRequireUserConsent): return .notAsked
+            default: break
+            }
+        }
+        switch UserDefaults.standard.string(forKey: AppleNotes.automationKey) {
+        case "granted": return .granted
+        case "denied": return .denied
+        default: return .notAsked
         }
     }
 
@@ -87,6 +110,7 @@ enum Permissions {
         case .speech: "Privacy_SpeechRecognition"
         case .reminders: "Privacy_Reminders"
         case .calendar: "Privacy_Calendars"
+        case .notes: "Privacy_Automation"
         }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
