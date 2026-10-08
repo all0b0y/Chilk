@@ -277,7 +277,8 @@ final class PlanNotices {
 
     // MARK: Acceptance
 
-    /// The morning summary now (not waiting for 05:00 or an active user; the display rule still applies).
+    /// The morning summary now — «Проверка ▸ Утренняя сводка» and the demo (not waiting for 05:00 or an active user; the
+    /// display rule still applies).
     func demoMorning() {
         guard showing == nil, !preparingMorning, !queue.contains(where: { $0.id == "plan-morning" }) else { return }
         book.morningShown = nil

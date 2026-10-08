@@ -748,6 +748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         light.submenu = lightMenu
         sub.addItem(light)
         sub.addItem(item(String(localized: "Диско"), #selector(discoNow)))
+        sub.addItem(item(String(localized: "Утренняя сводка"), #selector(morningNow)))      // 9b: without waiting for 05:00
         // Slice 6c: Codex's emotions, played at once and past the limits (the clown's 14 days are not spent).
         let emotions = NSMenuItem(title: String(localized: "Эмоции"), action: nil, keyEquivalent: "")
         let emotionsMenu = NSMenu()
@@ -779,6 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let raw = sender.representedObject as? String, let a = Ambience(rawValue: raw) { ambience?.put(a, check: true) }
     }
     @objc private func discoNow() { disco?.dance(why: "check") }
+    @objc private func morningNow() { planNotices?.demoMorning() }
     @objc private func about() {
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(nil)
