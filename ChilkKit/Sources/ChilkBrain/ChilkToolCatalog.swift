@@ -88,6 +88,8 @@ public enum ChilkAction: Equatable, Sendable {
     case game(GameKind?, length: Int?)
     /// Slice 9b: the day plan being collected — `day` nil: not said (the app picks it); `items`: the whole list.
     case plan(PlanAction, day: Date?, items: [PlanItem])
+    /// Slice 9b (decision 16): open «Лист дня» for a day (`nil`: today).
+    case planShow(day: Date?)
 }
 
 /// Slice 9b (decisions 9–12): what `chilk_plan` does with the plan being collected.
@@ -144,6 +146,8 @@ public enum ChilkToolCatalog {
                                       "properties": ["title": ["type": "string", "minLength": 1, "maxLength": 120],
                                                      "time": ["type": "string", "maxLength": 5],
                                                      "guess": ["type": "boolean"]]]]]),
+            tool("chilk_plan_show", "Open Chilk's «Лист дня» — the plan of a day from the «Чилк» list of Apple Reminders, with round ticks — on the user's request («покажи план», «что у меня сегодня», «открой план на завтра»). day: YYYY-MM-DD, or empty for today. Just say briefly that it is open; do not read the list aloud unless asked.",
+                 ["day": ["type": "string", "maxLength": 10]]),
             tool("chilk_event", "Propose an event in Chilk's own «Чилк» calendar in Apple Calendar (syncs to iPhone): a meeting, a class, an appointment — something that takes a time slot — or anything the user asks to put «в календарь». Only a NEW event: a change to one already in the calendar — its time, its length («сделай йогу на два часа», «продли до 12») or its title — is chilk_events + chilk_event_change, never a second chilk_event; when the user names an event as a known one («завтрашнюю йогу», «встречу с Сашей»), look with chilk_events first and change it if it is there. No start time said and not all day: ask when, never invent one. A thing to do at a time («напомни позвонить») is chilk_reminder; a countdown from now is chilk_timer. at: the start, ISO-8601; without a timezone it is the user's local time. minutes: the length, 1–1439 (60 when the user did not say). all_day=true: the whole day of at's date (a day off, a trip day; at may be just the date, e.g. 2026-10-10); then minutes is 0. An hour 1–12 said without утра/дня/вечера/ночи: pick the likely one, do not ask — the card marks it as a guess. Nothing is created yet: the app shows a confirmation card built from these values and creates the event only on «Да». Result awaiting_confirmation: say one short line that the card is there to confirm; never say it is done.",
                  ["title": ["type": "string", "minLength": 1, "maxLength": 120], "at": ["type": "string", "maxLength": 64],
                   "minutes": ["type": "integer", "minimum": 0, "maximum": 1439], "all_day": ["type": "boolean"]]),
@@ -238,7 +242,7 @@ public enum ChilkToolCatalog {
         switch name {
         case "chilk_schedule", "chilk_timers", "chilk_cancel_timer": .timers
         case "chilk_timer", "chilk_clock_open": .clock
-        case "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_plan": .reminders
+        case "chilk_reminder", "chilk_reminders", "chilk_reminder_change", "chilk_plan", "chilk_plan_show": .reminders
         case "chilk_event", "chilk_events", "chilk_event_change": .calendar
         case "chilk_note", "chilk_notes", "chilk_note_change": .notes
         default: nil
@@ -414,6 +418,11 @@ public enum ChilkToolCatalog {
                 items.append(PlanItem(title: title.trimmingCharacters(in: .whitespacesAndNewlines), time: time, guessed: guess))
             }
             return .plan(action, day: day, items: items)
+        case "chilk_plan_show":
+            guard Set(fields.keys) == ["day"], let text = fields["day"]?.string else { throw ToolError.invalidArguments }
+            if text.isEmpty { return .planShow(day: nil) }
+            guard let d = dateOnly(text) else { throw ToolError.invalidArguments }
+            return .planShow(day: d)
         case "chilk_event":
             guard Set(fields.keys) == ["title", "at", "minutes", "all_day"], let title = fields["title"]?.string,
                   validTitle(title, limit: 120), let text = fields["at"]?.string, let allDay = fields["all_day"]?.bool,

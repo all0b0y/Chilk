@@ -15,6 +15,9 @@ extension ChilkToolCatalog {
         }
         if let missing = names.first(where: { fields[$0] == nil }) { return "invalid_arguments: \(missing) — missing" }
         if name == "chilk_plan" { return planProblem(fields) ?? "invalid_arguments: a value is malformed or out of range" }
+        if name == "chilk_plan_show" {
+            return "invalid_arguments: day — a date like 2026-10-09, or empty for today"
+        }
         if let problem = actionProblem(name, fields) { return problem }
         for key in names {
             if let schema = props[key], let value = fields[key], let problem = problem(name, key, value, schema) {

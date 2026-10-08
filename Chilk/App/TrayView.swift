@@ -52,6 +52,10 @@ final class TrayModel {
     var play: (GameKind) -> Void = { _ in }
     /// «Открыть Чилка» → the main window on «Сегодня»; «Настройки» → on «Настройки» (slice 5c).
     var openMain: () -> Void = {}
+    /// Slice 9b (decision 9): «План: 2 из 5» — today's plan; a click opens «Лист дня».
+    struct PlanLine: Equatable { let done: Int; let total: Int }
+    var plan: PlanLine?
+    var openPlan: () -> Void = {}
     var openSettings: () -> Void = {}
     var reconnect: () -> Void = {}
     var restartEars: () -> Void = {}
@@ -104,6 +108,13 @@ struct TrayView: View {
             breaks
             focusRow
             if !model.timers.isEmpty { timers }
+            if let plan = model.plan {
+                Button { model.openPlan() } label: {
+                    Label(String(localized: "План: \(plan.done) из \(plan.total)"), systemImage: "checklist")
+                }
+                .buttonStyle(.borderless)
+                .font(.callout)
+            }
             if let problem = model.problem { problemLine(problem) }
             Divider()
             buttons

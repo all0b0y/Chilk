@@ -185,6 +185,12 @@ final class Actions {
             result = emote(call)
         } else if call.name == "chilk_plan" {
             result = await plan(call)
+        } else if call.name == "chilk_plan_show" {
+            if case .planShow(let day)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments) {
+                let d = day ?? Calendar.current.startOfDay(for: Date())
+                showPlan(d)
+                result = .ok(["shown": true, "day_text": .string(PlanDay.title(d, now: Date(), calendar: .current))])
+            } else { result = .failure(ChilkToolCatalog.explain(name: call.name, arguments: call.arguments)) }
         } else if ChilkFileToolExecutor.handles(call.name) {
             result = await files.execute(call)
         } else if ChilkReminderExecutor.handles(call.name) {
@@ -206,6 +212,9 @@ final class Actions {
 
     /// Slice 9b: the day plan being collected (set by the app).
     var planner: Planner?
+    /// Slice 9b (decision 16): «Лист дня» for a day — asked by voice, or after «Да» on a plan card (set by the app).
+    var showPlan: (Date) -> Void = { _ in }
+    var onPlanWritten: (Date) -> Void = { _ in }
 
     private func plan(_ call: CodexToolCall) async -> CodexToolResult {
         guard case .plan(let action, let day, let items)? = try? ChilkToolCatalog.parse(name: call.name, arguments: call.arguments)
@@ -393,6 +402,7 @@ final class Actions {
             let written = entries.count - failed.count
             let dayText = PlanDay.title(day, now: started, calendar: .current, accusative: true)
             let things = RussianPlural.form(written, String(localized: "дело"), String(localized: "дела"), String(localized: "дел"))
+            if written > 0 { onPlanWritten(day) }
             if failed.isEmpty {
                 result = .ok(["created": .number(Double(written))])
                 line = String(localized: "Готово: план на \(dayText) — \(written) \(things) в «Напоминаниях»")

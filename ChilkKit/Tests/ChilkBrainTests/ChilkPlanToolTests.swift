@@ -46,10 +46,19 @@ struct ChilkPlanToolTests {
         }
     }
 
+    @Test func showingThePlanTakesADayOrToday() throws {
+        #expect(try ChilkToolCatalog.parse(name: "chilk_plan_show", arguments: ["day": ""]) == .planShow(day: nil))
+        #expect(try ChilkToolCatalog.parse(name: "chilk_plan_show", arguments: ["day": "2026-10-09"])
+                == .planShow(day: ChilkToolCatalog.dateOnly("2026-10-09")!))
+        #expect(throws: ChilkToolCatalog.ToolError.self) { try ChilkToolCatalog.parse(name: "chilk_plan_show", arguments: ["day": "завтра"]) }
+        #expect(ChilkToolCatalog.explain(name: "chilk_plan_show", arguments: ["day": "завтра"])
+                == "invalid_arguments: day — a date like 2026-10-09, or empty for today")
+    }
+
     @Test func thePlanNeedsTheRemindersSwitch() {
         var off = ToolSwitches()
         off.set(.reminders, on: false)
-        #expect(!ChilkToolCatalog.tools(for: off).contains { $0.name == "chilk_plan" })
+        #expect(!ChilkToolCatalog.tools(for: off).contains { $0.name == "chilk_plan" || $0.name == "chilk_plan_show" })
         #expect(ChilkToolCatalog.tools(for: ToolSwitches()).contains { $0.name == "chilk_plan" })
         #expect(ChilkToolCatalog.switchedOff(name: "chilk_plan", arguments: [:], switches: off, kindOf: { _ in nil }) == .reminders)
     }

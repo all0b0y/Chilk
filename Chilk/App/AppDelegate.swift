@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Slice 8c: confirmation cards.
     private var cards: CardDesk?
     private var planner: Planner?
+    private var planBoard: PlanBoard?
+    private var daySheet: DaySheet?
     /// Slice 8d: timers in Apple's Clock.
     private var clock: ClockTimers?
     /// Slice 8a: «Я упал» waits for a free moment (after the greeting, not over a conversation or a game).
@@ -316,6 +318,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         chat.planCollecting = { [weak planner] in planner?.collecting(in: .chat) ?? false }
         chat.planSilence = { [weak planner] in planner?.silenceFinish() ?? false }
         self.planner = planner
+        // Slice 9b (decisions 9, 14, 16): today's plan for the popover, and «Лист дня».
+        let board = PlanBoard(reminders: actions.reminders, fake: ProcessInfo.processInfo.environment["CHILK_FAKE_REMINDERS"] != nil)
+        board.enabled = { switches.switches.isOn(.reminders) }
+        let sheet = DaySheet(reminders: actions.reminders)
+        sheet.chilkFrame = conversation.chilkFrame
+        sheet.log = { [weak balance] in balance?.log($0) }
+        sheet.onWrite = { [weak board] in board?.refresh() }
+        sheet.onTick = { [weak edge, weak cards] last in
+            // He reacts only when he is free at the edge (no bubble, no conversation, no card).
+            guard let edge, cards?.stageFree() == true else { return }
+            edge.sim.perform(last ? .cheer : .hops)
+        }
+        board.onChange.append { [weak sheet] in if sheet?.isOpen == true { sheet?.reload() } }
+        tray.planSummary = { [weak board] in board?.summary }
+        tray.openPlan = { [weak sheet] in sheet?.open(day: Calendar.current.startOfDay(for: Date())) }
+        actions.showPlan = { [weak sheet] day in sheet?.open(day: day) }
+        actions.onPlanWritten = { [weak sheet, weak board] day in
+            board?.refresh()
+            sheet?.open(day: day)                                  // decision 16: it opens by itself after «Да»
+        }
+        board.refresh()
+        self.planBoard = board
+        self.daySheet = sheet
+        // Acceptance only: CHILK_DEMO_PLAN_SHEET=/dir — tomorrow's sheet 4 s after launch, a tick, a snapshot.
+        if AppState.isolated != nil, let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_PLAN_SHEET"] {
+            Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak sheet] _ in
+                MainActor.assumeIsolated {
+                    let cal = Calendar.current
+                    sheet?.open(day: cal.date(byAdding: .day, value: 1, to: cal.startOfDay(for: Date()))!)
+                    Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak sheet] _ in
+                        MainActor.assumeIsolated {
+                            sheet?.snapshot(to: URL(fileURLWithPath: dir).appending(path: "sheet-1.png"))
+                            sheet?.demoTickFirst()
+                            Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { [weak sheet] _ in
+                                MainActor.assumeIsolated { sheet?.snapshot(to: URL(fileURLWithPath: dir).appending(path: "sheet-2.png")) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let chatFree = chat.chilkFree
         chat.chilkFree = { [weak cards] in !(cards?.ownsStage ?? false) && chatFree() }
         let trayFree = tray.isFree
@@ -539,6 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func closeWindows() {
         chat?.close()
         main?.close()
+        daySheet?.close()
     }
 
     // MARK: Right click on the tray icon (decision 5)

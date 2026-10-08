@@ -43,6 +43,9 @@ final class Tray: NSObject, NSPopoverDelegate {
     var openChat: () -> Void = {}
     /// «Открыть Чилка» / «Настройки» (slice 5c): the main window on «Сегодня» / «Настройки».
     var openMain: () -> Void = {}
+    /// Slice 9b: today's plan («План: 2 из 5») and «Лист дня».
+    var planSummary: () -> (done: Int, total: Int)? = { nil }
+    var openPlan: () -> Void = {}
     var openSettings: () -> Void = {}
     var log: (String) -> Void = { _ in }
     private var spaceObserver: NSObjectProtocol?
@@ -260,6 +263,8 @@ final class Tray: NSObject, NSPopoverDelegate {
             .map { TrayModel.TimerRow(id: $0.id, title: $0.title, deadline: $0.deadline) }
         if timers != model.timers { model.timers = Array(timers) }
         if balance.focusUntil != model.focusUntil { model.focusUntil = balance.focusUntil }
+        let plan = planSummary().map { TrayModel.PlanLine(done: $0.done, total: $0.total) }
+        if plan != model.plan { model.plan = plan }
         let problem: TrayModel.Problem? = switch brain.state {
         case .signedOut: .codexSignedOut
         case .failed(let why): .codexDown(why)
@@ -287,6 +292,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         model.login = { [weak self] in self?.closing { self?.brain.login() } }
         model.openChat = { [weak self] in self?.closing { self?.openChat() } }
         model.openMain = { [weak self] in self?.closing { self?.openMain() } }
+        model.openPlan = { [weak self] in self?.closing { self?.openPlan() } }
         model.openSettings = { [weak self] in self?.closing { self?.openSettings() } }
         model.reconnect = { [weak self] in
             guard let brain = self?.brain else { return }
