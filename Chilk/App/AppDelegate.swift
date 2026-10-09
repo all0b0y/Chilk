@@ -518,6 +518,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         game.whyBusy = { [weak cards] in gameWhy() + ((cards?.hasCard ?? false) ? ["card"] : []) }   // decision: no game over a card
         let hop = edge.hopBusy
         edge.hopBusy = { [weak cards] in (cards?.ownsStage ?? false) || hop() }
+        // Slice 10 (SPEC «Срез 10», decisions 15–17): what he is doing keeps him awake, not the user's input alone — a
+        // conversation is the user being here; an exercise (not a walk), a game, the greeting, a bubble of his that asks
+        // or an act are his deed; a card or a timed notice is a wait without a time limit (ten minutes).
+        presence.deed = { [weak conversation, weak balance, weak game, weak greeting, weak chat, weak cards, weak actions,
+                           weak notices, weak edge] in
+            if conversation?.isActive ?? false { return .talking }
+            if (balance?.deedNow ?? false) || (game?.holdsChilk ?? false) || (greeting?.isActive ?? false)
+                || (chat?.thinking ?? false) || edge?.sim.act != nil { return .busy }
+            if (cards?.hasCard ?? false) || (actions?.ownsStage ?? false) || (notices?.ownsStage ?? false) { return .waiting }
+            return .none
+        }
+        presence.quietReturn = { [weak cards, weak balance] in !(cards?.stageFree() ?? true) || (balance?.guiding ?? false) }
+        presence.log = { [weak balance] in balance?.log($0) }
 
         // Bubble buttons: a conversation's own («Подробнее», «Да / Нет», a card in its bubble), the greeting's,
         // basketball's, a card's at the edge, then the balance's.

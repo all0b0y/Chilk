@@ -121,6 +121,19 @@ final class BalanceController {
     var isOccupiedApartFromRequest: Bool {
         activity != nil || walking || guidedRun != nil || engine.slumped || stageThreeOrMore
     }
+    /// Slice 10 (SPEC «Срез 10», decisions 15–16): he leads something or a bubble of his waits for an answer — the
+    /// presence monitor keeps him awake. Not a walk (at the edge or «со мной» he naps in his hat while you walk) and not
+    /// the night's «Сон» (its requests and its pause let him sleep as before).
+    var deedNow: Bool {
+        if let run = guidedRun { return run.kind != .walk }
+        if activity != nil { return true }                                  // the eye gym, breathing, «Встряхнуться»
+        let night = engine.state.episode?.need == .sleep
+        if !buttonActions.isEmpty, !night { return true }                   // a request, «Помоги мне…», «Через сколько?»
+        if let e = engine.state.episode, !night, e.phase == .showing, e.stage >= 3 { return true }   // dimming, the pause
+        return false
+    }
+    /// A guided break holds the stage (the walk «со мной»: the user back mid-walk wakes him without a greeting).
+    var guiding: Bool { guidedRun != nil }
     /// The engine clock of the latest counted rest of any need: «Доиграем?» waits for a newer one.
     var lastRestMark: TimeInterval { engine.state.needs.values.compactMap(\.lastCredit).max() ?? -1 }
 
@@ -1176,6 +1189,8 @@ final class BalanceController {
     }
 
     private func backFromAway() {
+        // Slice 10 (decision 16): back mid-walk «со мной» — he wakes up, the walk and its props go on.
+        guard guidedRun == nil else { return }
         if walking || engine.state.episode == nil {
             walking = false                                    // «ликует» only for a credited walk (`.credited`)
             tidyProps()
