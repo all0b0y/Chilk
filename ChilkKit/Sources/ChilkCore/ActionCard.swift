@@ -447,7 +447,21 @@ extension CardAnswer {
         text.lowercased().replacingOccurrences(of: "ё", with: "е").split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
-    /// The user's words agree with the card on screen — a yes word or an assent verb among any others, no «нет» or
+    /// Tech-debt pass 2026-10-09 (Д1): what may stand next to the agreement besides the card's pointers and politeness.
+    /// Any other word is another topic («давай про погоду», «сегодня солнечно»), and Codex said «yes» to those too.
+    private static let agreeCompany: Set<String> = ["же", "уже", "и", "прям", "прямо", "совсем", "совершенно", "абсолютно",
+                                                    "полностью", "конечно", "разумеется", "большое"]
+    /// Review of the pass: these answer HIS question as well («да, сделал» to «ты сделал перерыв?», «да, мне нормально»,
+    /// «да, круто») — only next to a word about the card itself («правильно», «подтверждаю»…), as in the incident.
+    private static let agreeCompanyWithCard: Set<String> = ["мы", "он", "она", "оно", "мне", "меня", "нам", "нас", "молодец",
+                                                            "супер", "класс", "круто", "норм", "нормально", "здорово",
+                                                            "сделал", "сделала", "сделано", "готово"]
+    /// Review of the pass: what may stand next to a refusal — «нет, давай про погоду» answers his question, not the card.
+    private static let declineCompany: Set<String> = ["такое", "такого", "этого", "так", "уже", "же", "пока", "про", "вообще",
+                                                      "совсем", "ничего", "никак"]
+
+    /// The user's words agree with the card on screen — a yes word or an assent verb, and besides it only words that
+    /// point at the card or are polite (tech-debt pass, Д1: «давай про погоду» is another topic, not a yes); no «нет» or
     /// «не», no change word, no question — nor a question word, «ты / вы», a time or a number (review 10e: dictation
     /// drops «?»; «да, давай в 11» is a change). Looser than `parse` («Да всё я подтверждаю все правильно это сделал»): only
     /// Codex's `chilk_card_answer` asks, and the app writes the card exactly as shown.
@@ -456,16 +470,30 @@ extension CardAnswer {
         let words = tokens(text)
         if words.contains(where: { noWords.contains($0) || $0 == "не" || changeWords.contains($0) || askWords.contains($0)
                                    || timeWords.contains($0) || $0.contains(where: \.isNumber) }) { return false }
-        return words.contains { agreeWords.contains($0) || isYes($0) }
+        guard words.contains(where: { agreeWords.contains($0) || isYes($0) }) else { return false }
+        let aboutCard = words.contains { agreeWords.contains($0) }
+        return words.allSatisfy { agreeWords.contains($0) || isYes($0) || neutral.contains($0) || pointers.contains($0)
+                                  || agreeCompany.contains($0) || (aboutCard && agreeCompanyWithCard.contains($0)) }
     }
+
+    /// Tech-debt pass (Д1): the words can answer the card at all (`agrees` or `declines`). Otherwise Codex is told not to
+    /// call `chilk_card_answer`: the app would refuse it anyway, and every such call cost the turn 2–3 s.
+    public static func mayAnswer(_ text: String) -> Bool { agrees(text) || declines(text) }
 
     /// The user's words refuse the card — a «нет» word or «не надо / не ставь…», no change word, no question.
     public static func declines(_ text: String) -> Bool {
         guard !text.contains("?") else { return false }
         let words = tokens(text)
         if words.contains(where: { changeWords.contains($0) }) { return false }
-        return words.contains { noWords.contains($0) }
+        let refuses = words.contains { noWords.contains($0) }
             || zip(words, words.dropFirst()).contains { $0 == "не" && (afterNot.contains($1) || isYes($1, deleting: true)) }
+        guard refuses else { return false }
+        // Review of the tech-debt pass: besides the refusal only the card, politeness and a few softeners.
+        return words.indices.allSatisfy { i in
+            let w = words[i]
+            return noWords.contains(w) || w == "не" || afterNot.contains(w) || neutral.contains(w) || pointers.contains(w)
+                || declineCompany.contains(w) || (i > 0 && words[i - 1] == "не" && isYes(w, deleting: true))
+        }
     }
 }
 
@@ -487,8 +515,10 @@ public enum CardModelAnswer: String, Equatable, Sendable {
         guard sameCard else { return .newCard }
         if words.contains("?") { return .question }
         guard yes else { return CardAnswer.declines(words) ? .decline : .notAgreed }
+        // A card that deletes is the user's own «да» or its button whatever the words (tech-debt pass 2026-10-09: «да, всё
+        // верно, сноси» is not in `agrees`' list any more, and Codex must still hear «ask for «да»», not «no answer»).
+        if deleting, !CardAnswer.declines(words) { return .deleteNeedsUser }
         guard CardAnswer.agrees(words) else { return .notAgreed }
-        if deleting { return .deleteNeedsUser }
         return expired ? .expired : .confirm
     }
 

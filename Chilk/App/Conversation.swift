@@ -1,4 +1,5 @@
 import AppKit
+import ChilkBrain
 import ChilkCore
 import ChilkEars
 
@@ -141,6 +142,9 @@ final class Conversation {
     private var lastHeardVersion = 0, lastAnswerVersion = 0
     private var dots = 0
     private var turns = 0
+    /// Acceptance (isolated state only, CHILK_DEMO_CUT=1): the first listening that hears words counts as cut (Д2).
+    private var demoCut = StateDir.isolated(in: ProcessInfo.processInfo.environment) != nil
+        && ProcessInfo.processInfo.environment["CHILK_DEMO_CUT"] == "1"
     /// CHILK_EARS_FILE=a.wav:b.wav — «hear» recordings instead of the microphone, one per listening (demo / acceptance).
     private var earsFiles = ProcessInfo.processInfo.environment["CHILK_EARS_FILE"]?
         .split(separator: ":").map { URL(fileURLWithPath: String($0)) }
@@ -514,6 +518,21 @@ final class Conversation {
         let heard = self.heard
         let stripWake = stripWakeAddress
         let heardInCheck = self.heardInCheck
+        // Tech-debt pass 2026-10-09 (Д2): why the listening ended, without the words. A voice after the last word that the
+        // dictation wrote nothing for means the words may be cut (live: «Да, но в одиннадцать» came as «Да»).
+        var cut = false
+        if dictation != nil {
+            cut = detector.cutShort
+            if demoCut, cardSeen != nil, !detector.text.isEmpty {
+                cut = true
+                demoCut = false
+                log("demo: this listening counts as cut")
+            }
+            let words = detector.text.split(separator: " ").count
+            log(String(format: "listening ended after %.1f s: %d word(s)%@", now - detector.started, words,
+                       cut ? ", a voice after the last word without words — may be cut" : ""))
+        }
+        let mayBeCut = cut
         ears.stopListening()
         earsTask?.cancel()
         answerTask = Task {
@@ -532,10 +551,19 @@ final class Conversation {
             // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
             if let cards, let seen = cardSeen, cards.current?.id == seen {
                 let line: String?
-                switch cards.answer(question, source: .voice) {
+                switch cards.answer(question, source: .voice, cut: mayBeCut) {
                 case .confirming: line = String(localized: "Делаю…")
                 case .declined(let l), .expired(let l): line = l
                 case .correction: line = nil
+                case .unclear(let l):
+                    // Tech-debt pass (Д2): his ears heard more than the words — he asks again, the card waits, and he
+                    // listens the card's minute for «да» once more.
+                    onTurn?(question, l, brain.liveThread ?? "")
+                    phase = .answering
+                    sim.stopAct()
+                    showReply(l)
+                    cardWindow = true
+                    return listen(window: Dialogue.cardAnswerWindow)
                 }
                 if let line {
                     log("card answered by voice")

@@ -45,6 +45,9 @@ final class CardDesk {
     /// Slice 10 (decision 19): the turn in flight while a card is up — the user's words, where they came from, the card
     /// on screen and the proposals count when it began (Codex may answer only that card, only on these words).
     private var turn: (words: String, source: Source, card: UUID, proposals: Int)?
+    /// Cards he already asked again on a «да» that may be cut (tech-debt pass, Д2): once per card — a TV or a second voice
+    /// must not lock the card against the voice for good.
+    private var askedAgain: Set<UUID> = []
 
     var log: (String) -> Void = { _ in }
     /// The stage is free (no conversation, notice, request, popover, game, greeting, bubble…): a result line may show.
@@ -177,13 +180,20 @@ final class CardDesk {
     /// [контекст] for a correction turn: what the card on screen says.
     func context() -> String? {
         guard let card = current else { return nil }
+        // Tech-debt pass 2026-10-09 (Д1): Codex called chilk_card_answer on nearly every turn while a card was up («задай
+        // мне вопрос про погоду», «сегодня солнечно»); the app refused each, and each cost the turn 2–3 s. Words that can
+        // neither agree nor refuse are told so.
+        let answers: Bool = turn.map { CardAnswer.mayAnswer($0.words) } ?? false
+        let how: String = answers
+            ? "Пользователь с ней ясно соглашается («да, всё верно», «подтверждаю») — chilk_card_answer yes, отказывается — no. "
+            : "В словах этого хода нет ясного согласия или отказа — chilk_card_answer не вызывай и о карточке не "
+                + "напоминай; только если слова похожи на согласие с ней — попроси сказать «да» или нажать «Да». "
+        let summary: String = card.summary()
         if case .plan = card.kind {
-            return "на экране карточка плана: \(card.summary()). Пользователь с ней ясно соглашается («да, всё верно») — "
-                + "chilk_card_answer yes, отказывается — no. Поправляет — вызови chilk_plan с action finish, тем же днём и ВСЕМ "
-                + "исправленным списком (новая карточка заменит эту); если просит другое — делай другое"
+            return "на экране карточка плана: \(summary). \(how)Поправляет — вызови chilk_plan с action finish, тем же днём "
+                + "и ВСЕМ исправленным списком (новая карточка заменит эту); если просит другое — делай другое"
         }
-        return "на экране карточка подтверждения: \(card.summary()). Пользователь с ней ясно соглашается («да, всё верно», "
-            + "«подтверждаю») — chilk_card_answer yes, отказывается — no. Поправляет — вызови тот же инструмент заново с "
+        return "на экране карточка подтверждения: \(summary). \(how)Поправляет — вызови тот же инструмент заново с "
             + "исправленными значениями (новая карточка заменит эту); если просит другое — делай другое"
     }
 
@@ -227,13 +237,25 @@ final class CardDesk {
 
     // MARK: Answers
 
-    enum Spoken: Equatable { case confirming, declined(String), expired(String), correction }
+    enum Spoken: Equatable { case confirming, declined(String), expired(String), correction, unclear(String) }
 
     /// A spoken or typed answer while the card is up. `.correction`: the caller sends the words to Codex with
     /// `context()`.
-    func answer(_ words: String, source: Source) -> Spoken {
+    /// `cut`: the ears heard more after the last word than the dictation wrote (tech-debt pass, Д2).
+    func answer(_ words: String, source: Source, cut: Bool = false) -> Spoken {
         guard let card = current else { return .correction }
-        switch CardAnswer.parse(words, deleting: card.deletes) {
+        let parsed = CardAnswer.parse(words, deleting: card.deletes)
+        // Tech-debt pass 2026-10-09 (Д2): live, «Да, но в одиннадцать» came as «Да» and wrote the card at 10:00. An
+        // agreement that may be cut is no «да»: he asks again and listens the card's minute once more; the card waits.
+        if cut, parsed == .yes || CardAnswer.agrees(words) {
+            if !askedAgain.contains(card.id) {
+                askedAgain.insert(card.id)
+                log("card: the «да» may be cut (a voice after the last word) — asking again (\(source.rawValue))")
+                return .unclear(String(localized: "Не расслышал до конца. Скажи «да» — или что поменять"))
+            }
+            log("card: a «да» that may be cut again — counted (asked once already)")
+        }
+        switch parsed {
         case .yes:
             guard !card.expired(now: Date()) else { return .expired(String(localized: "Это время уже прошло — скажи другое")) }
             confirm(source: source)

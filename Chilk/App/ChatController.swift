@@ -210,6 +210,7 @@ final class ChatController: NSObject, NSWindowDelegate {
             case .confirming: confirmingWords[card.id] = text; return ""
             case .declined(let l), .expired(let l): return l
             case .correction: return nil
+            case .unclear(let l): return l             // voice only (tech-debt pass, Д2): typed words are never cut
             }
         }() {
             // Decision 4: a typed «да» is an answer too — no Codex turn.

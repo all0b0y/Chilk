@@ -56,6 +56,15 @@ public struct EndOfSpeech: Sendable, Equatable {
         voiceWithoutWords || Self.endsUnfinished(text) ? pauseWhenUnfinished : pauseAfterSpeech
     }
 
+    /// Tech-debt pass 2026-10-09 (Д2): the microphone heard a voice after the last word and the dictation wrote nothing
+    /// for it — the words may be cut. Live, Apple's dictation sometimes finalises «Да» and drops «…но в одиннадцать».
+    /// Review of the pass: at least 0.8 s of voice after the last word — a drawn-out «да-а», a breath or «м-м» is not cut.
+    public var cutShort: Bool {
+        guard voiceWithoutWords, let voice = lastVoice, let last = lastChange, !text.isEmpty else { return false }
+        return voice - last >= Self.cutVoice
+    }
+    public static let cutVoice: TimeInterval = 0.8
+
     public func verdict(at t: TimeInterval) -> Verdict {
         if t - started >= maxDuration { return text.isEmpty ? .nothingHeard : .tooLong }
         guard let last = lastChange, !text.isEmpty else {
