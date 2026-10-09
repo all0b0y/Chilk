@@ -11,6 +11,9 @@ final class Conversation {
     private(set) var phase: DialoguePhase = .idle
     /// Busy until he is back at the edge (including the farewell being read).
     var isActive: Bool { phase != .idle || closing }
+    /// Slice 10 (review 10d): the user speaks in it (called him, or his words came in a follow-up) — that is the user
+    /// being here. His own minute for «да» or the plan offer is only his deed: it does not wake him as «back».
+    var userSpeaks: Bool { phase == .listening || phase == .thinking || phase == .answering }
     /// A Codex emotion of this turn waits for the words (6c, revised at acceptance): taken once the reply shows.
     var takeEmote: () -> QueuedEmote? = { nil }
     var playEmote: (Emotion, Bool) -> Void = { _, _ in }

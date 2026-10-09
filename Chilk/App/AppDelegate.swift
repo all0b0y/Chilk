@@ -519,17 +519,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hop = edge.hopBusy
         edge.hopBusy = { [weak cards] in (cards?.ownsStage ?? false) || hop() }
         // Slice 10 (SPEC «Срез 10», decisions 15–17): what he is doing keeps him awake, not the user's input alone — a
-        // conversation is the user being here; an exercise (not a walk), a game, the greeting, a bubble of his that asks
-        // or an act are his deed; a card or a timed notice is a wait without a time limit (ten minutes).
+        // conversation the user speaks in is the user being here; one he only listens in (the minute for «да», the plan
+        // offer), an exercise (not a walk), chat thinking or an act are his deed; a game waiting for your move, the
+        // greeting, a card or a timed notice are a wait without a time limit — ten minutes (review 10d: an open game
+        // kept him up all night).
         presence.deed = { [weak conversation, weak balance, weak game, weak greeting, weak chat, weak cards, weak actions,
                            weak notices, weak edge] in
-            if conversation?.isActive ?? false { return .talking }
-            if (balance?.deedNow ?? false) || (game?.holdsChilk ?? false) || (greeting?.isActive ?? false)
-                || (chat?.thinking ?? false) || edge?.sim.act != nil { return .busy }
-            if (cards?.hasCard ?? false) || (actions?.ownsStage ?? false) || (notices?.ownsStage ?? false) { return .waiting }
+            if let conversation, conversation.isActive { return conversation.userSpeaks ? .talking : .busy }
+            if (balance?.deedNow ?? false) || (chat?.thinking ?? false) || edge?.sim.act != nil { return .busy }
+            if (game?.holdsChilk ?? false) || (greeting?.isActive ?? false) || (cards?.hasCard ?? false)
+                || (actions?.ownsStage ?? false) || (notices?.ownsStage ?? false) { return .waiting }
             return .none
         }
-        presence.quietReturn = { [weak cards, weak balance] in !(cards?.stageFree() ?? true) || (balance?.guiding ?? false) }
+        // Review 10d: back while another bubble holds the stage — the greeting waits for it (at most 5 min); the user
+        // already talking or the walk «со мной» (its end says «Как прогулка?») — no greeting.
+        presence.returnStage = { [weak conversation, weak cards, weak balance] in
+            if (conversation?.isActive ?? false) || (balance?.guiding ?? false) { return .never }
+            return (cards?.stageFree() ?? false) ? .free : .later
+        }
         presence.log = { [weak balance] in balance?.log($0) }
 
         // Bubble buttons: a conversation's own («Подробнее», «Да / Нет», a card in its bubble), the greeting's,
