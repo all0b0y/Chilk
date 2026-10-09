@@ -303,7 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.onNudge = { [weak tray] in tray?.nudge() }
         actions.onDue = { [weak tray] in tray?.nudge() }
 
-        // Slice 8c: confirmation cards — after a conversation, a due notice or a request, the card comes back.
+        // Slice 8c: confirmation cards; slice 10 (decision 18): pinned over his bubble until answered.
         let cards = CardDesk(sim: edge.sim)
         cards.log = { [weak balance] in balance?.log($0) }
         cards.chilkFrame = conversation.chilkFrame
@@ -324,8 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.clock = clock
         self.clock = clock
         clock.checkAtLaunch()
-        cards.onLeftConversation = { [weak conversation] in conversation?.cardLeft() }
-        cards.onShownAgain = { [weak conversation] in conversation?.awaitCardAnswer() }
+        cards.onListenAgain = { [weak conversation] in conversation?.awaitCardAnswer() }
         cards.onSettled = { [weak conversation] in conversation?.cardSettledElsewhere() }
         if let dir = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_SNAPSHOT"].map({ URL(fileURLWithPath: $0) }) {
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -424,7 +423,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let notices = PlanNotices(sim: edge.sim, reminders: actions.reminders, board: board)
         notices.log = { [weak balance] in balance?.log($0) }
         let cardsFree = cards.stageFree
-        notices.stageFree = { [weak cards] in cardsFree() && !(cards?.hasCard ?? true) }
+        // Slice 10 (decision 18): the morning summary, the review and the offers go into the bubble under a pinned card.
+        notices.stageFree = { cardsFree() }
         notices.conversationActive = { [weak conversation, weak tray, weak greeting] in
             (conversation?.isActive ?? false) || (tray?.holdsChilk ?? false) || (greeting?.isActive ?? false)
         }
@@ -470,7 +470,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         balance.isBusy = { [weak notices] in balanceBusy() || (notices?.ownsStage ?? false) }
         cards.stageFree = { [weak notices] in cardsFree() && !(notices?.ownsStage ?? false) }
         let ended = conversation.onEnd
-        conversation.onEnd = { [weak notices] in ended?(); notices?.conversationEnded() }
+        conversation.onEnd = { [weak notices, weak cards] in ended?(); notices?.conversationEnded(); cards?.conversationEnded() }
         self.planNotices = notices
         // Acceptance only: CHILK_DEMO_PLAN_MORNING=<s> — the morning summary now; CHILK_DEMO_PLAN_EVENING=<s> — «Конец
         // дня» fired; CHILK_DEMO_PLAN_OFFER=<s> — the offer for tomorrow at the edge; CHILK_DEMO_PLAN_PRESS=<s> — the first
@@ -508,16 +508,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        let chatFree = chat.chilkFree
-        chat.chilkFree = { [weak cards] in !(cards?.ownsStage ?? false) && chatFree() }
-        let trayFree = tray.isFree
-        tray.isFree = { [weak cards] in !(cards?.ownsStage ?? false) && trayFree() }
-        let greetingCan = greeting.canPresent
-        greeting.canPresent = { [weak cards] in !(cards?.ownsStage ?? false) && greetingCan() }
+        // Slice 10 (decision 18): a pinned card does not hold the stage — the chat's lines, the popover and the greeting
+        // go on under it (it waits while he is in the popover); no game and no hop to another screen while it is up.
         let gameWhy = game.whyBusy
         game.whyBusy = { [weak cards] in gameWhy() + ((cards?.hasCard ?? false) ? ["card"] : []) }   // decision: no game over a card
         let hop = edge.hopBusy
-        edge.hopBusy = { [weak cards] in (cards?.ownsStage ?? false) || hop() }
+        edge.hopBusy = { [weak cards] in (cards?.pinned ?? false) || hop() }
         // Slice 10 (SPEC «Срез 10», decisions 15–17): what he is doing keeps him awake, not the user's input alone — a
         // conversation the user speaks in is the user being here; one he only listens in (the minute for «да», the plan
         // offer), an exercise (not a walk), chat thinking or an act are his deed; a game waiting for your move, the
@@ -539,15 +535,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         presence.log = { [weak balance] in balance?.log($0) }
 
-        // Bubble buttons: a conversation's own («Подробнее», «Да / Нет», a card in its bubble), the greeting's,
-        // basketball's, a card's at the edge, then the balance's.
+        // Buttons: the pinned card's (slice 10, decision 18: their own indexes), then the bubble's — a conversation's own
+        // («Подробнее», «Да / Нет» of a tool's question), the greeting's, basketball's, the notices', the balance's.
         let balanceButton = edge.onButton
         edge.onButton = { [weak conversation, weak greeting, weak game, weak cards, weak notices] i in
+            if i >= EdgeController.cardButtonBase { cards?.pressedPinned(i - EdgeController.cardButtonBase); return }
             if conversation?.pressedButton(i) == true { return }
             if greeting?.pressedButton(i) == true { return }
             if game?.pressedButton(i) == true { return }             // 7b: basketball's own bubbles
             if notices?.pressedButton(i) == true { return }          // 9b: «Подвести», «Давай» / «Не надо»
-            if cards?.pressed(i, source: .edge) == true { return }   // 8c
             balanceButton?(i)
         }
         ears.onWake = { [weak conversation] in conversation?.wake() }

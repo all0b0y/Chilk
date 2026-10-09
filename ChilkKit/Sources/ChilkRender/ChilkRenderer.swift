@@ -45,6 +45,7 @@ public enum ChilkRenderer {
                                  transform: mirror.translatedBy(x: p.x - m.radiusX * 1.55, y: m.ground), alpha: 1))
         }
         if let text = p.bubble, !text.isEmpty { bubblePlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: text) }
+        if let card = p.card, !card.isEmpty { cardPlacements(into: &out, pose: p, metrics: m, mirrored: mirrored, text: card) }
         return out
     }
 
@@ -407,17 +408,76 @@ public enum ChilkRenderer {
     }
 
     /// Where the bubble's buttons are this frame (scene coordinates, already mirrored) — for hit testing.
-    /// Only buttons that have (almost) finished appearing are clickable.
+    /// Only buttons that have (almost) finished appearing are clickable. The pinned card's buttons come with
+    /// `cardButtonBase + i` (slice 10, decision 18): a press on them never reaches the owner of the bubble under it.
     public static func buttonRects(pose: CharacterPose, metrics m: Metrics, mirrored: Bool) -> [(index: Int, rect: CGRect)] {
-        guard let text = pose.bubble, !text.isEmpty, !pose.buttons.isEmpty else { return [] }
         var plan: [Placement] = []
-        bubblePlacements(into: &plan, pose: pose, metrics: m, mirrored: mirrored, text: text)
+        if let text = pose.bubble, !text.isEmpty, !pose.buttons.isEmpty {
+            bubblePlacements(into: &plan, pose: pose, metrics: m, mirrored: mirrored, text: text)
+        }
+        if let card = pose.card, !card.isEmpty, !pose.cardButtons.isEmpty {
+            cardPlacements(into: &plan, pose: pose, metrics: m, mirrored: mirrored, text: card)
+        }
         return plan.compactMap { pl in
             guard pl.alpha > 0.5, case .button(let title, _) = pl.part else { return nil }
             let rect = CGRect(x: 0, y: 0, width: Props.buttonWidth(title), height: Props.buttonHeight).applying(pl.transform)
-            return (pl.slot - Slot.button, rect)
+            let index = pl.slot >= Slot.cardButton ? cardButtonBase + pl.slot - Slot.cardButton : pl.slot - Slot.button
+            return (index, rect)
         }
     }
+
+    /// Slice 10 (decision 18): button indexes of the pinned card start here (the bubble's are 0…).
+    public static let cardButtonBase = 100
+
+    /// Slice 10 (SPEC «Срез 10», decision 18): the confirmation card pinned over his bubble until it is answered. The same
+    /// width and right edge as the bubble (beside him on the screen side, never over him); its bottom is just above where
+    /// the bubble's top is — or would be when none shows — so it never jumps when a bubble comes and goes under it, and a
+    /// tall bubble rising from the floor pushes it up. Alone, its tail points at him.
+    static func cardPlacements(into out: inout [Placement], pose p: CharacterPose, metrics m: Metrics,
+                               mirrored: Bool, text: String) {
+        let appear = clamp(p.cardAge / 0.3)
+        let vanish = clamp(p.cardRemaining / 0.3)
+        let scale = min(easeOutBack(appear), 1.08) * vanish
+        guard scale > 0 else { return }
+
+        let layout = BubbleLayout.of(text, buttons: p.cardButtons, maxTextWidth: m.width - 20 - 28)
+        let cw = layout.width, ch = layout.height
+        let alone = p.bubble?.isEmpty ?? true
+        let under = alone ? BubbleLayout.of("·", maxTextWidth: m.width - 20 - 28)
+                          : BubbleLayout.of(p.bubble ?? "", buttons: p.buttons, maxTextWidth: m.width - 20 - 28)
+        let slot = bubbleSide(pose: p, metrics: m, width: under.width, height: under.height)
+        let own = bubbleSide(pose: p, metrics: m, width: cw, height: ch)
+        var cx = own.x
+        let cy = slot.y - cardGap - ch
+        var tailX = cx + cw
+        let tailY = cy + ch - 18
+        var dir = 1.0
+        if mirrored { cx = m.width - cx - cw; tailX = m.width - tailX; dir = -1 }
+
+        let pop = CGAffineTransform(translationX: tailX, y: tailY).scaledBy(x: scale, y: scale).translatedBy(x: -tailX, y: -tailY)
+        let a = clamp(scale)
+        out.append(Placement(slot: Slot.cardBox, part: .bubbleBox(width: cw, height: ch), transform: pop.translatedBy(x: cx, y: cy), alpha: a))
+        out.append(Placement(slot: Slot.cardStroke, part: .bubbleStroke(width: cw, height: ch), transform: pop.translatedBy(x: cx, y: cy), alpha: a))
+        if alone {
+            out.append(Placement(slot: Slot.cardTail, part: .bubbleTail, transform: pop.translatedBy(x: tailX, y: tailY).scaledBy(x: dir, y: 1), alpha: a))
+        }
+        for (index, word) in layout.words.enumerated() {
+            let wa = clamp((p.cardAge - 0.15 - Double(index) * 0.02) / 0.2)
+            guard wa * a > 0.002 else { continue }
+            let t = pop.translatedBy(x: cx + 14 + word.x, y: cy + 24 + Double(word.row) * BubbleLayout.rowHeight + (1 - wa) * 6)
+            out.append(Placement(slot: Slot.cardWord + index, part: .word(word.text), transform: t, alpha: wa * a))
+        }
+        for (i, b) in layout.buttons.enumerated() {
+            let ba = clamp((p.cardAge - 0.3 - Double(i) * 0.06) / 0.2)
+            guard ba * a > 0.002 else { continue }
+            let t = pop.translatedBy(x: cx + 14 + b.x, y: cy + b.y + (1 - ba) * 4)
+            let hovered = p.hoveredButton == cardButtonBase + i
+            out.append(Placement(slot: Slot.cardButton + i, part: .button(title: b.title, hovered: hovered), transform: t, alpha: ba * a))
+        }
+    }
+
+    /// Between the pinned card and the bubble under it.
+    public static let cardGap = 10.0
 
     // MARK: Vector rendering
 

@@ -147,6 +147,12 @@ public enum Slot {
     public static let bubbleTail = 67      // slice 10: over the outline — the tail is on the bubble's side now
     public static let button = 68       // +index
     public static let word = 80         // +index
+    // Slice 10 (decision 18): the pinned confirmation card — its own layers, far past any bubble's words.
+    public static let cardBox = 1000
+    public static let cardStroke = 1001
+    public static let cardTail = 1002
+    public static let cardButton = 1003 // +index
+    public static let cardWord = 1020   // +index
 }
 
 // MARK: - Geometry and drawing of single parts (part-local, y-down)

@@ -422,3 +422,74 @@ public struct CardQueue: Equatable, Sendable {
         if let i = cards.firstIndex(where: { $0.id == id }) { cards[i] = card }
     }
 }
+
+// MARK: - Slice 10: Codex answers the card for the user (decision 19)
+
+extension CardAnswer {
+    /// Slice 10 (SPEC «Срез 10», decision 19): a change, not an answer («да, но в 11», «давай лучше завтра»).
+    private static let changeWords: Set<String> = ["но", "однако", "только", "лучше", "вместо", "кроме", "поменяй",
+                                                   "измени", "исправь", "поправь"]
+    /// Agreement words `parse` does not take alone (the model points at the card with them).
+    private static let agreeWords: Set<String> = ["правильно", "верно", "подтверждаю", "согласен", "согласна", "отлично",
+                                                  "подходит", "годится", "устраивает", "пойдет"]
+
+    private static func tokens(_ text: String) -> [String] {
+        text.lowercased().replacingOccurrences(of: "ё", with: "е").split { !$0.isLetter && !$0.isNumber }.map(String.init)
+    }
+
+    /// The user's words agree with the card on screen — a yes word or an assent verb among any others, no «нет» or
+    /// «не», no change word, no question. Looser than `parse` («Да всё я подтверждаю все правильно это сделал»): only
+    /// Codex's `chilk_card_answer` asks, and the app writes the card exactly as shown.
+    public static func agrees(_ text: String) -> Bool {
+        guard !text.contains("?") else { return false }
+        let words = tokens(text)
+        if words.contains(where: { noWords.contains($0) || $0 == "не" || changeWords.contains($0) }) { return false }
+        return words.contains { agreeWords.contains($0) || isYes($0) }
+    }
+
+    /// The user's words refuse the card — a «нет» word or «не надо / не ставь…», no change word, no question.
+    public static func declines(_ text: String) -> Bool {
+        guard !text.contains("?") else { return false }
+        let words = tokens(text)
+        if words.contains(where: { changeWords.contains($0) }) { return false }
+        return words.contains { noWords.contains($0) }
+            || zip(words, words.dropFirst()).contains { $0 == "не" && (afterNot.contains($1) || isYes($1, deleting: true)) }
+    }
+}
+
+/// Slice 10 (SPEC «Срез 10», decision 19): Codex may answer the card on screen for the user (`chilk_card_answer`); the
+/// app decides whether it counts — only on the user's own words of this turn (agreeing or refusing, asking nothing),
+/// only the card that was up when the turn began (never one proposed in it), never «yes» to a deletion.
+public enum CardModelAnswer: String, Equatable, Sendable {
+    case confirm, decline
+    case noCard = "no_card", notAgreed = "not_agreed", newCard = "new_card", question, expired
+    case deleteNeedsUser = "delete_needs_user"
+
+    /// - Parameters:
+    ///   - words: what the user said or typed in this turn while the card was up (nil — no such turn).
+    ///   - sameCard: the card on screen is the one that was up when the turn began, and nothing was proposed since.
+    public static func judge(yes: Bool, words: String?, cardUp: Bool, sameCard: Bool, deleting: Bool,
+                             expired: Bool) -> CardModelAnswer {
+        guard cardUp else { return .noCard }
+        guard let words else { return .notAgreed }
+        guard sameCard else { return .newCard }
+        if words.contains("?") { return .question }
+        guard yes else { return CardAnswer.declines(words) ? .decline : .notAgreed }
+        guard CardAnswer.agrees(words) else { return .notAgreed }
+        if deleting { return .deleteNeedsUser }
+        return expired ? .expired : .confirm
+    }
+
+    /// For Codex: what to say when it does not count.
+    public var explanation: String {
+        switch self {
+        case .confirm, .decline: "done — the app says the result; one short line"
+        case .noCard: "no card is on screen; nothing was done"
+        case .notAgreed: "the user's words do not answer the card — ask them to say «да» or press «Да», or do what they asked"
+        case .newCard: "the card on screen was proposed in this turn: only the user confirms it («Проверь карточку»)"
+        case .question: "the user asked a question — answer it; the card waits"
+        case .expired: "the time on the card has passed — ask for another time"
+        case .deleteNeedsUser: "a card that deletes is confirmed only by the user's own «да» or its button — ask for it"
+        }
+    }
+}

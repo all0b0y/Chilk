@@ -197,6 +197,8 @@ final class Actions {
         } else if ChilkReminderExecutor.proposes(call.name) || ChilkCalendarExecutor.proposes(call.name)
                     || ChilkNotesExecutor.proposes(call.name) || call.name == "chilk_schedule" || call.name == "chilk_timer" {
             result = await propose(call)                        // 8c: a card first; «Да» writes it
+        } else if call.name == "chilk_card_answer" {
+            result = cardAnswer(call)                           // slice 10 (decision 19): the card on screen
         } else if call.name == "chilk_remember" {
             result = remember(call)
         } else if call.name == "chilk_emote" {
@@ -224,6 +226,21 @@ final class Actions {
         balance?.log("tool \(call.name) success=\(result.success)"
                      + (result.success ? "" : " \(result.value["error"]?.string ?? "")"))
         return result
+    }
+
+    /// Slice 10 (SPEC «Срез 10», decision 19): `chilk_card_answer` — Codex answers the card on screen for the user; the
+    /// desk counts it only on the user's own words of this turn (`CardModelAnswer`) and writes the card as shown.
+    private func cardAnswer(_ call: CodexToolCall) -> CodexToolResult {
+        guard case .object(let fields) = call.arguments, Set(fields.keys) == ["answer"],
+              let answer = fields["answer"]?.string, answer == "yes" || answer == "no" else {
+            return .failure("invalid_arguments: answer is yes or no")
+        }
+        guard let cards else { return .failure("no_card: \(CardModelAnswer.noCard.explanation)") }
+        let verdict = cards.modelAnswer(yes: answer == "yes")
+        switch verdict {
+        case .confirm, .decline: return .ok(["done": .string(verdict.rawValue), "note": .string(verdict.explanation)])
+        default: return .failure("\(verdict.rawValue): \(verdict.explanation)")
+        }
     }
 
     /// Slice 9b: the day plan being collected (set by the app).

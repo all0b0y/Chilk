@@ -297,6 +297,12 @@ public struct CharacterPose: Sendable, Equatable {
     /// Buttons under the bubble text and the one under the cursor.
     public var buttons: [String] = []
     public var hoveredButton: Int?
+    /// Slice 10 (SPEC «Срез 10», decision 18): a confirmation card pinned over his bubble until it is answered — its
+    /// words, buttons, age and the fade when it goes. Its buttons' hover is `hoveredButton` ≥ `cardButtonBase`.
+    public var card: String?
+    public var cardAge: Double = 0
+    public var cardRemaining: Double = 0
+    public var cardButtons: [String] = []
     public var props: Set<Prop> = []
     /// 0 = mug held at his side, 1 = at his mouth.
     public var mugLift: Double = 0
@@ -385,6 +391,10 @@ public final class CharacterSim {
     private var bubbleButtons: [String] = []
     private var bubbleAt = -99.0
     private var bubbleUntil = -99.0
+    private var cardText: String?
+    private var cardButtonTitles: [String] = []
+    private var cardAt = -99.0
+    private var cardUntil = -99.0
     private var actStart = 0.0
     private var actBeats = 0
     private var actProps: Set<Prop> = []
@@ -549,10 +559,14 @@ public final class CharacterSim {
     public var isNight: Bool { hourOfDay >= 23 || hourOfDay < 6 }
 
     /// Slice 6d: at home behind the edge — out of sight (a call or being carried brings him out).
-    public var isHiddenHome: Bool { hidden && standOut == .docked && time >= calledUntil && !isCarried }
+    public var isHiddenHome: Bool { hidden && place == .docked && time >= calledUntil && !isCarried }
 
     /// Hidden and peeking or at home: hovering does not pull him out, petting and antics wait.
-    private var tucked: Bool { hidden && (standOut == .docked || standOut == .lurk) && time >= calledUntil && !isCarried }
+    private var tucked: Bool { hidden && (place == .docked || place == .lurk) && time >= calledUntil && !isCarried }
+
+    /// Slice 10 (SPEC «Срез 10», decision 18): a pinned card keeps him out at his edge — `.docked` (hidden too) places
+    /// him `.out` while it is up, as the card at the edge did since 8c; the owners keep setting `standOut` as before.
+    private var place: StandOut { standOut == .docked && isCardPinned ? .out : standOut }
 
     /// At launch, hidden: already behind the edge, no dive and no puff.
     public func snapHidden() {
@@ -596,6 +610,7 @@ public final class CharacterSim {
         if m.winking || blushHotLevel > 0.01 { return "petting" }
         // A bubble needs 60 fps while it pops in (words arrive one by one) or out — not while it just stays.
         if time < bubbleUntil && (time - bubbleAt < 2 || bubbleUntil - time < 0.4) { return "bubble" }
+        if time < cardUntil && (time - cardAt < 2 || cardUntil - time < 0.4) { return "card" }
         if isAsleep ? sleepLevel < 1 : sleepLevel > 0 { return "sleep transition" }
         if abs(x.velocity) > 4 { return "x moving" }
         if abs(hop.velocity) > 4 { return "hop" }
@@ -651,6 +666,36 @@ public final class CharacterSim {
 
     /// The words in the bubble on screen now (slice 8c: the card notices another bubble took its place).
     public var bubbleWords: String? { isTalking ? bubbleText : nil }
+
+    // MARK: The pinned card (slice 10, decision 18)
+
+    /// Pins a confirmation card over his bubble: it stays until `unpinCard()`, other bubbles go under it. The same card
+    /// again changes nothing; new words pop it again (a correction's card); new buttons alone are swapped in place.
+    public func pinCard(_ text: String, buttons: [String]) {
+        if isCardPinned, cardText == text {
+            if cardButtonTitles != buttons { cardButtonTitles = buttons; hoveredButton = nil }
+            return
+        }
+        cardText = text
+        cardButtonTitles = buttons
+        cardAt = time
+        cardUntil = .infinity
+        hoveredButton = nil
+    }
+
+    /// The card shrinks away (answered).
+    public func unpinCard() {
+        guard isCardPinned else { return }
+        cardUntil = min(cardUntil, time + 0.3)
+        cardButtonTitles = []
+        hoveredButton = nil
+    }
+
+    public var isCardPinned: Bool { time < cardUntil && cardUntil == .infinity }
+    /// The pinned card is drawn now (not while the popover or a game holds him away).
+    public var isCardOnScreen: Bool { isCardPinned && !isHiddenHome && standOut != .away }
+    /// The pinned card's words (nil — none).
+    public var pinnedCard: String? { isCardPinned ? cardText : nil }
 
     /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
     public var passesClicks: Bool {
@@ -870,7 +915,7 @@ public final class CharacterSim {
 
         // Dragging speed is clamped: a fast flick must tilt him, not spin him (and keep him inside his paint bounds).
         let carry = min(Self.maxCarrySpeed, max(-Self.maxCarrySpeed, carryVelocity))
-        let stand: Double = switch standOut {
+        let stand: Double = switch place {
         case .docked: metrics.dockX
         case .peek: metrics.peekX
         case .out: metrics.outX
@@ -1179,7 +1224,7 @@ public final class CharacterSim {
 
     /// His usual place for the current `standOut` (where the hops end).
     private var standX: Double {
-        switch standOut {
+        switch place {
         case .docked: metrics.dockX
         case .peek: metrics.peekX
         case .out: metrics.outX
@@ -1677,6 +1722,15 @@ public final class CharacterSim {
             p.bubbleAge = t - bubbleAt
             p.bubbleRemaining = bubbleUntil - t
             p.buttons = bubbleButtons
+            p.hoveredButton = hoveredButton
+        }
+        // Slice 10 (decision 18): the pinned card goes with him — not from behind the edge, not while the popover or a
+        // game holds him off screen.
+        if t < cardUntil, let text = cardText, !isHiddenHome, standOut != .away {
+            p.card = text
+            p.cardAge = t - cardAt
+            p.cardRemaining = cardUntil - t
+            p.cardButtons = cardButtonTitles
             p.hoveredButton = hoveredButton
         }
         return p

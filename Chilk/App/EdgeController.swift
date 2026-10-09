@@ -35,6 +35,8 @@ final class EdgeController: NSObject {
     }
     /// Bubble buttons and clicks on the body go to the balance controller.
     var onButton: ((Int) -> Void)?
+    /// Slice 10 (decision 18): the pinned card's buttons come to `onButton` from this index on.
+    static let cardButtonBase = ChilkRenderer.cardButtonBase
     var onPoke: (() -> Void)?
     /// Slice 6d: released with more than half of him behind the edge / a hidden Chilk dragged back onto the screen.
     var onHideDrop: (() -> Void)?

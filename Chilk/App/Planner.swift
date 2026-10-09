@@ -330,4 +330,6 @@ final class Planner {
 enum PlanLines {
     /// Decision 11: the first silence while collecting.
     static var allDone: String { String(localized: "Это всё?") }
+    /// Slice 10 (decision 18): the second silence — the plan's card is pinned over his bubble.
+    static var cardUp: String { String(localized: "Вот план — записать?") }
 }

@@ -4,29 +4,24 @@ import ChilkCore
 import SwiftUI
 
 /// Slice 8c (SPEC «Срез 8», decisions 3–8): confirmation cards. A tool that would write into Apple's apps or schedule
-/// Chilk's message only proposes; the card shows what will really be written; «Да» writes it with the card's values
-/// (the model takes no part then), «Нет» drops it, «Изменить» opens the panel, other words are a correction (a new
-/// model turn with the card in [контекст]). No timeout; other bubbles may come over it, then it comes back.
-/// Every button press names the card it was shown for: a stale bubble never answers the next card.
+/// Chilk's message only proposes; the card shows what will really be written; «Да» writes it with the card's values,
+/// «Нет» drops it, «Изменить» opens the panel, other words are a correction (a new model turn with the card in
+/// [контекст]). No timeout.
+/// Slice 10 (SPEC «Срез 10», Б9, decision 18): the first card of the queue is pinned over his bubble from its proposal
+/// until it is answered — «Да» / «Нет» (a button, voice, the chat, the sheet), a correction (a new card replaces it) or
+/// an empty plan. The user's words, his answers, requests and notices go into the bubble under it and never push it
+/// away. Every button press names the card it was shown for: a stale press never answers the next card.
 @MainActor
 final class CardDesk {
     enum Source: String { case edge, voice, chat, panel, sheet }
 
     private let sim: CharacterSim
     private(set) var queue = CardQueue()
-    /// The card is in Chilk's bubble at the edge right now (not inside a conversation's bubble).
-    private(set) var showing = false
-    /// Another bubble took its place: when it comes back, «А карточку-то подтвердишь?».
-    private var displaced = false
-    /// What the bubble shows (words, the card and its buttons): another bubble taking its place is noticed, and a
-    /// press maps to the button that was really on screen.
-    private var shownWords: String?
-    private var shown: (id: UUID, buttons: [String])?
-    /// The conversation shows the card in its own bubble (decision 3 of the plan).
-    private(set) var inConversation = false
+    /// What the pinned block shows (the card, its words and buttons): a press maps to the button really on screen.
+    private var shown: (id: UUID, words: String, buttons: [String])?
     /// A turn whose words were not «да / нет» while a card was up: its proposal of the same card replaces it.
     private(set) var correcting = false
-    /// Expiry as last shown (the bubble and the chat are redrawn once when «Да» goes away).
+    /// Expiry as last shown (the block and the chat are redrawn once when «Да» goes away).
     private var shownExpired = false
     /// The minute a timer card was drawn in: its «до HH:MM» moves on with the clock.
     private var shownMinute = 0
@@ -35,17 +30,24 @@ final class CardDesk {
     private var pendingResult: (line: String, until: Date)?
     private var timer: Timer?
     private let panel = CardEditPanel()
-    /// Slice 9, decision 8: cards first shown in a voice conversation — back at the edge, he listens for the answer.
+    /// Slice 9 (decision 8), slice 10 (decision 18): cards proposed in a voice conversation — once it is over and the
+    /// stage is free, he listens one more minute without his name for the answer (once per card: never a loop).
     private var bornInVoice: Set<UUID> = []
-    /// A voice-born card is shown again at the edge (the conversation opens a minute without the name).
-    var onShownAgain: () -> Void = {}
-    /// A card was answered (any way): a conversation watching for a spoken answer stops listening.
+    private var listenAgain: (id: UUID, until: Date)?
+    /// The last card proposed (a voice turn marks it as born in voice).
+    private var lastProposed: UUID?
+    /// He should listen for the card's answer again (a voice-born card outlived its conversation).
+    var onListenAgain: () -> Void = {}
+    /// A card was answered (any way): a conversation listening for a spoken answer stops.
     var onSettled: () -> Void = {}
-    /// Counts proposals: a conversation shows the card in its bubble only if its own turn proposed one.
+    /// Counts proposals: a turn knows whether it proposed a card.
     private(set) var proposals = 0
+    /// Slice 10 (decision 19): the turn in flight while a card is up — the user's words, where they came from, the card
+    /// on screen and the proposals count when it began (Codex may answer only that card, only on these words).
+    private var turn: (words: String, source: Source, card: UUID, proposals: Int)?
 
     var log: (String) -> Void = { _ in }
-    /// The stage is free for the card at the edge (no conversation, notice, request, popover, game, greeting…).
+    /// The stage is free (no conversation, notice, request, popover, game, greeting, bubble…): a result line may show.
     var stageFree: () -> Bool = { false }
     /// His window and side: the «Изменить» panel opens beside him.
     var chilkFrame: () -> (frame: NSRect, onLeftEdge: Bool) = { (.zero, false) }
@@ -65,11 +67,11 @@ final class CardDesk {
     var onSheetResult: (String) -> Void = { _ in }
     /// The result line of a card answered by voice still waits for a free stage.
     var resultPending: Bool { pendingResult != nil }
-    /// The card left a conversation's bubble (answered elsewhere): the conversation stops routing its buttons.
-    var onLeftConversation: () -> Void = {}
-    /// Acceptance only (CHILK_DEMO_CARD_SNAPSHOT=/dir): the screen around him a few seconds after a card shows.
+    /// Acceptance only (CHILK_DEMO_CARD_SNAPSHOT=/dir): the screen around him a few seconds after a card is pinned and
+    /// soon after another bubble shows under it.
     var snapshot: ((String) -> Void)?
     private var shots = 0
+    private var shotWords: String?
     private var demoPressed = false
 
     init(sim: CharacterSim) {
@@ -82,10 +84,11 @@ final class CardDesk {
 
     var current: ActionCard? { queue.current }
     var hasCard: Bool { !queue.isEmpty }
-    /// At the edge he is out for the card.
-    var ownsStage: Bool { showing }
-    /// The user can see the card at the edge or in the conversation's bubble right now.
-    var visible: Bool { showing || inConversation }
+    /// The card is pinned at the edge (it holds him out there, see `CharacterSim.pinCard`).
+    var pinned: Bool { shown != nil }
+    /// The user can see the card at the edge right now: a spoken «да / нет» may answer it (a card behind the popover is
+    /// not answered blind).
+    var visible: Bool { shown != nil && sim.isCardOnScreen }
 
     // MARK: Proposals
 
@@ -96,9 +99,27 @@ final class CardDesk {
         if replacing { panel.close() }                  // an open editor would edit a card that is gone
         queue.add(card, replacingCurrent: replacing)
         proposals += 1
+        lastProposed = card.id
         log("card proposed\(replacing ? " (correction)" : ""): \(card.summary())")
-        if showing { present(again: false) } else if inConversation { refreshInConversation() }
+        pin()
         onChange()
+    }
+
+    /// The voice turn that just ended proposed a card: after the conversation he listens once more for its answer.
+    func proposedInVoice() {
+        if let id = lastProposed, queue.cards.contains(where: { $0.id == id }) { bornInVoice.insert(id) }
+    }
+
+    /// The minute for «да» right after the card passed in silence: no second minute after the conversation.
+    func answerWaited() {
+        if let id = current?.id { bornInVoice.remove(id) }
+    }
+
+    /// The conversation is over: a voice-born card is still pinned — he listens for its answer once more as soon as the
+    /// stage is free (within 30 s).
+    func conversationEnded() {
+        guard let card = current, bornInVoice.remove(card.id) != nil else { return }
+        listenAgain = (card.id, Date().addingTimeInterval(30))
     }
 
     /// Slice 8f: the note a change card is about (nil for anything else).
@@ -145,56 +166,27 @@ final class CardDesk {
     }
 
     /// A turn ended (answered or failed): a correction that proposed nothing corrects nothing later.
-    func turnEnded() { correcting = false }
-
-    /// The conversation's bubble shows the card (its buttons route here).
-    func showInConversation() {
-        guard let card = current else { return }
-        inConversation = true
-        bornInVoice.insert(card.id)
-        let words = text(card)
-        let labels = buttons(card)
-        sim.say(words, duration: .infinity, buttons: labels)
-        shown = (card.id, labels)
-        shownExpired = card.expired(now: Date())
-        shownMinute = Self.minuteNow
-        if let snapshot {
-            shots += 1
-            let name = String(format: "card-%02d-talk", shots)
-            Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { _ in MainActor.assumeIsolated { snapshot(name) } }
-        }
-    }
-
-    /// The conversation goes on without the card in its bubble (a follow-up began, or it closed).
-    func leaveConversation() {
-        guard inConversation else { return }
-        inConversation = false
-        if !showing { shown = nil }
-    }
-
-    private func refreshInConversation() {
-        guard inConversation, current != nil else { return }
-        showInConversation()
-    }
+    func turnEnded() { correcting = false; turn = nil }
 
     /// [контекст] for a correction turn: what the card on screen says.
     func context() -> String? {
         guard let card = current else { return nil }
         if case .plan = card.kind {
-            return "на экране карточка плана: \(card.summary()). Если пользователь её поправляет — вызови chilk_plan с action "
-                + "finish, тем же днём и ВСЕМ исправленным списком (новая карточка заменит эту); если просит другое — делай другое"
+            return "на экране карточка плана: \(card.summary()). Пользователь с ней ясно соглашается («да, всё верно») — "
+                + "chilk_card_answer yes, отказывается — no. Поправляет — вызови chilk_plan с action finish, тем же днём и ВСЕМ "
+                + "исправленным списком (новая карточка заменит эту); если просит другое — делай другое"
         }
-        return "на экране карточка подтверждения: \(card.summary()). Если пользователь её поправляет — вызови тот же "
-            + "инструмент заново с исправленными значениями (новая карточка заменит эту); если просит другое — делай другое"
+        return "на экране карточка подтверждения: \(card.summary()). Пользователь с ней ясно соглашается («да, всё верно», "
+            + "«подтверждаю») — chilk_card_answer yes, отказывается — no. Поправляет — вызови тот же инструмент заново с "
+            + "исправленными значениями (новая карточка заменит эту); если просит другое — делай другое"
     }
 
     // MARK: Text and buttons
 
     static let yes = String(localized: "Да"), edit = String(localized: "Изменить"), no = String(localized: "Нет")
 
-    func text(_ card: ActionCard, again: Bool = false) -> String {
-        let body = card.lines(now: Date()).joined(separator: "\n")
-        return again ? String(localized: "А карточку-то подтвердишь?") + "\n" + body : body
+    func text(_ card: ActionCard) -> String {
+        card.lines(now: Date()).joined(separator: "\n")
     }
 
     func buttons(_ card: ActionCard) -> [String] {
@@ -205,18 +197,11 @@ final class CardDesk {
         return out
     }
 
-    /// A button under the bubble (edge or conversation): mapped through what was really shown. `false` = no card is
-    /// in that bubble (another bubble's button).
-    func pressed(_ index: Int, source: Source) -> Bool {
-        guard let shown, visible, sim.bubbleWords != nil else { return false }
-        if source == .edge, !inConversation, sim.bubbleWords != shownWords { return false }   // another bubble now
-        guard let label = shown.buttons[safe: index] else { return true }
-        press(label, card: shown.id, source: source)
-        return true
+    /// A button of the pinned block at the edge (its index on the card), mapped through what was really shown.
+    func pressedPinned(_ index: Int) {
+        guard let shown, let label = shown.buttons[safe: index] else { return }
+        press(label, card: shown.id, source: .edge)
     }
-
-    /// The label of the button at `index` as it was shown (the conversation says the matching line).
-    func shownLabel(_ index: Int) -> String? { shown?.buttons[safe: index] }
 
     /// A button on the chat's card (the chat edits inline itself).
     func pressedFromChat(_ label: String, card id: UUID) {
@@ -252,9 +237,27 @@ final class CardDesk {
             return .declined(String(localized: "Ладно, ничего не делаю"))
         case .correction:
             correcting = true
+            turn = (words, source, card.id, proposals)
             log("card: a correction (\(source.rawValue))")
             return .correction
         }
+    }
+
+    /// Slice 10 (SPEC «Срез 10», decision 19): `chilk_card_answer` — Codex answers the card on screen for the user. It
+    /// counts only as `CardModelAnswer.judge` allows; «Да» writes the card exactly as shown.
+    func modelAnswer(yes: Bool) -> CardModelAnswer {
+        let card = current
+        let verdict = CardModelAnswer.judge(yes: yes, words: turn?.words, cardUp: card != nil,
+                                            sameCard: card != nil && turn?.card == card?.id && turn?.proposals == proposals,
+                                            deleting: card?.deletes ?? false, expired: card?.expired(now: Date()) ?? false)
+        log("card: Codex answered \(yes ? "yes" : "no") → \(verdict.rawValue)")
+        guard let source = turn?.source else { return verdict }
+        switch verdict {
+        case .confirm: confirm(source: source)
+        case .decline: decline(source: source)
+        default: break
+        }
+        return verdict
     }
 
     /// Slice 10 (decision 6): «Записать» in «Лист дня» — the same «Да», for the card it was drawn for (first in the queue).
@@ -288,9 +291,9 @@ final class CardDesk {
             onCommitted(card, source, result.ok)
             if source == .sheet { onSheetResult(result.line) }
             guard source != .chat else { return }
-            // At the edge the card's own bubble becomes the result; by voice it waits until the stage is free.
-            if source == .edge || source == .panel || source == .sheet, stageFree() || !sim.isTalking { sim.say(result.line, duration: 4) }
-            else { pendingResult = (result.line, Date().addingTimeInterval(15)) }
+            // At the edge the result shows in his bubble at once unless another one holds it; by voice it waits for the
+            // conversation to end.
+            tell(result.line, duration: 4, now: source != .voice)
         }
     }
 
@@ -298,29 +301,28 @@ final class CardDesk {
         guard let card = current else { return }
         settle(card, how: "no (\(source.rawValue))")
         onDeclined(card)
-        // From the sheet the block simply goes; the line only when the stage is his (review 10).
+        // From the sheet the block simply goes; the line only when the stage is his (review 10). By voice the
+        // conversation says it as it closes.
         if source == .edge || source == .panel || (source == .sheet && stageFree()) {
-            sim.say(String(localized: "Ладно, ничего не делаю"), duration: 2.5)
+            tell(String(localized: "Ладно, ничего не делаю"), duration: 2.5, now: true)
         }
-        // By voice the conversation says it as it closes.
+    }
+
+    /// A line about the answer: now when no other bubble holds him, else once the stage is free (within 15 s).
+    private func tell(_ line: String, duration: Double, now: Bool) {
+        if now, stageFree() || !sim.isTalking { sim.say(line, duration: duration) }
+        else { pendingResult = (line, Date().addingTimeInterval(15)) }
     }
 
     private func settle(_ card: ActionCard, how: String) {
         panel.close()
         queue.settle(card.id)
         bornInVoice.remove(card.id)
+        if listenAgain?.id == card.id { listenAgain = nil }
         correcting = false
         log("card answered: \(how)")
+        pin()                                                 // the next card of the queue, or none
         onSettled()
-        if showing { hide() }
-        if inConversation {
-            // Answered in the chat while his bubble shows it: the bubble keeps its words, loses the buttons.
-            inConversation = false
-            sim.setBubbleButtons([])
-            onLeftConversation()
-        }
-        shown = nil
-        displaced = false
         onChange()
     }
 
@@ -349,70 +351,40 @@ final class CardDesk {
         queue.replace(id, with: edited)
         log("card edited (\(how)): \(edited.summary())")
         onChange()
-        if current?.id == edited.id {
-            if showing { present(again: false) } else { refreshInConversation() }
-        }
+        if current?.id == edited.id { pin() }
     }
 
-    // MARK: The edge
+    // MARK: The pinned block (slice 10, decision 18)
 
-    private func tick() {
-        if let r = pendingResult {
-            if Date() > r.until { pendingResult = nil }
-            else if stageFree() { pendingResult = nil; sim.say(r.line, duration: 4) }
-        }
-        guard let card = current else { return }
-        let expired = card.expired(now: Date())
-        let timerMoved: Bool = if case .timer = card.kind { Self.minuteNow != shownMinute } else { false }
-        if expired != shownExpired || timerMoved {         // «Да» goes away once — or a timer's «до HH:MM» moves on
-            shownExpired = expired
-            shownMinute = Self.minuteNow
-            onChange()
-            if showing { present(again: false) } else if inConversation { refreshInConversation() }
-            return
-        }
-        if showing {
-            if sim.bubbleWords != shownWords {                   // another bubble came over it
-                showing = false
-                displaced = true
-                shown = inConversation ? shown : nil
-                log("card: another bubble over it")
-            } else if sim.standOut != .out {
-                sim.standOut = .out                              // hidden or sent home meanwhile: out until answered
+    /// The first card of the queue pinned over his bubble (or none). The same words again change nothing; new words
+    /// (a correction, a timer's minute, «Да» gone with the time) pop it anew.
+    private func pin() {
+        guard let card = current else {
+            if shown != nil {
+                shown = nil
+                sim.unpinCard()
+                log("card unpinned")
             }
             return
         }
-        guard !inConversation, stageFree() else { return }
-        present(again: displaced)
-    }
-
-    private func present(again: Bool) {
-        guard let card = current else { return }
-        let words = text(card, again: again)
+        let words = text(card)
         let labels = buttons(card)
-        sim.say(words, duration: .infinity, buttons: labels)
-        sim.standOut = .out
-        shownWords = words
-        shown = (card.id, labels)
+        let fresh = shown?.id != card.id
+        sim.pinCard(words, buttons: labels)
+        shown = (card.id, words, labels)
         shownExpired = card.expired(now: Date())
         shownMinute = Self.minuteNow
-        showing = true
-        displaced = false
-        log("card shown\(again ? " again" : "")")
-        if again, bornInVoice.remove(card.id) != nil { onShownAgain() }   // one watch per card: never a loop
-        if let snapshot {
-            shots += 1
-            let name = String(format: "card-%02d", shots)
-            Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { _ in MainActor.assumeIsolated { snapshot(name) } }
-        }
-        // Acceptance only: CHILK_DEMO_CARD_PRESS=<label> presses that button of the edge card 5 s after it shows,
+        guard fresh else { return }
+        log("card pinned")
+        shoot("card-%02d", after: 4)
+        // Acceptance only: CHILK_DEMO_CARD_PRESS=<label> presses that button of the pinned card 5 s after it shows,
         // through the same path as a click (once).
         if let label = ProcessInfo.processInfo.environment["CHILK_DEMO_CARD_PRESS"], !demoPressed {
             demoPressed = true
             Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in
                 MainActor.assumeIsolated {
                     guard let self, let i = self.shown?.buttons.firstIndex(of: label) else { return }
-                    _ = self.pressed(i, source: .edge)
+                    self.pressedPinned(i)
                     if label == Self.edit, self.snapshot != nil {
                         Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
                             MainActor.assumeIsolated { self?.panel.snapshot() }
@@ -423,11 +395,38 @@ final class CardDesk {
         }
     }
 
-    private func hide() {
-        showing = false
-        shownWords = nil
-        sim.clearBubble()
-        sim.standOut = .docked
+    private func shoot(_ format: String, after seconds: Double) {
+        guard let snapshot, shots < 12 else { return }
+        shots += 1
+        let name = String(format: format, shots)
+        Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { _ in MainActor.assumeIsolated { snapshot(name) } }
+    }
+
+    private func tick() {
+        if let r = pendingResult {
+            if Date() > r.until { pendingResult = nil }
+            else if stageFree() { pendingResult = nil; sim.say(r.line, duration: 4) }
+        }
+        if let again = listenAgain {
+            if current?.id != again.id || Date() > again.until { listenAgain = nil }
+            else if stageFree() {
+                listenAgain = nil
+                log("card still pinned after the conversation: listening for the answer")
+                onListenAgain()
+            }
+        }
+        guard let card = current else { return }
+        let expired = card.expired(now: Date())
+        let timerMoved: Bool = if case .timer = card.kind { Self.minuteNow != shownMinute } else { false }
+        if expired != shownExpired || timerMoved || shown?.id != card.id {   // «Да» goes away once; «до HH:MM» moves on
+            pin()
+            onChange()
+        }
+        // Acceptance only: another bubble under the pinned card — the screen soon after it shows.
+        if snapshot != nil, let words = sim.bubbleWords, words != shotWords {
+            shotWords = words
+            shoot("card-%02d-under", after: 1)
+        }
     }
 
     func shutdown() { timer?.invalidate(); timer = nil; panel.close() }

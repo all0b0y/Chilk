@@ -32,37 +32,32 @@ final class Conversation {
     var planCollecting: () -> Bool = { false }
     var planSilence: () -> Bool = { false }
     private var askedAllDone = false
-    /// The card is in this conversation's bubble (its buttons go to the desk).
-    private var cardInBubble = false
     /// The card was on screen when he was called: «да / нет» may answer it (a hidden card is not answered blind).
     private var cardSeen = false
+    /// Slice 9 (decision 8), slice 10 (decision 18): he listens a minute without his name for the card's answer — right
+    /// after a turn proposed it, or once after the conversation while it is still pinned.
+    private var cardWindow = false
 
-    /// Slice 9, decision 8: he listens for the answer to a card that came back to the edge; silence leaves the card's
-    /// bubble as it is (clearing it would bring the card back «again» and open the microphone in a loop).
-    private var cardWatch = false
-
-    /// The card was answered elsewhere (the chat) while it was in his bubble.
-    func cardLeft() { cardInBubble = false; cardSeen = false }
-
-    /// The card was answered at the edge or in the chat while he watched for a spoken answer: the minute ends.
+    /// The card was answered elsewhere (its button, the chat, the sheet) while he listened for its answer: the minute
+    /// ends (the desk says the result once the stage is free).
     func cardSettledElsewhere() {
-        guard cardWatch, phase == .waiting else { return }
-        log("card answered elsewhere: the watch ends")
-        cardWatch = false
+        guard cardWindow, phase == .waiting else { return }
+        log("card answered elsewhere: the minute ends")
+        cardWindow = false
         stopEars()
-        leave(saying: nil, after: 0.2, clearBubble: false)          // the desk shows the card's result there
+        leave(saying: nil, after: 0.2)
     }
 
-    /// Slice 9, decision 8: a card first proposed by voice came back to the edge («А карточку-то подтвердишь?») — he
-    /// listens a minute without his name for «да / нет / поправка», as right after the card in a conversation.
+    /// Slice 9 (decision 8), slice 10 (decision 18): a card proposed by voice is still pinned after the conversation —
+    /// he listens a minute without his name for «да / нет / поправка», as right after the card.
     /// Nothing happens when he is busy, the ears are off or he would refuse to talk.
     func awaitCardAnswer() {
         guard phase == .idle, !closing, !suppressFollowUps, ears.enabled, ears.ready, brain.problem == nil,
               refusal() == nil, let cards, cards.hasCard else { return }
-        log("card back at the edge: listening for the answer")
+        log("card still pinned: listening for the answer")
         turns = 0
         cardSeen = true
-        cardWatch = true
+        cardWindow = true
         listen(window: Dialogue.cardAnswerWindow)
     }
 
@@ -223,17 +218,6 @@ final class Conversation {
     /// A button under his bubble. `false` = not ours (the balance gets it).
     func pressedButton(_ index: Int) -> Bool {
         if question != nil { settleQuestion(index); return true }
-        if cardInBubble, let cards, cards.hasCard {
-            let label = cards.shownLabel(index)
-            guard cards.pressed(index, source: .voice) else { return false }
-            if label != CardDesk.edit {
-                cardInBubble = false
-                stopEars()
-                leave(saying: label == CardDesk.yes ? String(localized: "Делаю…") : String(localized: "Ладно, ничего не делаю"),
-                      after: 1.5)
-            }
-            return true
-        }
         guard index == 0, let longAnswer else { return false }
         let place = chilkFrame()
         log("long answer opened")
@@ -460,10 +444,8 @@ final class Conversation {
                 if !text.isEmpty {
                     if phase == .waiting {                                       // the follow-up has begun
                         phase = .listening
-                        cardWatch = false                           // his words now: an ordinary turn from here on
+                        cardWindow = false                          // his words now: an ordinary turn from here on
                         longAnswer = nil
-                        cardInBubble = false                        // his words now; the card waits at the desk
-                        cards?.leaveConversation()
                         sim.setBubbleButtons([])
                     }
                     sim.earsDroop = 0
@@ -484,7 +466,9 @@ final class Conversation {
             }
             switch detector.verdict(at: now) {
             case .keepListening: break
-            case .nothingHeard where window != nil: if !planSilenceStep() { perform(.leaveQuietly) }
+            case .nothingHeard where window != nil:
+                if cardWindow { cards?.answerWaited() }             // the minute passed: no second one after the talk
+                if !planSilenceStep() { perform(.leaveQuietly) }
             case .nothingHeard: stopEars(); leave(saying: Lines.didntHear, after: 3)
             case .done, .tooLong: finishListening()
             }
@@ -545,7 +529,7 @@ final class Conversation {
             }
             askedAllDone = false
             // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
-            if let cards, cards.hasCard, cardInBubble || cardSeen {
+            if let cards, cards.hasCard, cardSeen {
                 let line: String?
                 switch cards.answer(question, source: .voice) {
                 case .confirming: line = String(localized: "Делаю…")
@@ -554,7 +538,7 @@ final class Conversation {
                 }
                 if let line {
                     log("card answered by voice")
-                    cardInBubble = false
+                    cardWindow = false
                     cardSeen = false
                     onTurn?(question, line, brain.liveThread ?? "")
                     return leave(saying: line, after: 1.5)
@@ -578,14 +562,13 @@ final class Conversation {
                 phase = .answering
                 sim.stopAct()
                 cards?.turnEnded()
+                showReply(text)
                 if let cards, cards.proposals != stamp, cards.hasCard {
-                    // The card replaces his words in the bubble (they are in the chat); its buttons work, «да» too.
-                    cardInBubble = true
+                    // Slice 10 (decision 18): the card is pinned over his bubble — his words stay under it; he listens a
+                    // minute for «да» without his name, and once more after the conversation if it is still up.
                     cardSeen = true
-                    longAnswer = nil
-                    cards.showInConversation()
-                } else {
-                    showReply(text)
+                    cardWindow = true
+                    cards.proposedInVoice()
                 }
                 if let q = takeEmote() {
                     // The words first — they explain the reaction — then the emotion 0.2 s after they are all on
@@ -596,7 +579,7 @@ final class Conversation {
                     try? await Task.sleep(for: .seconds(q.seconds))
                     guard !Task.isCancelled, phase == .answering else { return }
                 }
-                if cardInBubble {
+                if cardWindow {
                     listen(window: Dialogue.cardAnswerWindow)   // «да» by voice (slice 9, decision 8: a minute)
                 } else if planCollecting() {
                     listen(window: Dialogue.planSilence)        // slice 9b: planning — no name needed for the next thing
@@ -629,10 +612,11 @@ final class Conversation {
         }
         askedAllDone = false
         guard planSilence(), let cards, cards.hasCard else { return false }
-        cardInBubble = true
+        // Slice 10 (decision 18): the plan's card is pinned over his bubble — he points at it and listens for «да».
         cardSeen = true
-        longAnswer = nil
-        cards.showInConversation()
+        cardWindow = true
+        cards.proposedInVoice()
+        showReply(PlanLines.cardUp)
         listen(window: Dialogue.cardAnswerWindow)
         return true
     }
@@ -654,17 +638,13 @@ final class Conversation {
         leave(saying: nil, after: 0.05)
     }
 
-    /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then).
-    /// - Parameter clearBubble: `false` when another owner already holds the bubble (a card answered at the edge
-    ///   shows its result there).
-    private func leave(saying line: String?, after seconds: Double, clearBubble: Bool = true) {
-        let keepCard = !clearBubble || (cardWatch && line == nil && cards?.hasCard == true)   // a silent watch: the card stays
-        cardWatch = false
+    /// Back to the edge after `after` seconds (the farewell / last answer stays readable until then). A pinned card
+    /// stays where it is (slice 10, decision 18).
+    private func leave(saying line: String?, after seconds: Double) {
+        cardWindow = false
         settleQuestion(nil)
-        cardInBubble = false
         cardSeen = false
         cards?.turnEnded()
-        cards?.leaveConversation()                          // a card still up goes back to the edge
         phase = .idle
         closing = true
         poll?.invalidate()
@@ -681,10 +661,8 @@ final class Conversation {
                 guard let self, self.phase == .idle else { return }
                 self.closing = false
                 self.closeLongAnswer()
-                if !keepCard {
-                    self.sim.clearBubble()
-                    self.sim.standOut = .docked
-                }
+                self.sim.clearBubble()
+                self.sim.standOut = .docked
                 self.log("conversation over after \(self.turns) turn(s)")
                 self.onEnd?()
             }
