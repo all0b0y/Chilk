@@ -117,4 +117,19 @@ struct PinnedCardTests {
         s.step(dt: 1.0 / 60, pointer: nil)
         #expect(s.pose.cardAge < 0.1)
     }
+
+    /// Review 10e: at the top of the screen there is no room over the bubble — the card goes under it, inside the screen.
+    @Test func atTheTopOfTheScreenTheCardGoesUnderTheBubble() {
+        for mirrored in [false, true] {
+            let s = sim(card: plan, bubble: tallAnswer) { $0.cardHeadroom = 0 }
+            let placements = ChilkRenderer.placements(pose: s.pose, metrics: m, mirrored: mirrored)
+            guard let c = box(placements, slot: Slot.cardBox), let b = box(placements, slot: Slot.bubbleBox),
+                  let him = box(placements, slot: Slot.body) else { Issue.record("no card/bubble/body"); continue }
+            #expect(c.minY >= -1 && c.minY >= b.maxY, "mirrored=\(mirrored) card=\(c) bubble=\(b)")
+            #expect(!c.intersects(him) && !c.intersects(b), "mirrored=\(mirrored)")
+            let alone = sim(card: plan, bubble: nil) { $0.cardHeadroom = 0 }
+            let a = box(ChilkRenderer.placements(pose: alone.pose, metrics: m, mirrored: mirrored), slot: Slot.cardBox)
+            #expect((a?.minY ?? -99) >= -1, "alone mirrored=\(mirrored)")
+        }
+    }
 }

@@ -115,9 +115,10 @@ final class CardDesk {
         if let id = current?.id { bornInVoice.remove(id) }
     }
 
-    /// The conversation is over: a voice-born card is still pinned — he listens for its answer once more as soon as the
-    /// stage is free (within 30 s).
+    /// The conversation is over: a result line held for it gets its 15 s from now (review 10e); a voice-born card still
+    /// pinned — he listens for its answer once more as soon as the stage is free (within 30 s).
     func conversationEnded() {
+        if let r = pendingResult { pendingResult = (r.line, min(r.until, Date().addingTimeInterval(15))) }
         guard let card = current, bornInVoice.remove(card.id) != nil else { return }
         listenAgain = (card.id, Date().addingTimeInterval(30))
     }
@@ -165,8 +166,13 @@ final class CardDesk {
         }
     }
 
-    /// A turn ended (answered or failed): a correction that proposed nothing corrects nothing later.
-    func turnEnded() { correcting = false; turn = nil }
+    /// A turn of this source ended (answered or failed): a correction that proposed nothing corrects nothing later.
+    /// Another source's turn in flight is left alone (review 10e: typed in the chat while the voice minute closes).
+    func turnEnded(_ source: Source) {
+        guard turn == nil || turn?.source == source else { return }
+        correcting = false
+        turn = nil
+    }
 
     /// [контекст] for a correction turn: what the card on screen says.
     func context() -> String? {
@@ -308,10 +314,11 @@ final class CardDesk {
         }
     }
 
-    /// A line about the answer: now when no other bubble holds him, else once the stage is free (within 15 s).
+    /// A line about the answer: now when no other bubble holds him, else once the stage is free — within 15 s, or (by
+    /// voice) within 15 s after the conversation (review 10e: a follow-up may last longer).
     private func tell(_ line: String, duration: Double, now: Bool) {
         if now, stageFree() || !sim.isTalking { sim.say(line, duration: duration) }
-        else { pendingResult = (line, Date().addingTimeInterval(15)) }
+        else { pendingResult = (line, Date().addingTimeInterval(now ? 15 : 120)) }
     }
 
     private func settle(_ card: ActionCard, how: String) {

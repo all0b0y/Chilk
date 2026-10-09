@@ -303,6 +303,8 @@ public struct CharacterPose: Sendable, Equatable {
     public var cardAge: Double = 0
     public var cardRemaining: Double = 0
     public var cardButtons: [String] = []
+    /// Review 10e: how far the screen goes over the scene's top — no room for the card over the bubble, it goes under.
+    public var cardHeadroom: Double = .infinity
     public var props: Set<Prop> = []
     /// 0 = mug held at his side, 1 = at his mouth.
     public var mugLift: Double = 0
@@ -696,6 +698,8 @@ public final class CharacterSim {
     public var isCardOnScreen: Bool { isCardPinned && !isHiddenHome && standOut != .away }
     /// The pinned card's words (nil — none).
     public var pinnedCard: String? { isCardPinned ? cardText : nil }
+    /// Review 10e: how far the screen goes over the scene's top (the edge sets it every frame).
+    public var cardHeadroom: Double = .infinity
 
     /// Clicks go through him while the stretch hint hops around (a click there is meant for the window under him).
     public var passesClicks: Bool {
@@ -1731,6 +1735,7 @@ public final class CharacterSim {
             p.cardAge = t - cardAt
             p.cardRemaining = cardUntil - t
             p.cardButtons = cardButtonTitles
+            p.cardHeadroom = cardHeadroom
             p.hoveredButton = hoveredButton
         }
         return p

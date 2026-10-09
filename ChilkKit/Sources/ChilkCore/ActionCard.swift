@@ -433,17 +433,29 @@ extension CardAnswer {
     private static let agreeWords: Set<String> = ["правильно", "верно", "подтверждаю", "согласен", "согласна", "отлично",
                                                   "подходит", "годится", "устраивает", "пойдет"]
 
+    /// Review 10e: a question without «?» (dictation), or about him.
+    private static let askWords: Set<String> = ["ли", "разве", "неужели", "что", "чего", "как", "почему", "зачем",
+                                                "когда", "где", "куда", "кто", "сколько", "какой", "какая", "какое",
+                                                "какие", "какую", "ты", "вы", "тебя", "тебе"]
+    /// Review 10e: a time is a change, the card's tool again.
+    private static let timeWords: Set<String> = ["сегодня", "завтра", "послезавтра", "утром", "утра", "днем", "дня",
+                                                 "вечером", "вечера", "ночью", "ночи", "через", "час", "часа",
+                                                 "часов", "минут", "минуту", "минуты", "понедельник", "вторник",
+                                                 "среду", "четверг", "пятницу", "субботу", "воскресенье"]
+
     private static func tokens(_ text: String) -> [String] {
         text.lowercased().replacingOccurrences(of: "ё", with: "е").split { !$0.isLetter && !$0.isNumber }.map(String.init)
     }
 
     /// The user's words agree with the card on screen — a yes word or an assent verb among any others, no «нет» or
-    /// «не», no change word, no question. Looser than `parse` («Да всё я подтверждаю все правильно это сделал»): only
+    /// «не», no change word, no question — nor a question word, «ты / вы», a time or a number (review 10e: dictation
+    /// drops «?»; «да, давай в 11» is a change). Looser than `parse` («Да всё я подтверждаю все правильно это сделал»): only
     /// Codex's `chilk_card_answer` asks, and the app writes the card exactly as shown.
     public static func agrees(_ text: String) -> Bool {
         guard !text.contains("?") else { return false }
         let words = tokens(text)
-        if words.contains(where: { noWords.contains($0) || $0 == "не" || changeWords.contains($0) }) { return false }
+        if words.contains(where: { noWords.contains($0) || $0 == "не" || changeWords.contains($0) || askWords.contains($0)
+                                   || timeWords.contains($0) || $0.contains(where: \.isNumber) }) { return false }
         return words.contains { agreeWords.contains($0) || isYes($0) }
     }
 

@@ -223,7 +223,7 @@ final class ChatController: NSObject, NSWindowDelegate {
             log("chat: card answered by text")
             return
         }
-        if let problem = brain.problem { model.error = problem; return }
+        if let problem = brain.problem { cards?.turnEnded(.chat); model.error = problem; return }
         conversation.yieldToChat()
         stopMic(send: false)
         model.draft = ""
@@ -249,7 +249,7 @@ final class ChatController: NSObject, NSWindowDelegate {
                 posing = false
                 if pose, case .think = sim.act { sim.stopAct() }  // an emotion (6c) plays to its end
                 ClockCheck.turnEnded(.chat)
-                cards?.turnEnded()
+                cards?.turnEnded(.chat)
                 onTurnEnd()
             }
             do {

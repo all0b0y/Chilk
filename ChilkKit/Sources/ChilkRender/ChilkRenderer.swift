@@ -448,7 +448,9 @@ public enum ChilkRenderer {
         let slot = bubbleSide(pose: p, metrics: m, width: under.width, height: under.height)
         let own = bubbleSide(pose: p, metrics: m, width: cw, height: ch)
         var cx = own.x
-        let cy = slot.y - cardGap - ch
+        // Review 10e: no room over the bubble at the top of the screen — the card goes under it (alone: in its place).
+        let over = slot.y - cardGap - ch
+        let cy = over >= -p.cardHeadroom + 4 ? over : (alone ? slot.y : slot.y + under.height + cardGap)
         var tailX = cx + cw
         let tailY = cy + ch - 18
         var dir = 1.0

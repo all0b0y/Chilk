@@ -32,8 +32,9 @@ final class Conversation {
     var planCollecting: () -> Bool = { false }
     var planSilence: () -> Bool = { false }
     private var askedAllDone = false
-    /// The card was on screen when he was called: «да / нет» may answer it (a hidden card is not answered blind).
-    private var cardSeen = false
+    /// The card on screen when he was called, or the one he showed after a turn: «да / нет» answers only that card (a
+    /// hidden card is not answered blind; review 10e: nor the next one of the queue pinned meanwhile).
+    private var cardSeen: UUID?
     /// Slice 9 (decision 8), slice 10 (decision 18): he listens a minute without his name for the card's answer — right
     /// after a turn proposed it, or once after the conversation while it is still pinned.
     private var cardWindow = false
@@ -56,7 +57,7 @@ final class Conversation {
               refusal() == nil, let cards, cards.hasCard else { return }
         log("card still pinned: listening for the answer")
         turns = 0
-        cardSeen = true
+        cardSeen = cards.current?.id
         cardWindow = true
         listen(window: Dialogue.cardAnswerWindow)
     }
@@ -330,7 +331,7 @@ final class Conversation {
         do { wake = try ears.prepareListening(replayWake: replayWake) }
         catch { return leave(saying: Lines.didntHear, after: 3) }
         heardInCheck = wake?.request
-        if window == nil { cardSeen = cards?.visible ?? false }   // the card at the edge when he was called
+        if window == nil { cardSeen = cards?.visible == true ? cards?.current?.id : nil }   // the card at the edge when he was called
         if wake?.amidSpeech == true {
             // A follow-up window would hear the same TV and send it to Codex: answer once; «Чилк» again for more.
             suppressFollowUps = true
@@ -529,7 +530,7 @@ final class Conversation {
             }
             askedAllDone = false
             // Slice 8c (decision 4): while a card is up, «да / ставь» and «нет / не надо» answer it here.
-            if let cards, cards.hasCard, cardSeen {
+            if let cards, let seen = cardSeen, cards.current?.id == seen {
                 let line: String?
                 switch cards.answer(question, source: .voice) {
                 case .confirming: line = String(localized: "Делаю…")
@@ -539,7 +540,7 @@ final class Conversation {
                 if let line {
                     log("card answered by voice")
                     cardWindow = false
-                    cardSeen = false
+                    cardSeen = nil
                     onTurn?(question, line, brain.liveThread ?? "")
                     return leave(saying: line, after: 1.5)
                 }
@@ -561,12 +562,12 @@ final class Conversation {
                 onTurn?(question, text, raw.thread)
                 phase = .answering
                 sim.stopAct()
-                cards?.turnEnded()
+                cards?.turnEnded(.voice)
                 showReply(text)
                 if let cards, cards.proposals != stamp, cards.hasCard {
                     // Slice 10 (decision 18): the card is pinned over his bubble — his words stay under it; he listens a
                     // minute for «да» without his name, and once more after the conversation if it is still up.
-                    cardSeen = true
+                    cardSeen = cards.current?.id
                     cardWindow = true
                     cards.proposedInVoice()
                 }
@@ -613,7 +614,7 @@ final class Conversation {
         askedAllDone = false
         guard planSilence(), let cards, cards.hasCard else { return false }
         // Slice 10 (decision 18): the plan's card is pinned over his bubble — he points at it and listens for «да».
-        cardSeen = true
+        cardSeen = cards.current?.id
         cardWindow = true
         cards.proposedInVoice()
         showReply(PlanLines.cardUp)
@@ -643,8 +644,8 @@ final class Conversation {
     private func leave(saying line: String?, after seconds: Double) {
         cardWindow = false
         settleQuestion(nil)
-        cardSeen = false
-        cards?.turnEnded()
+        cardSeen = nil
+        cards?.turnEnded(.voice)
         phase = .idle
         closing = true
         poll?.invalidate()

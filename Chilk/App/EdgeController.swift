@@ -528,6 +528,8 @@ final class EdgeController: NSObject {
     /// One paint rule for every state: render all parts, never crop at an invisible scene edge.
     /// The enlarged window and both renderers share the exact same plan and coordinate mapping.
     private func present() {
+        // Review 10e: the pinned card knows how much screen there is over the scene (none — it goes under the bubble).
+        sim.cardHeadroom = Double(homeVisibleFrame.maxY - (sceneOrigin.y + metrics.sceneSize.height))
         let plan = ChilkRenderer.placements(pose: sim.pose, metrics: metrics, mirrored: isMirrored)
         viewport = SceneViewport(metrics: metrics, placements: plan)
         let frame = viewport.panelFrame(sceneOrigin: sceneOrigin)
