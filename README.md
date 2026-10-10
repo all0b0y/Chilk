@@ -18,7 +18,7 @@
 
 <p align="center"><b>English</b> · <a href="docs/i18n/README.ru.md">Русский</a></p>
 
-<!-- HERO_VIDEO_EN -->
+https://github.com/user-attachments/assets/5b1eda75-2abf-4c7f-a24d-45b22ec8318c
 
 > [!NOTE]
 > **Chilk speaks Russian only for now.** His bubbles, his ears and his answers are in Russian; an English version is

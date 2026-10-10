@@ -18,7 +18,7 @@
 
 <p align="center"><a href="../../README.md">English</a> · <b>Русский</b></p>
 
-<!-- HERO_VIDEO_RU -->
+https://github.com/user-attachments/assets/bd435085-5d57-440a-965a-7b54cc386b02
 
 ## Зачем
 
