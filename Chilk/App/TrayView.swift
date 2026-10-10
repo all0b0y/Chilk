@@ -11,6 +11,8 @@ final class TrayModel {
     enum Page { case main, tools, games }
     enum Problem: Equatable {
         case codexSignedOut, codexDown(String), earsBroken(String)
+        /// `codex` is not on this Mac: the row shows how to install it.
+        case codexMissing
         /// Slice 9f: the chosen model is not in Codex's list (its name).
         case modelUnavailable(String)
     }
@@ -265,6 +267,15 @@ struct TrayView: View {
                 Button(String(localized: "Войти в Codex")) { model.login() }.controlSize(.small)
             case .codexDown(let why):
                 Text(String(localized: "Codex не на связи")).font(.callout).help(why)
+                Spacer()
+                Button(String(localized: "Переподключить")) { model.reconnect() }.controlSize(.small)
+            case .codexMissing:
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(String(localized: "Codex не установлен")).font(.callout)
+                    Text(verbatim: CodexSetup.installCommand)
+                        .font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                .help(String(localized: "Поставь Codex в Терминале: \(CodexSetup.installCommand) (или \(CodexSetup.installCommandNPM)), войди в Codex и нажми «Переподключить»"))
                 Spacer()
                 Button(String(localized: "Переподключить")) { model.reconnect() }.controlSize(.small)
             case .modelUnavailable(let name):

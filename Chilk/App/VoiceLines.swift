@@ -1,4 +1,5 @@
 import Foundation
+import ChilkBrain
 import ChilkCore
 
 /// Phrases for talking to Чилк (slice 3a).
@@ -14,7 +15,7 @@ extension Lines {
         String(localized: "Слух сломался 😕 Нажми \(Hotkey.label) или включи уши заново в трее")
     }
     static let brainSignedOut = String(localized: "Я ещё не подключён к Codex. Нажми на меня в трее наверху → «Войти в Codex»")
-    static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕")
+    static let brainMissing = String(localized: "Не нашёл Codex на этом Mac 😕 Поставь его в Терминале: \(CodexSetup.installCommand) — и нажми «Переподключить» в трее наверху")
     static let brainFailed = String(localized: "Codex сейчас не отвечает 😕 Попробуй чуть позже")
 
     /// A due local timer (slice 3c.2): Chilk's own line, so the alarm clock is allowed.

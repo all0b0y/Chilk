@@ -274,7 +274,7 @@ final class Tray: NSObject, NSPopoverDelegate {
         let problem: TrayModel.Problem? = switch brain.state {
         case .signedOut: .codexSignedOut
         case .failed(let why): .codexDown(why)
-        case .missingCodex: .codexDown(brain.statusLine)
+        case .missingCodex: .codexMissing
         case .modelUnavailable(let name): .modelUnavailable(name)
         case .ready, .connecting: ears.broken ? .earsBroken(ears.status) : nil
         }

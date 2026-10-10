@@ -99,7 +99,7 @@ final class Brain {
         case .ready: String(localized: "Codex: на связи") + (account.map { " (\($0))" } ?? "")
         case .connecting: String(localized: "Codex: подключаюсь…")
         case .signedOut: String(localized: "Codex: не выполнен вход")
-        case .missingCodex: String(localized: "Codex: не найден на этом Mac")
+        case .missingCodex: String(localized: "Codex: не найден на этом Mac — поставь: \(CodexSetup.installCommand)")
         case .failed(let why): String(localized: "Codex: ошибка — \(why)")
         case .modelUnavailable(let name): String(localized: "Codex: модель «\(name)» недоступна")
         }

@@ -32,8 +32,10 @@ public struct CodexSetup: Sendable {
         var env = ProcessInfo.processInfo.environment
         env["CODEX_HOME"] = codexHome.path
         env["HOME"] = isolatedHome.path
-        // Apps started from Finder get a minimal PATH; Codex's own commands need the usual tools.
-        let extra = ["/opt/homebrew/bin", "/usr/local/bin", "\(realHome)/.local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        // Apps started from Finder get a minimal PATH; Codex's own commands need the usual tools. Codex's own folder
+        // comes first: an npm-installed `codex` is a `#!/usr/bin/env node` script, and under nvm its Node sits beside it.
+        let extra = [executable.deletingLastPathComponent().path, "/opt/homebrew/bin", "/usr/local/bin",
+                     "\(realHome)/.local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
         let path = (env["PATH"] ?? "").split(separator: ":").map(String.init)
         env["PATH"] = (path + extra.filter { !path.contains($0) }).joined(separator: ":")
         return env
@@ -86,16 +88,45 @@ public struct CodexSetup: Sendable {
         }
     }
 
+    /// How to install Codex, shown when it is not found (the official ways: Homebrew cask or npm).
+    public static let installCommand = "brew install --cask codex"
+    public static let installCommandNPM = "npm install -g @openai/codex"
+
     /// Finds the `codex` binary: PATH first, then the usual install places (Finder-launched apps have no shell PATH).
     public static func locateCodex(path: String? = ProcessInfo.processInfo.environment["PATH"],
-                                   home: String = NSHomeDirectory()) -> URL? {
-        let dirs = (path ?? "").split(separator: ":").map(String.init)
-            + ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.npm-global/bin", "\(home)/bin"]
-        for dir in dirs {
+                                   home: String = NSHomeDirectory(),
+                                   systemDirs: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]) -> URL? {
+        for dir in searchDirectories(path: path, home: home, systemDirs: systemDirs) {
             let candidate = URL(fileURLWithPath: dir).appendingPathComponent("codex")
             if FileManager.default.isExecutableFile(atPath: candidate.path) { return candidate }
         }
         return nil
+    }
+
+    /// Where `codex` may live, in lookup order: PATH, Homebrew and npm's global folders, then the Node version
+    /// managers — volta, pnpm, bun and every nvm Node (newest first).
+    static func searchDirectories(path: String?, home: String,
+                                  systemDirs: [String] = ["/opt/homebrew/bin", "/usr/local/bin"]) -> [String] {
+        let onPath: [String] = (path ?? "").split(separator: ":").map(String.init)
+        let npm: [String] = ["\(home)/.npm-global/bin", "\(home)/bin"]
+        let managers: [String] = ["\(home)/.volta/bin", "\(home)/Library/pnpm", "\(home)/.bun/bin"]
+        var dirs: [String] = onPath
+        dirs.append("\(home)/.local/bin")
+        dirs.append(contentsOf: systemDirs)
+        dirs.append(contentsOf: npm)
+        dirs.append(contentsOf: managers)
+        dirs.append(contentsOf: nvmBinDirectories(home: home))
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }
+    }
+
+    /// `~/.nvm/versions/node/<version>/bin`, newest version first («v22.11.0» before «v9.0.0»).
+    static func nvmBinDirectories(home: String) -> [String] {
+        let root = "\(home)/.nvm/versions/node"
+        guard let versions = try? FileManager.default.contentsOfDirectory(atPath: root) else { return [] }
+        return versions.filter { $0.hasPrefix("v") }
+            .sorted { $0.compare($1, options: .numeric) == .orderedDescending }
+            .map { "\(root)/\($0)/bin" }
     }
 
     public func makeClient() -> CodexClient {
