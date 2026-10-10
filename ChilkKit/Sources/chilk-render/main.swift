@@ -1,6 +1,7 @@
 import ChilkCore
 import ChilkRender
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -294,6 +295,94 @@ func previews(into dir: URL) throws {
     print("wrote \(states.count + 1) previews to \(dir.path)")
 }
 
+/// The DMG window's background, 660 × 400 pt at 1× and 2×: «drag Chilk to Applications», an arrow between the two icons
+/// (Finder draws them at x 170 / 490, y 200 — see scripts/dmg-settings.py) and the first-launch hint for a build that
+/// is not notarized. The button names are macOS's own (ru / en).
+@MainActor
+func dmgBackground(into dir: URL) throws {
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let size = CGSize(width: 660, height: 400)
+    let ink = palette.outline.cgColor
+    let soft = CGColor(srgbRed: 0.169, green: 0.161, blue: 0.220, alpha: 0.58)
+    let accent = CGColor(srgbRed: 0.949, green: 0.537, blue: 0.420, alpha: 1)
+    func font(_ size: Double, bold: Bool = false) -> CTFont {
+        CTFontCreateUIFontForLanguage(bold ? .emphasizedSystem : .system, size, nil)!
+    }
+    /// One line centred on `x` with its baseline at `y` (y-down), shrunk until it fits `maxWidth`.
+    func text(_ ctx: CGContext, _ s: String, size: Double, bold: Bool = false, color: CGColor, x: Double, y: Double,
+              maxWidth: Double = 590) {
+        var points = size
+        var line: CTLine
+        repeat {
+            line = CTLineCreateWithAttributedString(NSAttributedString(string: s, attributes: [
+                NSAttributedString.Key(kCTFontAttributeName as String): font(points, bold: bold),
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+            ]))
+            points -= 0.25
+        } while CTLineGetTypographicBounds(line, nil, nil, nil) > maxWidth && points > 8
+        let width = CTLineGetTypographicBounds(line, nil, nil, nil)
+        ctx.saveGState()
+        ctx.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+        ctx.textPosition = CGPoint(x: x - width / 2, y: y)
+        CTLineDraw(line, ctx)
+        ctx.restoreGState()
+    }
+    for (scale, suffix) in [(1.0, ""), (2.0, "@2x")] {
+        let image = render(size, scale: scale) { ctx in
+            let colors = [CGColor(srgbRed: 1.0, green: 0.973, blue: 0.937, alpha: 1),
+                          CGColor(srgbRed: 1.0, green: 0.902, blue: 0.863, alpha: 1)] as CFArray
+            let gradient = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB), colors: colors, locations: [0, 1])!
+            ctx.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: size.height), options: [])
+
+            text(ctx, "Перетащи Чилка в папку «Программы»", size: 22, bold: true, color: ink, x: 330, y: 62)
+            text(ctx, "Drag Chilk to the Applications folder", size: 13, color: soft, x: 330, y: 86)
+
+            // The arrow: an arc from Chilk's icon to the folder, a leaf (his sprout) at its tail.
+            ctx.saveGState()
+            ctx.setStrokeColor(accent)
+            ctx.setLineWidth(4)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+            ctx.move(to: CGPoint(x: 262, y: 206))
+            ctx.addQuadCurve(to: CGPoint(x: 396, y: 206), control: CGPoint(x: 329, y: 168))
+            ctx.strokePath()
+            ctx.move(to: CGPoint(x: 380, y: 192))
+            ctx.addLine(to: CGPoint(x: 397, y: 207))
+            ctx.addLine(to: CGPoint(x: 376, y: 213))
+            ctx.strokePath()
+            ctx.translateBy(x: 252, y: 206)
+            ctx.rotate(by: -0.45)
+            let leaf = CGMutablePath()                                  // a pointed leaf with its midrib
+            leaf.move(to: CGPoint(x: -13, y: 0))
+            leaf.addQuadCurve(to: CGPoint(x: 13, y: 0), control: CGPoint(x: 0, y: -11))
+            leaf.addQuadCurve(to: CGPoint(x: -13, y: 0), control: CGPoint(x: 0, y: 11))
+            ctx.addPath(leaf)
+            ctx.setFillColor(palette.leaf.cgColor)
+            ctx.fillPath()
+            ctx.setStrokeColor(CGColor(srgbRed: 0.35, green: 0.62, blue: 0.27, alpha: 0.8))
+            ctx.setLineWidth(1.2)
+            ctx.move(to: CGPoint(x: -10, y: 0))
+            ctx.addLine(to: CGPoint(x: 10, y: 0))
+            ctx.strokePath()
+            ctx.restoreGState()
+
+            let card = CGPath(roundedRect: CGRect(x: 36, y: 296, width: 588, height: 82), cornerWidth: 14, cornerHeight: 14,
+                              transform: nil)
+            ctx.addPath(card)
+            ctx.setFillColor(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.6))
+            ctx.fillPath()
+            text(ctx, "Если при первом запуске macOS не откроет Чилка, нажми «Готово», затем:", size: 12, color: ink,
+                 x: 330, y: 320, maxWidth: 552)
+            text(ctx, "«Системные настройки» → «Конфиденциальность и безопасность» → «Все равно открыть»", size: 12,
+                 bold: true, color: ink, x: 330, y: 340, maxWidth: 552)
+            text(ctx, "First launch blocked? Click Done, then System Settings → Privacy & Security → Open Anyway",
+                 size: 11, color: soft, x: 330, y: 362, maxWidth: 552)
+        }
+        writePNG(image, to: dir.appendingPathComponent("dmg-background\(suffix).png"))
+    }
+    print("wrote dmg-background.png and dmg-background@2x.png to \(dir.path)")
+}
+
 /// Per-frame CPU on this process (tight loop, so P-cores: in-app numbers are several × higher).
 /// `vector` = full CoreGraphics frame (old app path); `rig` = what the app does now per frame:
 /// simulation + placements + CALayer property updates (rasterising happens only on first use).
@@ -339,13 +428,14 @@ if args.count == 2, args[1] == "bench" {
     exit(0)
 }
 guard args.count >= 3 else {
-    print("usage: chilk-render icon <AppIcon.appiconset> | previews <dir> | bench")
+    print("usage: chilk-render icon <AppIcon.appiconset> | previews <dir> | portrait <dir> | tray <dir> | dmg <dir> | bench")
     exit(2)
 }
 let target = URL(fileURLWithPath: args[2])
 switch args[1] {
 case "icon": try icon(into: target)
 case "previews": try previews(into: target)
+case "dmg": try dmgBackground(into: target)
 case "portrait":
     // The main window's still portrait for the three sprout states (fresh / drooping / wilted), on light and dark.
     try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
