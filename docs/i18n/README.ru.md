@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/4IPE/Chilk/releases/latest"><img alt="Скачать" src="https://img.shields.io/github/v/release/4IPE/Chilk?include_prereleases&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C&color=f2896b"></a>
+  <a href="https://github.com/all0b0y/Chilk/releases/latest"><img alt="Скачать" src="https://img.shields.io/github/v/release/all0b0y/Chilk?include_prereleases&label=%D1%81%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C&color=f2896b"></a>
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-2b2938">
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-2b2938">
   <a href="../../LICENSE"><img alt="Лицензия: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-8fd86a"></a>
@@ -81,7 +81,7 @@ Codex.</sub>
 
 ## Установка
 
-1. Скачай **Chilk-0.1.0.dmg** из [последнего релиза](https://github.com/4IPE/Chilk/releases/latest).
+1. Скачай **Chilk-0.1.0.dmg** из [последнего релиза](https://github.com/all0b0y/Chilk/releases/latest).
 2. Открой его и перетащи Чилка в папку «Программы».
 3. Запусти Чилка из «Программ». Чилк не нотаризован Apple (для этого нужен платный аккаунт разработчика Apple), поэтому
    первый запуск каждой скачанной версии macOS останавливает. Разреши его один раз:

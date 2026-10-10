@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/4IPE/Chilk/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/4IPE/Chilk?include_prereleases&label=download&color=f2896b"></a>
+  <a href="https://github.com/all0b0y/Chilk/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/all0b0y/Chilk?include_prereleases&label=download&color=f2896b"></a>
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-2b2938">
   <img alt="Apple silicon" src="https://img.shields.io/badge/Apple%20silicon-arm64-2b2938">
   <a href="LICENSE"><img alt="License: Apache 2.0" src="https://img.shields.io/badge/license-Apache%202.0-8fd86a"></a>
@@ -85,7 +85,7 @@ answers.</sub>
 
 ## Install
 
-1. Download **Chilk-0.1.0.dmg** from the [latest release](https://github.com/4IPE/Chilk/releases/latest).
+1. Download **Chilk-0.1.0.dmg** from the [latest release](https://github.com/all0b0y/Chilk/releases/latest).
 2. Open it and drag Chilk to the Applications folder.
 3. Open Chilk from Applications. Chilk is not notarized by Apple (that needs a paid Apple developer account), so macOS
    stops the first launch of each downloaded version. Allow it once:
