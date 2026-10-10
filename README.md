@@ -85,25 +85,39 @@ answers.</sub>
 
 ## Install
 
-1. Download **Chilk-0.1.0.dmg** from the [latest release](https://github.com/all0b0y/Chilk/releases/latest).
-2. Open it and drag Chilk to the Applications folder.
-3. Open Chilk from Applications. Chilk is not notarized by Apple (that needs a paid Apple developer account), so macOS
-   stops the first launch of each downloaded version. Allow it once:
+Open **Terminal** (Applications → Utilities), paste this line and press Return:
 
-   | | |
-   |---|---|
-   | <img src="docs/images/install/en-1.png" width="300" alt="“Chilk” Not Opened"> | macOS says it could not verify Chilk. Click **Done**. |
-   | <img src="docs/images/install/en-2.png" width="300" alt="Privacy & Security — Open Anyway"> | Open **System Settings → Privacy & Security**, scroll down to **Security** and click **Open Anyway** next to “Chilk” was blocked to protect your Mac. |
-   | <img src="docs/images/install/en-3.png" width="300" alt="Open Anyway confirmation"> | Confirm with your password or Touch ID, then click **Open Anyway** once more. |
+```sh
+curl -fsSL https://raw.githubusercontent.com/all0b0y/Chilk/main/install.sh | bash
+```
 
-4. Chilk appears at the edge of the screen; his remote control is the leaf in the menu bar (there is no Dock icon).
-5. Give him a brain: install Codex — `brew install --cask codex` (or `npm install -g @openai/codex`) — then click the
+It downloads the latest release from GitHub, checks the DMG against `SHA256SUMS.txt` and Chilk's signature against his
+certificate, puts Chilk into Applications (an older Chilk is asked to quit first; your data stays) and opens him. Run it
+again to update. Chilk is not notarized by Apple — that needs a paid Apple developer account — but files downloaded by
+Terminal are not marked as downloaded from the internet, so macOS doesn't stop him. The [script](install.sh) is short:
+read it first if you like.
+
+<details>
+<summary><b>Or install from the DMG</b></summary>
+
+1. Download **Chilk-0.1.0.dmg** from the [latest release](https://github.com/all0b0y/Chilk/releases/latest), open it
+   and drag Chilk to the Applications folder. Its SHA-256 is in `SHA256SUMS.txt` next to it.
+2. Open Chilk. The first time, macOS says “Apple could not verify “Chilk” is free of malware…”. Click **Done**, not
+   **Move to Trash**: nothing is wrong with Chilk, he just isn't notarized.
+3. Open **System Settings → Privacy & Security**, scroll down to **Security** and click **Open Anyway** next to
+   “Chilk” was blocked to protect your Mac. Confirm with Touch ID or your password and click **Open Anyway** once more.
+   macOS asks this once for each downloaded version.
+
+</details>
+
+Then:
+
+1. Chilk appears at the edge of the screen; his remote control is the leaf in the menu bar (there is no Dock icon).
+2. Give him a brain: install Codex — `brew install --cask codex` (or `npm install -g @openai/codex`) — then click the
    leaf in the menu bar → **Войти в Codex** and sign in with your ChatGPT account.
-6. Allow what you use when he first asks: the microphone and speech recognition for voice, Reminders, Calendar and Notes
+3. Allow what you use when he first asks: the microphone and speech recognition for voice, Reminders, Calendar and Notes
    for those apps. For Clock timers he offers to add his «Чилк» shortcut to Shortcuts — click **Add**. Turning his ears
    on downloads the wake-word model once (about 1.5 GB).
-
-The SHA-256 of the DMG is in `SHA256SUMS.txt` next to it in the release.
 
 ## Requirements
 
