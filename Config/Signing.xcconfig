@@ -1,0 +1,15 @@
+// Code signing for the Chilk app target (referenced from project.yml).
+//
+// Default for anyone building from source: "Sign to Run Locally" (ad-hoc), no Apple account needed.
+// To sign with your own certificate instead, create Config/Signing.local.xcconfig (gitignored), for example:
+//
+//   CHILK_CODE_SIGN_IDENTITY = Chilk
+//   CHILK_DEVELOPMENT_TEAM =
+//
+// A stable identity keeps the permissions macOS granted to Chilk (microphone, Reminders, Calendar, …) across rebuilds;
+// an ad-hoc build asks for them again after every rebuild.
+
+CHILK_CODE_SIGN_IDENTITY = -
+CHILK_DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"

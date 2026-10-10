@@ -18,6 +18,13 @@ targets:
     platform: macOS
     sources:
       - path: Chilk
+      # The license travels with the app (Apache-2.0 §4): Contents/Resources.
+      - path: LICENSE
+        buildPhase: resources
+      - path: NOTICE
+        buildPhase: resources
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
     dependencies:
       - package: ChilkKit
         product: ChilkCore
@@ -50,17 +57,28 @@ targets:
         NSCalendarsFullAccessUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
         NSCalendarsUsageDescription: "Чилк записывает события, о которых ты просишь, в отдельный календарь «Чилк» и читает только его."
         NSAppleEventsUsageDescription: "Чилк записывает заметки, о которых ты просишь, в отдельную папку «Чилк» в «Заметках» и читает только её."
+    # Signing identity: Config/Signing.xcconfig (ad-hoc by default; your own identity in the gitignored
+    # Config/Signing.local.xcconfig). A stable identity keeps macOS permissions across rebuilds.
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.all0b0y.chilk
         PRODUCT_NAME: Chilk
         CODE_SIGN_STYLE: Manual
-        # Stable signature (own Apple Development certificate): macOS keeps the microphone permission across rebuilds.
-        CODE_SIGN_IDENTITY: "-"
-        DEVELOPMENT_TEAM: ""
-        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_IDENTITY: "$(CHILK_CODE_SIGN_IDENTITY)"
+        DEVELOPMENT_TEAM: "$(CHILK_DEVELOPMENT_TEAM)"
+        # Hardened runtime: no code injection into a process that holds microphone / Calendar / Reminders / Notes
+        # permissions; each one needs its entitlement in Chilk.entitlements.
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Chilk/Resources/Chilk.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_EMIT_LOC_STRINGS: YES
         LOCALIZATION_PREFERS_STRING_CATALOGS: YES
         GENERATE_INFOPLIST_FILE: NO
         SWIFT_STRICT_CONCURRENCY: complete
+      configs:
+        # The shipped build carries no get-task-allow (debugger attach), which Xcode adds to non-distribution identities.
+        Release:
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO

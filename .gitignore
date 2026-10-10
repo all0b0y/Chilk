@@ -7,3 +7,5 @@ build/
 .build/
 .swiftpm/
 Chilk.xcodeproj/
+Config/Signing.local.xcconfig
+dist/

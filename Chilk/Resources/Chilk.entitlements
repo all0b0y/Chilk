@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened runtime: what Chilk may ask macOS for. Without these, the matching permission is refused silently. -->
+	<!-- Notes (Automation): his own «Чилк» folder. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<!-- Microphone: his name and the conversation. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<!-- Calendar: his own «Чилк» calendar. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<!-- Reminders: his own «Чилк» list. -->
+	<key>com.apple.security.personal-information.reminders</key>
+	<true/>
+</dict>
+</plist>
